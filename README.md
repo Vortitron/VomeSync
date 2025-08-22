@@ -10,7 +10,8 @@ VomeSync consists of three components:
 2. **Website** (remoteswitch.vome.io): Public directory listing anonymized switch details (optional description, location, category) for community discovery.
 3. **HACS Add-On**: A Home Assistant custom component that creates virtual switches, connects to the webserver, and manages user interactions (creation, toggling, subscribing).
 
-This README outlines the architecture, setup, and user flow for developers, contributors, and users. The project is maintained by [Your Name/Company] under a Swedish Enskild Firma, with monetization via subscriptions for premium features.
+This README outlines the architecture, setup, and user flow for developers, contributors, and users.
+The project is maintained by Callycode Limited, with monetization via subscriptions for premium features.
 
 ## Features
 - **Public Switch Syncing**: Create a virtual switch in Home Assistant, share it via a unique UID, and let others toggle or monitor it (e.g., community light events).
@@ -113,25 +114,6 @@ This README outlines the architecture, setup, and user flow for developers, cont
 - **Premium Tier**: €5-15/month via Gumroad for unlimited switches, analytics (e.g., trigger history), and future private mode.
 - **Potential**: 50-100 users at €10/month = €500-1,000/month semi-passive. Scales with community adoption.
 - **Sales**: Automated via Gumroad (~8% fee). License keys unlock premium features.
-
-## Setup and Costs
-- **Initial Effort**:
-  - Webserver: ~25 hours (Node.js, WebSocket, Redis, Docker).
-  - Website: ~5 hours (WordPress, free theme).
-  - HACS Add-On: ~25 hours (Python, HA switch platform, WebSocket client).
-- **Costs**:
-  - Gumroad: ~€10/month + 8% fee per sale.
-  - Server: ~€10/month (existing dedicated server).
-  - Optional Redis: ~€10/month for scalability.
-  - Domain: vome.io (assumed registered, ~€10/year).
-  - Total: ~€20-30/month.
-- **Support**: GitHub docs (~5 hours to write), email support (~2 hours/month), paid tier (€20/hour) for complex queries.
-
-## Admin and Tax
-- **Admin**: ~2-3 hours/month (support, bookkeeping). Gumroad automates sales, website is static.
-- **Tax**: Swedish Enskild Firma. Report net income (minus €20-30 costs) on NE form (~2 hours/year). VAT if >SEK 80,000 (~€7,000) turnover.
-- **No Crypto**: Fiat subscriptions, no swap tracking.
-- **Rule Changes**: GDPR-compliant (opt-in, anonymized data). EU SaaS rules stable in 2025. Good-faith errors = fines (0-40%), not jail.
 
 ## Privacy and Security
 - **Personal Key**: UUID/JWT for authentication, stored securely in HA `secrets.yaml`.
