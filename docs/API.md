@@ -1,0 +1,537 @@
+# VomeSync API Documentation
+
+Base URL: `https://sync.vome.io`
+
+## Authentication
+
+Most endpoints require a personal key for authentication. Include it in:
+- Request body as `personalKey`
+- Header as `X-Personal-Key`
+
+## Rate Limiting
+
+- Most endpoints: 100 requests per 15 minutes
+- Key generation: 10 requests per hour
+- Switch creation: 20 requests per hour
+
+Rate limit headers are included in responses:
+- `X-RateLimit-Limit`: Maximum requests allowed
+- `X-RateLimit-Remaining`: Requests remaining in window
+- `X-RateLimit-Reset`: When limit resets (ISO 8601)
+
+## Endpoints
+
+### Generate Personal Key
+
+Generate a new personal key for authentication.
+
+**POST** `/api/generate-key`
+
+**Request Body:**
+```json
+{
+  "consent": true
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "personalKey": "uuid-v4-string",
+    "jwt": "optional-jwt-token",
+    "expiresIn": "1 year",
+    "message": "Store this key securely - it cannot be recovered if lost"
+  }
+}
+```
+
+### Create Switch
+
+Create a new virtual switch.
+
+**POST** `/api/create-switch`
+
+**Authentication:** Required
+
+**Request Body:**
+```json
+{
+  "personalKey": "your-personal-key",
+  "description": "Festival Light Event",
+  "location": "Stockholm",
+  "category": "Community",
+  "publicize": true
+}
+```
+
+**Parameters:**
+- `description` (string, optional): Human-readable description
+- `location` (string, optional): City-level location for privacy
+- `category` (string, optional): One of `Community`, `Personal`, `Event`, `Test`, `Other`
+- `publicize` (boolean, optional): Whether to list publicly
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "uid": "switch-uuid",
+    "state": false,
+    "description": "Festival Light Event",
+    "location": "Stockholm",
+    "category": "Community",
+    "publicize": true,
+    "createdAt": 1640995200000,
+    "lastToggled": 0,
+    "toggleCount": 0,
+    "websocketUrl": "/ws?uid=switch-uuid"
+  }
+}
+```
+
+### Toggle Switch
+
+Toggle a switch's state.
+
+**POST** `/api/toggle/{uid}`
+
+**Authentication:** Required (must own the switch)
+
+**Request Body:**
+```json
+{
+  "personalKey": "your-personal-key"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "uid": "switch-uuid",
+    "state": true,
+    "timestamp": 1640995200000
+  }
+}
+```
+
+### Get Switch Status
+
+Get current switch state (public endpoint).
+
+**GET** `/api/status/{uid}`
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "uid": "switch-uuid",
+    "description": "Festival Light Event",
+    "location": "Stockholm",
+    "category": "Community",
+    "state": true,
+    "lastToggled": 1640995200000
+  }
+}
+```
+
+### Get Public Switches
+
+List all public switches.
+
+**GET** `/api/public-switches`
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "switches": [
+      {
+        "uid": "switch-uuid",
+        "description": "Festival Light Event",
+        "location": "Stockholm",
+        "category": "Community",
+        "state": true,
+        "lastToggled": 1640995200000
+      }
+    ],
+    "count": 1,
+    "timestamp": 1640995200000
+  }
+}
+```
+
+### Get My Switches
+
+Get switches owned by the authenticated user.
+
+**GET** `/api/my-switches`
+
+**Authentication:** Required
+
+**Headers:**
+```
+X-Personal-Key: your-personal-key
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "switches": [
+      {
+        "uid": "switch-uuid",
+        "description": "My Switch",
+        "location": "Stockholm",
+        "category": "Personal",
+        "state": false,
+        "publicize": false,
+        "createdAt": 1640995200000,
+        "lastToggled": 1640995200000,
+        "toggleCount": 5
+      }
+    ],
+    "count": 1
+  }
+}
+```
+
+### Delete Switch
+
+Delete a switch (must be owner).
+
+**DELETE** `/api/switch/{uid}`
+
+**Authentication:** Required
+
+**Headers:**
+```
+X-Personal-Key: your-personal-key
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Switch deleted successfully",
+    "uid": "switch-uuid"
+  }
+}
+```
+
+### Delete Personal Key
+
+Delete personal key and all associated data (GDPR compliance).
+
+**POST** `/api/delete-key`
+
+**Request Body:**
+```json
+{
+  "personalKey": "your-personal-key",
+  "confirmation": "DELETE_ALL_DATA"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "All personal data deleted successfully",
+    "deletedSwitches": 3
+  }
+}
+```
+
+### Health Check
+
+Check server health.
+
+**GET** `/api/health`
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": 1640995200000,
+  "uptime": 86400,
+  "redis": true,
+  "websocket": {
+    "clients": 42,
+    "subscriptions": 15
+  }
+}
+```
+
+### Server Stats
+
+Get server statistics.
+
+**GET** `/api/stats`
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "websocket": {
+      "totalClients": 42,
+      "totalSubscriptions": 15,
+      "clientsPerSwitch": [
+        {
+          "uid": "switch-uuid",
+          "clientCount": 3
+        }
+      ]
+    },
+    "publicSwitchCount": 8,
+    "timestamp": 1640995200000
+  }
+}
+```
+
+## WebSocket API
+
+Connect to real-time switch updates via WebSocket.
+
+**URL:** `wss://sync.vome.io/ws?uid={switch-uuid}`
+
+### Connection
+
+Open WebSocket connection with switch UID as query parameter:
+
+```javascript
+const ws = new WebSocket('wss://sync.vome.io/ws?uid=your-switch-uuid');
+```
+
+### Message Types
+
+#### State Update
+
+Received when switch state changes:
+
+```json
+{
+  "type": "state_update",
+  "uid": "switch-uuid",
+  "state": true,
+  "timestamp": 1640995200000
+}
+```
+
+#### Error
+
+Received when an error occurs:
+
+```json
+{
+  "type": "error",
+  "message": "Switch not found",
+  "uid": "switch-uuid"
+}
+```
+
+#### Ping/Pong
+
+For connection health monitoring:
+
+```json
+// Sent by client
+{
+  "type": "ping",
+  "timestamp": 1640995200000
+}
+
+// Response from server
+{
+  "type": "pong",
+  "timestamp": 1640995200000
+}
+```
+
+#### Subscribe/Unsubscribe
+
+Change subscription to different switch:
+
+```json
+// Subscribe to different switch
+{
+  "type": "subscribe",
+  "uid": "new-switch-uuid"
+}
+
+// Unsubscribe from current switch
+{
+  "type": "unsubscribe",
+  "uid": "current-switch-uuid"
+}
+```
+
+## Error Handling
+
+### Error Response Format
+
+```json
+{
+  "success": false,
+  "error": "Error message",
+  "details": [
+    {
+      "field": "description",
+      "message": "Description is too long"
+    }
+  ]
+}
+```
+
+### HTTP Status Codes
+
+- `200` - Success
+- `400` - Bad Request (validation error)
+- `401` - Unauthorized (invalid/missing personal key)
+- `404` - Not Found (switch doesn't exist)
+- `429` - Rate Limited
+- `500` - Internal Server Error
+
+### Common Error Messages
+
+- `Invalid UID format` - UID is not a valid UUID
+- `Switch not found` - Switch with given UID doesn't exist
+- `Unauthorized: Invalid personal key for this switch` - You don't own this switch
+- `Personal key required` - Authentication header missing
+- `Rate limit exceeded` - Too many requests
+- `Validation failed` - Request body validation errors
+
+## SDK Examples
+
+### JavaScript/Node.js
+
+```javascript
+class VomeSyncClient {
+  constructor(personalKey) {
+    this.baseUrl = 'https://sync.vome.io/api';
+    this.personalKey = personalKey;
+  }
+
+  async createSwitch(config) {
+    const response = await fetch(`${this.baseUrl}/create-switch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Personal-Key': this.personalKey
+      },
+      body: JSON.stringify(config)
+    });
+    return response.json();
+  }
+
+  async toggleSwitch(uid) {
+    const response = await fetch(`${this.baseUrl}/toggle/${uid}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Personal-Key': this.personalKey
+      },
+      body: JSON.stringify({})
+    });
+    return response.json();
+  }
+
+  connectWebSocket(uid) {
+    const ws = new WebSocket(`wss://sync.vome.io/ws?uid=${uid}`);
+    
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'state_update') {
+        console.log(`Switch ${data.uid} is now ${data.state ? 'on' : 'off'}`);
+      }
+    };
+    
+    return ws;
+  }
+}
+```
+
+### Python
+
+```python
+import requests
+import websocket
+import json
+
+class VomeSyncClient:
+    def __init__(self, personal_key):
+        self.base_url = 'https://sync.vome.io/api'
+        self.personal_key = personal_key
+        self.headers = {
+            'Content-Type': 'application/json',
+            'X-Personal-Key': personal_key
+        }
+
+    def create_switch(self, config):
+        response = requests.post(
+            f'{self.base_url}/create-switch',
+            headers=self.headers,
+            json=config
+        )
+        return response.json()
+
+    def toggle_switch(self, uid):
+        response = requests.post(
+            f'{self.base_url}/toggle/{uid}',
+            headers=self.headers,
+            json={}
+        )
+        return response.json()
+
+    def connect_websocket(self, uid):
+        def on_message(ws, message):
+            data = json.loads(message)
+            if data['type'] == 'state_update':
+                print(f"Switch {data['uid']} is now {'on' if data['state'] else 'off'}")
+
+        ws = websocket.WebSocketApp(
+            f'wss://sync.vome.io/ws?uid={uid}',
+            on_message=on_message
+        )
+        return ws
+```
+
+### curl Examples
+
+```bash
+# Generate personal key
+curl -X POST https://sync.vome.io/api/generate-key \
+  -H "Content-Type: application/json" \
+  -d '{"consent": true}'
+
+# Create switch
+curl -X POST https://sync.vome.io/api/create-switch \
+  -H "Content-Type: application/json" \
+  -H "X-Personal-Key: your-key" \
+  -d '{
+    "description": "Test Switch",
+    "category": "Test",
+    "publicize": false
+  }'
+
+# Toggle switch
+curl -X POST https://sync.vome.io/api/toggle/switch-uuid \
+  -H "Content-Type: application/json" \
+  -H "X-Personal-Key: your-key" \
+  -d '{}'
+
+# Get switch status
+curl https://sync.vome.io/api/status/switch-uuid
+
+# Get public switches
+curl https://sync.vome.io/api/public-switches
+```

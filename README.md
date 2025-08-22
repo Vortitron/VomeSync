@@ -5,10 +5,32 @@
 > **Warning**: Public mode shares switch states globally via a unique identifier (UID). **Do not use for sensitive devices** (e.g., locks, alarms). Private mode is planned for secure, user-controlled syncing.
 
 ## Project Overview
-VomeSync consists of three components:
-1. **Webserver** (sync.vome.io): Handles switch creation, toggling, and state broadcasting via WebSockets for real-time updates. Hosted on a dedicated server, it ensures privacy and scalability.
-2. **Website** (remoteswitch.vome.io): Public directory listing anonymized switch details (optional description, location, category) for community discovery.
-3. **HACS Add-On**: A Home Assistant custom component that creates virtual switches, connects to the webserver, and manages user interactions (creation, toggling, subscribing).
+
+VomeSync consists of four main components:
+
+### 1. **Webserver** (`/webserver/`)
+- **Purpose**: Core API server and WebSocket handler (sync.vome.io)
+- **Technology**: Node.js, Express, WebSockets, Redis
+- **Features**: Switch creation, state management, real-time broadcasting
+- **Deployment**: Docker container with health checks
+
+### 2. **Home Assistant Integration** (`/hacs-addon/`)
+- **Purpose**: HACS custom component for Home Assistant
+- **Technology**: Python, asyncio, WebSocket client
+- **Features**: Config flow UI, switch/sensor entities, real-time updates
+- **Installation**: Via HACS or manual installation
+
+### 3. **Public Website** (`/website/`)
+- **Purpose**: Community switch directory (remoteswitch.vome.io)
+- **Technology**: Vanilla HTML/CSS/JavaScript
+- **Features**: Browse public switches, search/filter, UID copying
+- **Deployment**: Static files served via Nginx
+
+### 4. **Docker Infrastructure** (`/docker/`)
+- **Purpose**: Complete deployment orchestration
+- **Technology**: Docker Compose, Nginx proxy, Redis
+- **Features**: SSL termination, load balancing, monitoring
+- **Management**: Automated deployment scripts
 
 This README outlines the architecture, setup, and user flow for developers, contributors, and users.
 The project is maintained by Callycode Limited, with monetization via subscriptions for premium features.
@@ -128,19 +150,76 @@ The project is maintained by Callycode Limited, with monetization via subscripti
 - **ESP32 Kits**: Integrate with physical Vome-branded IoT devices.
 
 ## Getting Started
-1. **Users**:
-   - Install VomeSync via HACS (link to repository).
-   - Configure add-on in HA UI, generate personal key.
-   - Create/subscribe to switches, set automations.
-   - Browse remoteswitch.vome.io for public switches.
-2. **Developers**:
-   - Clone this repository (link to GitHub).
-   - Deploy webserver: Node.js, Docker, Redis (see server setup guide).
-   - Set up website: WordPress on vome.io server.
-   - Test add-on: Python, HA dev environment.
-3. **Contribute**:
-   - Submit issues/PRs on GitHub.
-   - Focus areas: WebSocket optimization, UI improvements, analytics.
+
+### For Users
+
+1. **Install VomeSync Integration:**
+   - Add via HACS: Settings → HACS → Integrations → Custom Repositories → Add `https://github.com/your-org/vomesync`
+   - Or download manually to `custom_components/vomesync/`
+   - Restart Home Assistant
+
+2. **Configure Integration:**
+   - Settings → Devices & Services → Add Integration → VomeSync
+   - Generate personal key or provide existing one
+   - Accept privacy consent
+
+3. **Create Your First Switch:**
+   - Integration settings → Configure → Create Switch
+   - Choose name, description, category
+   - Enable "Publicize" to share with community
+
+4. **Subscribe to Public Switches:**
+   - Browse switches at [remoteswitch.vome.io](https://remoteswitch.vome.io)
+   - Copy UID and subscribe via integration settings
+   - Use in automations to react to remote events
+
+### For Developers
+
+1. **Quick Start with Docker:**
+   ```bash
+   git clone https://github.com/your-org/vomesync.git
+   cd vomesync/docker
+   cp env.example .env
+   # Edit .env with your configuration
+   ./scripts/deploy.sh
+   ```
+
+2. **Development Setup:**
+   ```bash
+   # Install dependencies
+   cd webserver && npm install
+   
+   # Start Redis
+   docker run -d --name redis -p 6379:6379 redis:alpine
+   
+   # Start development server
+   npm run dev
+   ```
+
+3. **Documentation:**
+   - [Setup Guide](docs/SETUP.md) - Complete installation instructions
+   - [API Documentation](docs/API.md) - REST and WebSocket API reference
+   - [Docker Guide](docker/README.md) - Container deployment
+
+### For Contributors
+
+1. **Areas for Contribution:**
+   - WebSocket optimization and reliability
+   - Home Assistant UI improvements
+   - Analytics and monitoring features
+   - Mobile-responsive website enhancements
+   - Security auditing and testing
+
+2. **Development Process:**
+   - Fork repository and create feature branch
+   - Follow existing code style and patterns
+   - Add tests for new functionality
+   - Submit pull request with detailed description
+
+3. **Getting Support:**
+   - GitHub Issues for bugs and feature requests
+   - Discussions for questions and ideas
+   - Community support via r/homeassistant
 
 ## Contact
 - **Support**: Email [support@vome.io](mailto:support@vome.io) or paid tier (€20/hour).

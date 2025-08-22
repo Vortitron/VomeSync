@@ -1,0 +1,15 @@
+{
+	"domain": "vomesync",
+	"name": "VomeSync",
+	"version": "1.0.0",
+	"documentation": "https://github.com/your-org/vomesync",
+	"issue_tracker": "https://github.com/your-org/vomesync/issues",
+	"dependencies": [],
+	"codeowners": ["@your-username"],
+	"requirements": [
+		"websocket-client>=1.6.0",
+		"requests>=2.31.0"
+	],
+	"config_flow": true,
+	"integration_type": "device"
+}

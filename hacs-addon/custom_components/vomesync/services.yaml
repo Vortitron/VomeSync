@@ -1,0 +1,70 @@
+create_switch:
+  name: Create Switch
+  description: Create a new VomeSync switch
+  fields:
+    name:
+      name: Switch Name
+      description: Name for the switch entity
+      required: true
+      selector:
+        text:
+    description:
+      name: Description
+      description: Optional description for the switch
+      required: false
+      selector:
+        text:
+    location:
+      name: Location
+      description: Optional location (city-level for privacy)
+      required: false
+      selector:
+        text:
+    category:
+      name: Category
+      description: Switch category
+      required: false
+      default: "Other"
+      selector:
+        select:
+          options:
+            - "Community"
+            - "Personal"
+            - "Event"
+            - "Test"
+            - "Other"
+    publicize:
+      name: Publicize
+      description: List switch publicly on remoteswitch.vome.io
+      required: false
+      default: false
+      selector:
+        boolean:
+
+subscribe_switch:
+  name: Subscribe to Switch
+  description: Subscribe to an existing VomeSync switch
+  fields:
+    name:
+      name: Switch Name
+      description: Name for the monitoring entity
+      required: true
+      selector:
+        text:
+    uid:
+      name: Switch UID
+      description: UID of the switch to subscribe to
+      required: true
+      selector:
+        text:
+
+delete_switch:
+  name: Delete Switch
+  description: Delete a VomeSync switch
+  fields:
+    uid:
+      name: Switch UID
+      description: UID of the switch to delete
+      required: true
+      selector:
+        text:

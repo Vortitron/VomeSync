@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>VomeSync - Public Remote Switches</title>
+	<meta name="description" content="Discover and monitor public remote switches from the VomeSync community. Connect your Home Assistant to global IoT devices.">
+	<link rel="stylesheet" href="styles.css">
+	<link rel="icon" type="image/x-icon" href="favicon.ico">
+</head>
+<body>
+	<header>
+		<div class="container">
+			<h1>🌐 VomeSync</h1>
+			<p class="tagline">Public Remote Switch Directory</p>
+		</div>
+	</header>
+
+	<main class="container">
+		<section class="intro">
+			<h2>Discover Community Switches</h2>
+			<p class="description">
+				Browse public switches shared by the VomeSync community. Copy UIDs to subscribe in your Home Assistant and monitor real-time states from around the world.
+			</p>
+			
+			<div class="warning-box">
+				<h3>⚠️ Important Safety Notice</h3>
+				<p>Public switches can be viewed and toggled by anyone with the UID. <strong>Never use for sensitive devices</strong> like locks, alarms, or security systems. These switches are for community events, demonstrations, and non-critical IoT projects only.</p>
+			</div>
+		</section>
+
+		<section class="controls">
+			<div class="search-filter">
+				<input type="text" id="searchBox" placeholder="Search by description, location, or category...">
+				<select id="categoryFilter">
+					<option value="">All Categories</option>
+					<option value="Community">Community</option>
+					<option value="Event">Event</option>
+					<option value="Personal">Personal</option>
+					<option value="Test">Test</option>
+					<option value="Other">Other</option>
+				</select>
+				<button id="refreshBtn" class="refresh-btn">🔄 Refresh</button>
+			</div>
+		</section>
+
+		<section class="stats">
+			<div class="stat-box">
+				<span class="stat-number" id="totalSwitches">-</span>
+				<span class="stat-label">Public Switches</span>
+			</div>
+			<div class="stat-box">
+				<span class="stat-number" id="activeSwitches">-</span>
+				<span class="stat-label">Currently On</span>
+			</div>
+			<div class="stat-box">
+				<span class="stat-number" id="lastUpdate">-</span>
+				<span class="stat-label">Last Update</span>
+			</div>
+		</section>
+
+		<section class="switches">
+			<div id="loadingMessage" class="loading">
+				<div class="spinner"></div>
+				<p>Loading public switches...</p>
+			</div>
+			
+			<div id="errorMessage" class="error-message" style="display: none;">
+				<h3>🚫 Unable to Load Switches</h3>
+				<p>Could not connect to the VomeSync server. Please check your internet connection and try again.</p>
+				<button onclick="loadSwitches()" class="retry-btn">Try Again</button>
+			</div>
+
+			<div id="emptySwitches" class="empty-message" style="display: none;">
+				<h3>📭 No Public Switches</h3>
+				<p>No public switches are currently available. Be the first to share a switch with the community!</p>
+			</div>
+
+			<div id="switchesGrid" class="switches-grid"></div>
+		</section>
+
+		<section class="how-to">
+			<h2>How to Use</h2>
+			<div class="steps">
+				<div class="step">
+					<h3>1. Install VomeSync</h3>
+					<p>Add the VomeSync integration to your Home Assistant via HACS.</p>
+				</div>
+				<div class="step">
+					<h3>2. Copy UID</h3>
+					<p>Click the copy button next to any switch below to copy its unique identifier.</p>
+				</div>
+				<div class="step">
+					<h3>3. Subscribe</h3>
+					<p>Use the UID in VomeSync configuration to create a monitoring sensor in your Home Assistant.</p>
+				</div>
+				<div class="step">
+					<h3>4. Automate</h3>
+					<p>Create automations that react to remote switch state changes.</p>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<footer>
+		<div class="container">
+			<div class="footer-content">
+				<div class="footer-section">
+					<h3>VomeSync</h3>
+					<p>Connecting Home Assistant instances worldwide through public remote switches.</p>
+				</div>
+				<div class="footer-section">
+					<h3>Resources</h3>
+					<ul>
+						<li><a href="https://github.com/your-org/vomesync">GitHub Repository</a></li>
+						<li><a href="https://github.com/your-org/vomesync/wiki">Documentation</a></li>
+						<li><a href="https://sync.vome.io/api/health">Server Status</a></li>
+					</ul>
+				</div>
+				<div class="footer-section">
+					<h3>Support</h3>
+					<ul>
+						<li><a href="mailto:support@vome.io">Contact Support</a></li>
+						<li><a href="https://reddit.com/r/homeassistant">r/homeassistant</a></li>
+						<li><a href="/privacy">Privacy Policy</a></li>
+					</ul>
+				</div>
+			</div>
+			<div class="footer-bottom">
+				<p>&copy; 2024 Callycode Limited. VomeSync is not liable for misuse of public switches.</p>
+			</div>
+		</div>
+	</footer>
+
+	<script src="script.js"></script>
+</body>
+</html>
