@@ -3,7 +3,7 @@ const url = require('url');
 const { v4: uuidv4 } = require('uuid');
 const redisClient = require('../utils/redis');
 const logger = require('../utils/logger');
-const { validateUID } = require('../utils/validation');
+// validateUID imported but not used - using inline validation instead
 
 class WebSocketManager {
 	constructor() {
@@ -13,7 +13,7 @@ class WebSocketManager {
 	}
 
 	async initialize(server) {
-		this.wss = new WebSocket.Server({ 
+		this.wss = new WebSocket.Server({
 			server,
 			path: '/ws',
 			verifyClient: (info) => {
@@ -99,27 +99,27 @@ class WebSocketManager {
 			client.lastActivity = Date.now();
 
 			const data = JSON.parse(message);
-			
+
 			switch (data.type) {
-				case 'ping':
-					this.sendToClient(clientId, { type: 'pong', timestamp: Date.now() });
-					break;
-				
-				case 'subscribe':
-					if (data.uid && this.isValidUID(data.uid)) {
-						this.subscribeClient(clientId, data.uid);
-						this.sendCurrentState(clientId, data.uid);
-					}
-					break;
-				
-				case 'unsubscribe':
-					if (data.uid) {
-						this.unsubscribeClient(clientId, data.uid);
-					}
-					break;
-				
-				default:
-					logger.warn(`Unknown message type from client ${clientId}:`, data.type);
+			case 'ping':
+				this.sendToClient(clientId, { type: 'pong', timestamp: Date.now() });
+				break;
+
+			case 'subscribe':
+				if (data.uid && this.isValidUID(data.uid)) {
+					this.subscribeClient(clientId, data.uid);
+					this.sendCurrentState(clientId, data.uid);
+				}
+				break;
+
+			case 'unsubscribe':
+				if (data.uid) {
+					this.unsubscribeClient(clientId, data.uid);
+				}
+				break;
+
+			default:
+				logger.warn(`Unknown message type from client ${clientId}:`, data.type);
 			}
 		} catch (error) {
 			logger.error(`Error handling message from client ${clientId}:`, error);
@@ -175,7 +175,7 @@ class WebSocketManager {
 	async sendCurrentState(clientId, uid) {
 		try {
 			const switchData = await redisClient.getSwitchState(uid);
-			
+
 			if (switchData) {
 				this.sendToClient(clientId, {
 					type: 'state_update',
@@ -235,7 +235,7 @@ class WebSocketManager {
 				try {
 					const uid = channel.split(':')[1];
 					const updateData = JSON.parse(message);
-					
+
 					// Broadcast to WebSocket clients
 					this.broadcastToSwitch(uid, {
 						type: 'state_update',
@@ -263,7 +263,7 @@ class WebSocketManager {
 			// Check for stale connections
 			for (const [clientId, client] of this.clients.entries()) {
 				const timeSinceActivity = now - client.lastActivity;
-				
+
 				if (timeSinceActivity > 60000) { // 1 minute
 					if (client.ws.readyState === WebSocket.OPEN) {
 						// Send ping to check if client is alive
@@ -272,7 +272,7 @@ class WebSocketManager {
 						staleClients.push(clientId);
 					}
 				}
-				
+
 				if (timeSinceActivity > 300000) { // 5 minutes of no activity
 					staleClients.push(clientId);
 				}

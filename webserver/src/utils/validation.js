@@ -53,23 +53,23 @@ const validateRequest = (schema) => {
 
 const validateUID = (req, res, next) => {
 	const { uid } = req.params;
-	
+
 	const schema = Joi.string().uuid().required();
 	const { error } = schema.validate(uid);
-	
+
 	if (error) {
 		return res.status(400).json({
 			success: false,
 			error: 'Invalid UID format'
 		});
 	}
-	
+
 	next();
 };
 
 const sanitizePublicSwitchData = (switchData) => {
 	if (!switchData) return null;
-	
+
 	return {
 		uid: switchData.uid,
 		description: switchData.description || '',
@@ -82,7 +82,7 @@ const sanitizePublicSwitchData = (switchData) => {
 
 const sanitizePrivateSwitchData = (switchData) => {
 	if (!switchData) return null;
-	
+
 	return {
 		uid: switchData.uid,
 		description: switchData.description || '',

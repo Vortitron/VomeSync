@@ -1,0 +1,303 @@
+name: VomeSync Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '18'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  lint:
+    name: Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: webserver/package-lock.json
+
+      - name: Install webserver dependencies
+        run: |
+          cd webserver
+          npm ci
+
+      - name: Run ESLint
+        run: |
+          cd webserver
+          npm run lint
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python linting tools
+        run: |
+          pip install flake8 black isort
+
+      - name: Run Python linting
+        run: |
+          flake8 hacs-addon/custom_components tests --max-line-length=100 --ignore=E203,W503
+          black --check hacs-addon/custom_components tests
+          isort --check-only hacs-addon/custom_components tests
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: webserver/package-lock.json
+
+      - name: Start Redis
+        uses: supercharge/redis-github-action@1.7.0
+        with:
+          redis-version: 7
+
+      - name: Install webserver dependencies
+        run: |
+          cd webserver
+          npm ci
+
+      - name: Run webserver unit tests
+        run: |
+          cd webserver
+          npm run test:unit
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r hacs-addon/tests/requirements.txt
+
+      - name: Run Home Assistant integration tests
+        run: |
+          pytest hacs-addon/tests/ -v
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: webserver/package-lock.json
+
+      - name: Start Redis
+        uses: supercharge/redis-github-action@1.7.0
+        with:
+          redis-version: 7
+
+      - name: Install webserver dependencies
+        run: |
+          cd webserver
+          npm ci
+
+      - name: Run integration tests
+        run: |
+          cd webserver
+          npm run test:integration
+
+  e2e-tests:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: webserver/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          cd webserver
+          npm ci
+          cd ../
+          pip install -r tests/e2e/requirements.txt
+
+      - name: Start VomeSync services
+        run: |
+          cd docker
+          cp env.example .env
+          # Set test configuration
+          sed -i 's/your-super-secret-jwt-key-change-this-in-production/test-jwt-secret-ci/' .env
+          sed -i 's/your-redis-password-change-this/test-redis-password/' .env
+          docker-compose up -d
+
+      - name: Wait for services to be ready
+        run: |
+          timeout 60s bash -c 'until curl -f http://localhost:3000/api/health; do sleep 2; done'
+
+      - name: Run E2E tests
+        run: |
+          pytest tests/e2e/ -v --tb=short
+
+      - name: Collect service logs on failure
+        if: failure()
+        run: |
+          cd docker
+          docker-compose logs
+
+      - name: Cleanup services
+        if: always()
+        run: |
+          cd docker
+          docker-compose down -v
+
+  coverage:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: webserver/package-lock.json
+
+      - name: Start Redis
+        uses: supercharge/redis-github-action@1.7.0
+        with:
+          redis-version: 7
+
+      - name: Install webserver dependencies
+        run: |
+          cd webserver
+          npm ci
+
+      - name: Run tests with coverage
+        run: |
+          cd webserver
+          npm run test:coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          directory: webserver/coverage
+          flags: webserver
+          fail_ci_if_error: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r hacs-addon/tests/requirements.txt
+          pip install pytest-cov
+
+      - name: Run Python tests with coverage
+        run: |
+          pytest hacs-addon/tests/ --cov=hacs-addon/custom_components --cov-report=xml
+
+      - name: Upload Python coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: coverage.xml
+          flags: hacs-addon
+          fail_ci_if_error: false
+
+  docker-build:
+    name: Docker Build Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build webserver Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: webserver
+          push: false
+          tags: vomesync-webserver:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test Docker Compose
+        run: |
+          cd docker
+          cp env.example .env
+          sed -i 's/your-super-secret-jwt-key-change-this-in-production/test-jwt-secret/' .env
+          sed -i 's/your-redis-password-change-this/test-redis-password/' .env
+          docker-compose config
+          docker-compose up -d --build
+          timeout 60s bash -c 'until curl -f http://localhost:3000/api/health; do sleep 2; done'
+          docker-compose down -v
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: webserver/package-lock.json
+
+      - name: Install webserver dependencies
+        run: |
+          cd webserver
+          npm ci
+
+      - name: Run npm audit
+        run: |
+          cd webserver
+          npm audit --audit-level=high
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'

@@ -45,7 +45,7 @@ class AuthManager {
 		try {
 			// Get switch data
 			const switchData = await redisClient.getSwitchState(uid);
-			
+
 			if (!switchData) {
 				return { success: false, error: 'Switch not found' };
 			}
@@ -66,7 +66,7 @@ class AuthManager {
 	requireAuth() {
 		return async (req, res, next) => {
 			const personalKey = req.body.personalKey || req.headers['x-personal-key'];
-			
+
 			if (!personalKey) {
 				return res.status(401).json({
 					success: false,
@@ -75,7 +75,7 @@ class AuthManager {
 			}
 
 			const isValid = await this.validatePersonalKey(personalKey);
-			
+
 			if (!isValid) {
 				return res.status(401).json({
 					success: false,
@@ -93,7 +93,7 @@ class AuthManager {
 		return async (req, res, next) => {
 			const { uid } = req.params;
 			const personalKey = req.body.personalKey || req.headers['x-personal-key'];
-			
+
 			if (!personalKey) {
 				return res.status(401).json({
 					success: false,
@@ -102,7 +102,7 @@ class AuthManager {
 			}
 
 			const authResult = await this.authenticateSwitch(uid, personalKey);
-			
+
 			if (!authResult.success) {
 				return res.status(401).json({
 					success: false,
@@ -123,14 +123,14 @@ class AuthManager {
 
 	async checkRateLimit(identifier, action, limit = 100, windowMs = 900000) {
 		const key = this.createRateLimitKey(identifier, action);
-		
+
 		try {
 			const current = await redisClient.client.incr(key);
-			
+
 			if (current === 1) {
 				await redisClient.client.expire(key, Math.ceil(windowMs / 1000));
 			}
-			
+
 			return {
 				allowed: current <= limit,
 				current,
@@ -148,18 +148,18 @@ class AuthManager {
 	rateLimit(action, limit = null, windowMs = null) {
 		const effectiveLimit = limit || config.security.rateLimitMaxRequests;
 		const effectiveWindow = windowMs || config.security.rateLimitWindowMs;
-		
+
 		return async (req, res, next) => {
 			const identifier = req.ip || 'unknown';
 			const rateLimitResult = await this.checkRateLimit(identifier, action, effectiveLimit, effectiveWindow);
-			
+
 			// Set rate limit headers
 			res.set({
 				'X-RateLimit-Limit': effectiveLimit,
 				'X-RateLimit-Remaining': Math.max(0, effectiveLimit - rateLimitResult.current),
 				'X-RateLimit-Reset': new Date(rateLimitResult.resetTime).toISOString()
 			});
-			
+
 			if (!rateLimitResult.allowed) {
 				return res.status(429).json({
 					success: false,
@@ -167,7 +167,7 @@ class AuthManager {
 					retryAfter: Math.ceil((rateLimitResult.resetTime - Date.now()) / 1000)
 				});
 			}
-			
+
 			next();
 		};
 	}

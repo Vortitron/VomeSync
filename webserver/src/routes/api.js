@@ -3,34 +3,34 @@ const { v4: uuidv4 } = require('uuid');
 const redisClient = require('../utils/redis');
 const authManager = require('../utils/auth');
 const logger = require('../utils/logger');
-const { 
-	validateRequest, 
-	validateUID, 
+const {
+	validateRequest,
+	validateUID,
 	schemas,
 	sanitizePublicSwitchData,
-	sanitizePrivateSwitchData 
+	sanitizePrivateSwitchData
 } = require('../utils/validation');
 const webSocketManager = require('../websocket/manager');
 
 const router = express.Router();
 
 // Generate personal key endpoint
-router.post('/generate-key', 
+router.post('/generate-key',
 	authManager.rateLimit('generate_key', 10, 3600000), // 10 per hour
 	validateRequest(schemas.generateKey),
 	async (req, res) => {
 		try {
 			const personalKey = authManager.generatePersonalKey();
-			
+
 			// Store the key in Redis
 			await redisClient.storePersonalKey(personalKey);
-			
+
 			// Generate JWT for additional security (optional)
 			const jwt = authManager.generateJWT(personalKey);
-			
+
 			logger.info(`Generated new personal key: ${personalKey.substring(0, 8)}...`);
-			
-			res.json({
+
+			return res.json({
 				success: true,
 				data: {
 					personalKey,
@@ -59,12 +59,12 @@ router.post('/create-switch',
 			const uid = uuidv4();
 			const { personalKey } = req;
 			const switchConfig = req.validatedData;
-			
+
 			// Create switch in Redis
 			const switchData = await redisClient.createSwitch(uid, personalKey, switchConfig);
-			
+
 			logger.info(`Created new switch: ${uid} by ${personalKey.substring(0, 8)}...`);
-			
+
 			res.json({
 				success: true,
 				data: {
@@ -92,19 +92,19 @@ router.post('/toggle/:uid',
 		try {
 			const { uid } = req.params;
 			const { switchData } = req;
-			
+
 			// Toggle state
 			const newState = !switchData.state;
-			
+
 			// Update in Redis
 			await redisClient.setSwitchState(uid, newState);
 			await redisClient.incrementToggleCount(uid);
-			
+
 			// Publish update via Redis for WebSocket broadcasting
 			await redisClient.publishSwitchUpdate(uid, newState);
-			
+
 			logger.info(`Toggled switch ${uid} to ${newState ? 'on' : 'off'}`);
-			
+
 			res.json({
 				success: true,
 				data: {
@@ -130,16 +130,16 @@ router.get('/status/:uid',
 	async (req, res) => {
 		try {
 			const { uid } = req.params;
-			
+
 			const switchData = await redisClient.getSwitchState(uid);
-			
+
 			if (!switchData) {
 				return res.status(404).json({
 					success: false,
 					error: 'Switch not found'
 				});
 			}
-			
+
 			// Return public data only
 			res.json({
 				success: true,
@@ -161,7 +161,7 @@ router.get('/public-switches',
 	async (req, res) => {
 		try {
 			const publicSwitches = await redisClient.getPublicSwitches();
-			
+
 			res.json({
 				success: true,
 				data: {
@@ -187,13 +187,13 @@ router.get('/my-switches',
 	async (req, res) => {
 		try {
 			const { personalKey } = req;
-			
+
 			const userSwitches = await redisClient.getUserSwitches(personalKey);
-			
-			const sanitizedSwitches = userSwitches.map(switchData => 
+
+			const sanitizedSwitches = userSwitches.map(switchData =>
 				sanitizePrivateSwitchData(switchData)
 			);
-			
+
 			res.json({
 				success: true,
 				data: {
@@ -220,14 +220,14 @@ router.delete('/switch/:uid',
 		try {
 			const { uid } = req.params;
 			const { personalKey } = req;
-			
+
 			// Remove from Redis
 			await redisClient.client.del(`switch:${uid}`);
 			await redisClient.client.sRem(`user:${personalKey}`, uid);
 			await redisClient.client.sRem('public_switches', uid);
-			
+
 			logger.info(`Deleted switch ${uid}`);
-			
+
 			res.json({
 				success: true,
 				data: {
@@ -252,7 +252,7 @@ router.post('/delete-key',
 	async (req, res) => {
 		try {
 			const { personalKey } = req.validatedData;
-			
+
 			// Validate the key exists
 			const isValid = await redisClient.validatePersonalKey(personalKey);
 			if (!isValid) {
@@ -261,12 +261,12 @@ router.post('/delete-key',
 					error: 'Personal key not found'
 				});
 			}
-			
+
 			// Delete all data
 			const deletedSwitchCount = await redisClient.deletePersonalKey(personalKey);
-			
+
 			logger.info(`Deleted personal key ${personalKey.substring(0, 8)}... and ${deletedSwitchCount} switches`);
-			
+
 			res.json({
 				success: true,
 				data: {
@@ -296,7 +296,7 @@ router.get('/health', (req, res) => {
 			subscriptions: webSocketManager.getStats().totalSubscriptions
 		}
 	};
-	
+
 	res.json(health);
 });
 
@@ -307,7 +307,7 @@ router.get('/stats',
 		try {
 			const wsStats = webSocketManager.getStats();
 			const publicSwitches = await redisClient.getPublicSwitches();
-			
+
 			res.json({
 				success: true,
 				data: {
@@ -327,9 +327,9 @@ router.get('/stats',
 );
 
 // Error handling middleware
-router.use((error, req, res, next) => {
+router.use((error, req, res, _next) => {
 	logger.error('API route error:', error);
-	
+
 	res.status(500).json({
 		success: false,
 		error: 'Internal server error',

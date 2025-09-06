@@ -46,7 +46,6 @@ The project is maintained by Callycode Limited, with monetization via subscripti
 ## Why VomeSync?
 - **Unique**: No Home Assistant add-on offers plug-and-play public switch sharing with a community focus.
 - **Global Appeal**: Relevant for Home Assistant users worldwide (EU, US, Asia) for community events or multi-property syncing.
-- **Low Admin**: Automated sales via Gumroad, minimal support (~2 hours/month), simple tax reporting under Enskild Firma.
 - **Synergy**: Builds toward private VPN hosting for secure IoT syncing.
 
 ## Architecture
@@ -134,8 +133,7 @@ The project is maintained by Callycode Limited, with monetization via subscripti
 ## Monetization
 - **Free Tier**: Basic switch creation/subscription (1-2 switches, limited updates).
 - **Premium Tier**: €5-15/month via Gumroad for unlimited switches, analytics (e.g., trigger history), and future private mode.
-- **Potential**: 50-100 users at €10/month = €500-1,000/month semi-passive. Scales with community adoption.
-- **Sales**: Automated via Gumroad (~8% fee). License keys unlock premium features.
+
 
 ## Privacy and Security
 - **Personal Key**: UUID/JWT for authentication, stored securely in HA `secrets.yaml`.
@@ -154,7 +152,7 @@ The project is maintained by Callycode Limited, with monetization via subscripti
 ### For Users
 
 1. **Install VomeSync Integration:**
-   - Add via HACS: Settings → HACS → Integrations → Custom Repositories → Add `https://github.com/your-org/vomesync`
+   - Add via HACS: Settings → HACS → Integrations → Custom Repositories → Add `https://github.com/Vortitron/VomeSync`
    - Or download manually to `custom_components/vomesync/`
    - Restart Home Assistant
 
@@ -177,7 +175,7 @@ The project is maintained by Callycode Limited, with monetization via subscripti
 
 1. **Quick Start with Docker:**
    ```bash
-   git clone https://github.com/your-org/vomesync.git
+   git clone https://github.com/Vortitron/VomeSync.git
    cd vomesync/docker
    cp env.example .env
    # Edit .env with your configuration

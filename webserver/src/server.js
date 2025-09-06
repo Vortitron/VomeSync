@@ -21,27 +21,27 @@ class VomeSyncServer {
 		try {
 			// Connect to Redis first
 			await redisClient.connect();
-			
+
 			// Configure Express middleware
 			this.setupMiddleware();
-			
+
 			// Setup routes
 			this.setupRoutes();
-			
+
 			// Create HTTP/HTTPS server
 			await this.createServer();
-			
+
 			// Initialize WebSocket manager
 			await webSocketManager.initialize(this.server);
-			
+
 			// Start heartbeat for WebSocket connections
 			webSocketManager.startHeartbeat();
-			
+
 			// Setup graceful shutdown
 			this.setupGracefulShutdown();
-			
+
 			logger.info('VomeSync server initialized successfully');
-			
+
 		} catch (error) {
 			logger.error('Failed to initialize server:', error);
 			process.exit(1);
@@ -53,8 +53,8 @@ class VomeSyncServer {
 		this.app.use(helmet({
 			contentSecurityPolicy: {
 				directives: {
-					defaultSrc: ["'self'"],
-					connectSrc: ["'self'", "wss:", "ws:"]
+					defaultSrc: ['\'self\''],
+					connectSrc: ['\'self\'', 'wss:', 'ws:']
 				}
 			}
 		}));
@@ -74,12 +74,12 @@ class VomeSyncServer {
 		// Request logging
 		this.app.use((req, res, next) => {
 			const start = Date.now();
-			
+
 			res.on('finish', () => {
 				const duration = Date.now() - start;
 				logger.info(`${req.method} ${req.path} - ${res.statusCode} - ${duration}ms`);
 			});
-			
+
 			next();
 		});
 
@@ -119,9 +119,9 @@ class VomeSyncServer {
 		});
 
 		// Global error handler
-		this.app.use((error, req, res, next) => {
+		this.app.use((error, req, res, _next) => {
 			logger.error('Unhandled server error:', error);
-			
+
 			res.status(500).json({
 				success: false,
 				error: 'Internal server error',
@@ -137,7 +137,7 @@ class VomeSyncServer {
 				cert: fs.readFileSync(config.ssl.certPath),
 				key: fs.readFileSync(config.ssl.keyPath)
 			};
-			
+
 			this.server = https.createServer(sslOptions, this.app);
 			logger.info('Created HTTPS server');
 		} else {
