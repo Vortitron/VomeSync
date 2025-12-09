@@ -15,7 +15,7 @@
 		"lint": "eslint src/ tests/",
 		"lint:fix": "eslint src/ tests/ --fix",
 		"docker:build": "docker build -t vomesync-webserver .",
-		"docker:run": "docker run -p 3000:3000 -p 3001:3001 vomesync-webserver"
+		"docker:run": "docker run -p 3090:3090 -p 3001:3001 vomesync-webserver"
 	},
 	"keywords": [
 		"home-assistant",
@@ -24,7 +24,7 @@
 		"remote-switch",
 		"real-time"
 	],
-	"author": "Callycode Limited",
+	"author": "Vortitron",
 	"license": "Proprietary",
 	"dependencies": {
 		"express": "^4.18.2",

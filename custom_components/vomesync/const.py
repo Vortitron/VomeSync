@@ -63,5 +63,5 @@ ATTR_CREATED_AT = "created_at"
 ATTR_IS_OWNER = "is_owner"
 
 # Device info
-DEVICE_MANUFACTURER = "Callycode Limited"
+DEVICE_MANUFACTURER = "Vortitron"
 DEVICE_MODEL = "VomeSync Remote Switch"

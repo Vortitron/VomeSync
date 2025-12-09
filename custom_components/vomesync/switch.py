@@ -35,6 +35,9 @@ async def async_setup_entry(
 	"""Set up VomeSync switches from a config entry."""
 	coordinator: VomeSyncCoordinator = hass.data[DOMAIN][config_entry.entry_id]
 	
+	# Store the add_entities callback in the coordinator for dynamic entity addition
+	coordinator.async_add_switch_entities = async_add_entities
+	
 	# Create switch entities for owned switches
 	entities = []
 	
@@ -43,15 +46,20 @@ async def async_setup_entry(
 	switches = options.get("switches", {})
 	subscriptions = options.get("subscriptions", {})
 	
+	# Store entity name mapping in coordinator for config flow access
+	coordinator.entity_names = {}
+	
 	for name, switch_config in switches.items():
 		uid = switch_config["uid"]
 		entity = VomeSyncSwitch(coordinator, uid, name, True)
 		entities.append(entity)
+		coordinator.entity_names[uid] = name
 	
 	for name, sub_config in subscriptions.items():
 		uid = sub_config["uid"]
 		entity = VomeSyncSwitch(coordinator, uid, name, False)
 		entities.append(entity)
+		coordinator.entity_names[uid] = name
 	
 	if entities:
 		async_add_entities(entities)
@@ -122,6 +130,18 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 			ATTR_SWITCH_UID: self._uid,
 			ATTR_IS_OWNER: self._is_owner,
 		}
+		
+		# Add WebSocket URL for easy access
+		ws_base_url = self.coordinator.config_entry.data.get("websocket_url", "")
+		if ws_base_url:
+			attributes["websocket_url"] = f"{ws_base_url}?uid={self._uid}"
+		
+		# Add webhook URL for remote toggling (owner only)
+		if self._is_owner:
+			server_url = self.coordinator.config_entry.data.get("server_url", "")
+			personal_key = self.coordinator.config_entry.data.get("personal_key", "")
+			if server_url and personal_key:
+				attributes["webhook_url"] = f"{server_url}/api/toggle/{self._uid}?personalKey={personal_key}"
 
 		# Add available attributes
 		for attr, key in [

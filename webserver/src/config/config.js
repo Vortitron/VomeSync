@@ -32,6 +32,11 @@ const config = {
 		enabled: process.env.ENABLE_ANALYTICS === 'true',
 		differentialPrivacyEpsilon: parseFloat(process.env.DIFFERENTIAL_PRIVACY_EPSILON) || 1.0
 	},
+	hcaptcha: {
+		secret: process.env.HCAPTCHA_SECRET || '',
+		siteKey: process.env.HCAPTCHA_SITEKEY || '',
+		bypassToken: process.env.HCAPTCHA_BYPASS_TOKEN || ''
+	},
 	logging: {
 		level: process.env.LOG_LEVEL || 'info',
 		file: process.env.LOG_FILE || 'logs/vomesync.log'

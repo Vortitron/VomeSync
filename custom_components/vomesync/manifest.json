@@ -1,7 +1,7 @@
 {
 	"domain": "vomesync",
 	"name": "VomeSync",
-	"version": "1.0.0",
+	"version": "1.1.6",
 	"documentation": "https://github.com/your-org/vomesync",
 	"issue_tracker": "https://github.com/your-org/vomesync/issues",
 	"dependencies": [],

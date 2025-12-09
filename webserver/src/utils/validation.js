@@ -5,11 +5,30 @@ const schemas = {
 		description: Joi.string().max(200).allow('').default(''),
 		location: Joi.string().max(100).allow('').default(''),
 		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other').default('Other'),
-		publicize: Joi.boolean().default(false)
+		publicize: Joi.boolean().default(false),
+		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(500).allow('').default(''),
+		captchaToken: Joi.string().max(2000).allow('')
 	}),
+
+	updateSwitch: Joi.object({
+		description: Joi.string().max(200).allow(''),
+		location: Joi.string().max(100).allow(''),
+		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other'),
+		publicize: Joi.boolean(),
+		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(500).allow(''),
+		captchaToken: Joi.string().max(2000).allow('')
+	}).min(1),
 
 	toggleSwitch: Joi.object({
 		personalKey: Joi.string().uuid().required()
+	}),
+
+	addComment: Joi.object({
+		comment: Joi.string().min(1).max(500).required()
+	}),
+
+	updateProfile: Joi.object({
+		profileUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(500).allow('').default('')
 	}),
 
 	subscribeSwitch: Joi.object({
@@ -76,7 +95,11 @@ const sanitizePublicSwitchData = (switchData) => {
 		location: switchData.location || '',
 		category: switchData.category || 'Other',
 		state: switchData.state,
-		lastToggled: switchData.lastToggled || 0
+		lastToggled: switchData.lastToggled || 0,
+		toggleCount: switchData.toggleCount || 0,
+		userCount: switchData.userCount || 0,
+		link: switchData.link || '',
+		ownerProfileUrl: switchData.ownerProfileUrl || ''
 	};
 };
 
@@ -92,7 +115,8 @@ const sanitizePrivateSwitchData = (switchData) => {
 		lastToggled: switchData.lastToggled || 0,
 		createdAt: switchData.createdAt || 0,
 		toggleCount: switchData.toggleCount || 0,
-		publicize: switchData.publicize || false
+		publicize: switchData.publicize || false,
+		link: switchData.link || ''
 	};
 };
 

@@ -23,7 +23,10 @@ class TestVomeSyncCoordinator:
     @pytest.fixture
     def hass(self):
         """Mock Home Assistant instance."""
-        return MagicMock(spec=HomeAssistant)
+        mock_hass = MagicMock(spec=HomeAssistant)
+        mock_hass.loop = asyncio.get_event_loop()
+        mock_hass.config_entries = MagicMock()
+        return mock_hass
 
     @pytest.fixture
     def config_entry(self):

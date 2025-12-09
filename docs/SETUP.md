@@ -218,7 +218,7 @@ This guide covers setting up VomeSync for development and production deployment.
 
 2. **Add VomeSync repository:**
    - HACS → Integrations → Three dots menu → Custom repositories
-   - Add: `https://github.com/your-org/vomesync`
+	- Add: `https://github.com/Vortitron/VomeSync`
    - Category: Integration
 
 3. **Install VomeSync:**
@@ -231,8 +231,8 @@ This guide covers setting up VomeSync for development and production deployment.
 1. **Download integration:**
    ```bash
    cd /config/custom_components
-   git clone https://github.com/your-org/vomesync.git
-   mv vomesync/hacs-addon/custom_components/vomesync ./
+	git clone https://github.com/Vortitron/VomeSync.git
+	mv VomeSync/custom_components/vomesync ./
    rm -rf vomesync
    ```
 

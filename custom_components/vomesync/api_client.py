@@ -65,7 +65,9 @@ class VomeSyncAPIClient:
 		if require_auth and self.personal_key:
 			headers["X-Personal-Key"] = self.personal_key
 		
-		if data and require_auth and self.personal_key:
+		if require_auth and self.personal_key:
+			if data is None:
+				data = {}
 			data["personalKey"] = self.personal_key
 
 		try:
@@ -86,12 +88,12 @@ class VomeSyncAPIClient:
 
 				if response.status >= 400:
 					error_msg = response_data.get("error", f"HTTP {response.status}")
-					_LOGGER.error("API request failed: %s", error_msg)
+					_LOGGER.error("API request failed (%s %s): %s", method, url, error_msg)
 					raise VomeSyncAPIError(f"API request failed: {error_msg}")
 
 				if not response_data.get("success", True):
 					error_msg = response_data.get("error", "Unknown error")
-					_LOGGER.error("API returned error: %s", error_msg)
+					_LOGGER.error("API returned error (%s %s): %s", method, url, error_msg)
 					raise VomeSyncAPIError(f"API error: {error_msg}")
 
 				return response_data.get("data", response_data)
@@ -110,14 +112,15 @@ class VomeSyncAPIClient:
 
 	async def validate_personal_key(self, personal_key: str) -> bool:
 		"""Validate a personal key by making an authenticated request."""
-		temp_client = VomeSyncAPIClient(self.server_url, personal_key)
+		previous_key = self.personal_key
+		self.personal_key = personal_key
 		try:
-			await temp_client.get_my_switches()
+			await self._make_request("GET", API_MY_SWITCHES, require_auth=True)
 			return True
 		except VomeSyncAPIError:
 			return False
 		finally:
-			await temp_client.close()
+			self.personal_key = previous_key
 
 	async def create_switch(
 		self,
@@ -172,6 +175,24 @@ class VomeSyncAPIClient:
 			return True
 		except VomeSyncAPIError:
 			return False
+
+	# API key management
+	async def list_api_keys(self) -> list[Dict[str, Any]]:
+		return await self._make_request("GET", "/api/api-keys", require_auth=True)
+
+	async def create_api_key(self, name: str = "") -> Dict[str, Any]:
+		return await self._make_request("POST", "/api/api-keys", {"name": name}, require_auth=True)
+
+	async def delete_api_key(self, api_key: str) -> bool:
+		try:
+			await self._make_request("DELETE", f"/api/api-keys/{api_key}", require_auth=True)
+			return True
+		except VomeSyncAPIError:
+			return False
+
+	# Session tokens
+	async def create_session_token(self) -> Dict[str, Any]:
+		return await self._make_request("POST", "/api/session-token", {}, require_auth=True)
 
 	async def health_check(self) -> bool:
 		"""Check server health."""

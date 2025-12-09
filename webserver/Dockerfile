@@ -19,7 +19,10 @@ RUN npm ci --only=production && npm cache clean --force
 
 # Copy application code
 COPY src/ ./src/
-COPY config/ ./config/ 2>/dev/null || true
+
+# Copy config directory if it exists, otherwise create empty directory
+COPY config* ./
+RUN mkdir -p config
 
 # Create logs directory
 RUN mkdir -p logs && chown -R vomesync:nodejs logs
@@ -28,11 +31,11 @@ RUN mkdir -p logs && chown -R vomesync:nodejs logs
 USER vomesync
 
 # Expose ports
-EXPOSE 3000 3001
+EXPOSE 3090 3001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/api/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"
+  CMD node -e "require('http').get('http://localhost:3090/api/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"
 
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]

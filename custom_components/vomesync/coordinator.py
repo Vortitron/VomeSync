@@ -42,11 +42,19 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			name=DOMAIN,
 			update_interval=timedelta(seconds=UPDATE_INTERVAL_SECONDS),
 		)
+		# Ensure config_entry is retained after super call
+		self.config_entry = config_entry
 		
 		# Store switch data and WebSocket connections
 		self.switches: Dict[str, Dict[str, Any]] = {}
 		self.subscriptions: Dict[str, Dict[str, Any]] = {}
 		self._websocket_connections: Dict[str, bool] = {}
+		
+		# Callback for dynamically adding switch entities (set by switch platform)
+		self.async_add_switch_entities = None
+		
+		# Entity name mapping (uid -> friendly_name)
+		self.entity_names: Dict[str, str] = {}
 
 	async def _async_update_data(self) -> Dict[str, Any]:
 		"""Fetch data from API."""
@@ -54,18 +62,41 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			# Get user's switches
 			my_switches = await self.api_client.get_my_switches()
 			
+			# Get names from options if available
+			options = self.config_entry.options or {}
+			saved_switches = options.get("switches", {})
+			
+			# Build uid->name mapping from options
+			uid_to_name = {}
+			for name, switch_config in saved_switches.items():
+				if "uid" in switch_config:
+					uid_to_name[switch_config["uid"]] = name
+			
+			# Also check entity_names for existing mappings
+			if not hasattr(self, 'entity_names') or self.entity_names is None:
+				self.entity_names = {}
+			
 			# Update switches data
 			switches_data = {}
 			for switch in my_switches:
 				uid = switch["uid"]
-				switches_data[uid] = switch
+				# Priority: saved options > entity_names > description > uid
+				name = uid_to_name.get(uid) or self.entity_names.get(uid) or switch.get("description") or uid[:8]
+				switches_data[uid] = {
+					**switch,
+					"name": name,
+					"is_owner": True
+				}
+				# Update entity_names mapping
+				if uid not in self.entity_names:
+					self.entity_names[uid] = name
 				
 				# Ensure WebSocket connection for owned switches
 				if uid not in self._websocket_connections:
 					await self._ensure_websocket_connection(uid)
 			
 			# Get status for subscribed switches from options
-			options = self.config_entry.options
+			options = self.config_entry.options or {}
 			subscriptions = options.get("subscriptions", {})
 			
 			subscriptions_data = {}
@@ -183,7 +214,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			await self._ensure_websocket_connection(uid)
 			
 			# Update config entry options
-			options = dict(self.config_entry.options)
+			options = dict(self.config_entry.options or {})
 			switches = options.setdefault("switches", {})
 			switches[name] = {
 				"uid": uid,
@@ -198,8 +229,14 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				self.config_entry, options=options
 			)
 			
-			# Trigger entity updates
-			self.async_update_listeners()
+			# Dynamically add the new switch entity
+			if self.async_add_switch_entities:
+				from .switch import VomeSyncSwitch
+				entity = VomeSyncSwitch(self, uid, name, True)
+				self.async_add_switch_entities([entity])
+				_LOGGER.info("Dynamically added switch entity: %s", name)
+			else:
+				_LOGGER.warning("Cannot add entity dynamically - async_add_switch_entities not available")
 			
 			return uid
 			
@@ -226,7 +263,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			await self._ensure_websocket_connection(uid)
 			
 			# Update config entry options
-			options = dict(self.config_entry.options)
+			options = dict(self.config_entry.options or {})
 			subscriptions = options.setdefault("subscriptions", {})
 			subscriptions[name] = {
 				"uid": uid,
@@ -237,8 +274,14 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				self.config_entry, options=options
 			)
 			
-			# Trigger entity updates
-			self.async_update_listeners()
+			# Dynamically add the new switch entity
+			if self.async_add_switch_entities:
+				from .switch import VomeSyncSwitch
+				entity = VomeSyncSwitch(self, uid, name, False)
+				self.async_add_switch_entities([entity])
+				_LOGGER.info("Dynamically added subscription entity: %s", name)
+			else:
+				_LOGGER.warning("Cannot add entity dynamically - async_add_switch_entities not available")
 			
 			return True
 			
@@ -261,7 +304,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				self._websocket_connections.pop(uid, None)
 				
 				# Remove from options
-				options = dict(self.config_entry.options)
+				options = dict(self.config_entry.options or {})
 				switches = options.get("switches", {})
 				subscriptions = options.get("subscriptions", {})
 				
@@ -281,8 +324,9 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					self.config_entry, options=options
 				)
 				
-				# Trigger entity updates
-				self.async_update_listeners()
+				# Note: Entity will be removed on next HA restart or integration reload
+				# Dynamic entity removal requires entity registry manipulation
+				_LOGGER.info("Switch %s deleted from backend - entity will be removed on integration reload", uid)
 			
 			return success
 			
@@ -307,7 +351,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 	def is_switch_owner(self, uid: str) -> bool:
 		"""Check if user owns the switch."""
 		switch_data = self.get_switch_data(uid)
-		return switch_data and switch_data.get("is_owner", False)
+		return bool(switch_data and switch_data.get("is_owner", False))
 
 	@property
 	def personal_key(self) -> str:

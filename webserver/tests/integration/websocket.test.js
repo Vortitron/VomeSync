@@ -41,6 +41,11 @@ describe('WebSocket Integration Tests', () => {
 		if (redisClient.isConnected) {
 			await redisClient.disconnect();
 		}
+
+		// Close WebSocket server to avoid open handles
+		if (webSocketManager.wss) {
+			webSocketManager.wss.close();
+		}
 	});
 
 	beforeEach(async () => {
@@ -152,6 +157,7 @@ describe('WebSocket Integration Tests', () => {
 
 			return new Promise((resolve, reject) => {
 				const ws = new WebSocket(`ws://localhost:${testPort}/ws?uid=${testUID}`);
+				let timeout;
 
 				ws.on('open', () => {
 					const pingMessage = {
@@ -168,6 +174,7 @@ describe('WebSocket Integration Tests', () => {
 						if (message.type === 'pong') {
 							expect(message.timestamp).toBeDefined();
 							ws.close();
+							clearTimeout(timeout);
 							resolve();
 						}
 					} catch (error) {
@@ -177,7 +184,7 @@ describe('WebSocket Integration Tests', () => {
 
 				ws.on('error', reject);
 
-				setTimeout(() => {
+				timeout = setTimeout(() => {
 					reject(new Error('Timeout waiting for pong'));
 				}, 5000);
 			});
@@ -287,6 +294,7 @@ describe('WebSocket Integration Tests', () => {
 
 			return new Promise((resolve, reject) => {
 				const ws = new WebSocket(`ws://localhost:${testPort}/ws?uid=${testUID}`);
+				let timeout;
 
 				ws.on('open', () => {
 					// Send malformed JSON
@@ -309,6 +317,7 @@ describe('WebSocket Integration Tests', () => {
 						if (message.type === 'pong') {
 							// Connection should still work after malformed message
 							ws.close();
+							clearTimeout(timeout);
 							resolve();
 						}
 					} catch (error) {
@@ -318,7 +327,7 @@ describe('WebSocket Integration Tests', () => {
 
 				ws.on('error', reject);
 
-				setTimeout(() => {
+				timeout = setTimeout(() => {
 					reject(new Error('Timeout - connection failed after malformed message'));
 				}, 5000);
 			});
@@ -378,6 +387,7 @@ describe('WebSocket Integration Tests', () => {
 
 			return new Promise((resolve, reject) => {
 				const ws = new WebSocket(`ws://localhost:${testPort}/ws?uid=${nonExistentUID}`);
+				let timeout;
 
 				ws.on('message', (data) => {
 					try {
@@ -386,6 +396,7 @@ describe('WebSocket Integration Tests', () => {
 						if (message.type === 'error') {
 							expect(message.message).toContain('Switch not found');
 							ws.close();
+							clearTimeout(timeout);
 							resolve();
 						}
 					} catch (error) {
@@ -395,7 +406,8 @@ describe('WebSocket Integration Tests', () => {
 
 				ws.on('error', reject);
 
-				setTimeout(() => {
+				timeout = setTimeout(() => {
+					ws.close();
 					reject(new Error('Timeout waiting for error message'));
 				}, 5000);
 			});
@@ -408,24 +420,28 @@ describe('WebSocket Integration Tests', () => {
 				const ws = new WebSocket(`ws://localhost:${testPort}/ws?uid=${testUID}`, {
 					handshakeTimeout: 100 // Very short timeout
 				});
+				let timeout;
 
 				ws.on('open', () => {
 					// Connection opened successfully
 					ws.close();
+					clearTimeout(timeout);
 					resolve();
 				});
 
 				ws.on('error', (error) => {
 					// Timeout error is also acceptable for this test
 					if (error.message && error.message.includes('timeout')) {
+						clearTimeout(timeout);
 						resolve();
 					} else {
 						reject(error);
 					}
 				});
 
-				setTimeout(() => {
+				timeout = setTimeout(() => {
 					// Either way is fine for this test
+					ws.close();
 					resolve();
 				}, 1000);
 			});

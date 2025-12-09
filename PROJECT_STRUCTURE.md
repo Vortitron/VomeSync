@@ -66,6 +66,16 @@ VomeSync/
     └── SETUP.md                 # Installation and configuration guide
 ```
 
+## Planned Components
+
+### Official Home Assistant Add-on (Planned)
+- We plan to add an optional official add-on to complement the HACS integration.
+- Purpose: provide a non-HACS installation path and improved onboarding/diagnostics.
+- Scope (tentative):
+  - Containerised helper that surfaces status/health and assists with config flow.
+  - No duplication of integration logic (the integration remains the source of truth).
+  - Distributed initially via a custom add-on repository; target official store later.
+
 ## Component Overview
 
 ### Webserver (`/webserver/`)

@@ -29,14 +29,7 @@ afterAll(() => {
 	console.warn = originalConsoleWarn;
 });
 
-// Clean up any open handles after each test
-afterEach(async () => {
-	// Close any Redis connections
-	const redisClient = require('../src/utils/redis');
-	if (redisClient.isConnected) {
-		await redisClient.disconnect();
-	}
-});
+// Note: individual test files manage Redis lifecycle to avoid cross-test interference.
 
 // Global test utilities
 global.testUtils = {

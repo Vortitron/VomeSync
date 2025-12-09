@@ -32,8 +32,18 @@ VomeSync consists of four main components:
 - **Features**: SSL termination, load balancing, monitoring
 - **Management**: Automated deployment scripts
 
+### 5. (Planned) **Official Home Assistant Add-on**
+- **Status**: Planned – not yet implemented
+- **Purpose**: Optional, non-HACS installation path that bundles a small companion service and auto-configures the integration
+- **Why**: Broader availability for users without HACS; one-click install via Add-on Store (custom repo initially)
+- **High-level design**:
+  - Lightweight container acting as a proxy/utility (optional), health checks, and onboarding helper
+  - Installs/links the VomeSync integration via config flow (no business logic duplication)
+  - Exposes useful diagnostics and status page
+- **Notes**: We will avoid duplicating integration logic. The integration remains the primary interface; the add-on is an optional convenience layer.
+
 This README outlines the architecture, setup, and user flow for developers, contributors, and users.
-The project is maintained by Callycode Limited, with monetization via subscriptions for premium features.
+The project is maintained by Vortitron, with monetization via subscriptions for premium features.
 
 ## Features
 - **Public Switch Syncing**: Create a virtual switch in Home Assistant, share it via a unique UID, and let others toggle or monitor it (e.g., community light events).
@@ -182,7 +192,71 @@ The project is maintained by Callycode Limited, with monetization via subscripti
    ./scripts/deploy.sh
    ```
 
-2. **Development Setup:**
+2. **Production Deployment:**
+   
+   The VomeSync website runs on port **8111** (HTTP) and is designed to be proxied through nginx with SSL:
+   
+   ```bash
+   # Start the Docker stack
+   cd /var/www/VomeSync/docker
+   docker-compose up -d
+   ```
+   
+   **Nginx Configuration for sync.vome.io:**
+   ```nginx
+   server {
+       listen 80;
+       listen [::]:80;
+       server_name sync.vome.io;
+       
+       # Redirect to HTTPS
+       return 301 https://$server_name$request_uri;
+   }
+   
+   server {
+       listen 443 ssl http2;
+       listen [::]:443 ssl http2;
+       server_name sync.vome.io;
+       
+       # Certbot will add SSL configuration here
+       ssl_certificate /etc/letsencrypt/live/sync.vome.io/fullchain.pem;
+       ssl_certificate_key /etc/letsencrypt/live/sync.vome.io/privkey.pem;
+       
+       # Proxy to VomeSync website container
+       location / {
+           proxy_pass http://localhost:8111;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+       }
+       
+       # WebSocket support for API
+       location /ws {
+           proxy_pass http://localhost:3090;
+           proxy_http_version 1.1;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection "upgrade";
+           proxy_set_header Host $host;
+       }
+       
+       # API endpoints
+       location /api/ {
+           proxy_pass http://localhost:3090;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+       }
+   }
+   ```
+   
+   **Port Summary:**
+   - **3000**: API/WebSocket server (dev and production)
+   - **8111**: Website (production, nginx proxy target)
+   - **6380**: Redis (localhost only)
+
+3. **Development Setup:**
    ```bash
    # Install dependencies
    cd webserver && npm install
@@ -194,7 +268,7 @@ The project is maintained by Callycode Limited, with monetization via subscripti
    npm run dev
    ```
 
-3. **Documentation:**
+4. **Documentation:**
    - [Setup Guide](docs/SETUP.md) - Complete installation instructions
    - [API Documentation](docs/API.md) - REST and WebSocket API reference
    - [Docker Guide](docker/README.md) - Container deployment
@@ -218,6 +292,77 @@ The project is maintained by Callycode Limited, with monetization via subscripti
    - GitHub Issues for bugs and feature requests
    - Discussions for questions and ideas
    - Community support via r/homeassistant
+
+## Local Test Home Assistant (fin)
+- **HA VM**: `192.168.122.9:8123` (virsh domain: `haos`)
+- **Console**: `sudo virsh console haos`
+- **Sync Integration**: `rsync -a --exclude='__pycache__' custom_components/vomesync/ /var/www/ha-shared-components/vomesync/`
+- **Server URL**: Use server IP `http://95.216.77.237:3000` (HA VM cannot resolve "fin" hostname)
+- **WebSocket URL**: Automatically derived from server URL (appends `/ws`, converts http→ws, https→wss)
+- **Restart HA**: `./test-ha-integration.sh restart` or via virsh console with `ha core restart`
+
+### Automated Testing
+
+**Backend API Test** (`./test-backend.sh`):
+```bash
+./test-backend.sh [server_url]  # Tests create-switch, toggle, status
+```
+✓ Verifies webserver functionality end-to-end  
+✓ Fixed Redis serialization issues (boolean/number handling)  
+✓ All backend tests passing
+
+**HA Integration Test** (`./test-ha-integration.sh`):
+```bash
+./test-ha-integration.sh test      # Run full integration test
+./test-ha-integration.sh restart   # Restart Home Assistant
+./test-ha-integration.sh states    # Show VomeSync entity states
+```
+✓ Checks HA connectivity and VomeSync config entry  
+✓ Displays current switch entities  
+⚠ Switch creation requires manual UI testing (options flow)
+
+### Manual HA Testing
+
+1. Sync: `rsync -a --exclude='__pycache__' custom_components/vomesync/ /var/www/ha-shared-components/vomesync/`
+2. Restart: `./test-ha-integration.sh restart`
+3. HA UI: Settings → Devices & Services → VomeSync → ⚙️ (cog) → Create/Subscribe Switch
+
+**Config Flow Notes**:
+- Personal Key field can be left blank (generates new key with consent)
+- Consent checkbox covers key generation/storage (GDPR-compliant, removable via delete-key)
+- WebSocket URL auto-derives from Server URL (leave blank for default)
+
+### Website directory (sync.vome.io)
+
+- Public catalogue now supports category chips, user-count filtering, and refreshed cards showing toggle counts and website links.
+- Each switch has a shareable detail view: `https://sync.vome.io/?switch=<uid>` showing history, comments, stats, and copyable links.
+- Comments and notes can be posted by the owner/API-key holders via `/api/switch/:uid/comment` (key required; not stored client-side).
+- New endpoints: `/api/switch/:uid` (public detail), `/api/categories`, `/api/switch/:uid` (PATCH for metadata), `/api/profile/link` (owner profile URL).
+- User counts are tracked from authenticated interactions (toggles/comments) to help filter active/public switches.
+- Website runs on port **8111** in Docker; served externally via nginx SSL proxy (`sync.vome.io`).
+- CAPTCHA support: set `HCAPTCHA_SECRET`/`HCAPTCHA_SITEKEY` (and optional `HCAPTCHA_BYPASS_TOKEN` for staging) to require a captcha token whenever `publicize` is set to true on create/patch. Without these env vars, captcha is disabled.
+
+### Backup & restore (Redis)
+- **What to back up**: Redis data (keys: `switch:*`, `user:*`, `key:*`, `apikey:*`, `session_token:*`, `public_switches` set, event/user sets).
+- **How**: enable Redis RDB snapshots (e.g., `save 900 1`); mount `/data` to a host path and copy the `.rdb` file; optional AOF for finer granularity if ops permits.
+- **Schedule**: nightly snapshot with 7–14 day retention; encrypt at rest; store off-host (S3 or similar) with bucket-level SSE/KMS.
+- **Restore**: stop webserver, place `.rdb` into Redis data dir, start Redis, then restart webserver; verify with `GET /api/health` and spot-check `GET /api/public-switches` and a known `GET /api/switch/<uid>`.
+- **Testing**: quarterly restore drills into a staging environment; run `npm test -- api` afterward to validate behaviour.
+
+### GDPR considerations
+- **Personal data stored**: personal keys (UUID), API keys (UUID), optional profile links, timestamps, usage events tied to keys. No names/emails unless put in descriptions/links by users.
+- **Data minimisation**: only store what is required for switch auth and activity; comments are owner/API-key only. Session tokens are short-lived and single-use.
+- **Retention**: switches and key data expire after 30 days of inactivity (TTL set on switch and user sets). Backups retain at most 14 days by policy above.
+- **Rights**: `/api/delete-key` deletes a personal key and all associated switches/events; also removes from public sets. This serves erasure/export needs; add export-on-request if required.
+- **Security**: rate limiting in API, JWT for HA, API keys revocable, HTTPS via nginx. Backups must be encrypted; access to keys limited.
+- **Incident response**: if compromise suspected, rotate Redis password, revoke API keys (`/api/api-keys/:apiKey`), encourage users to regenerate personal keys, and purge session tokens (`session_token:*`).
+
+### Test Suite Status
+
+- ✅ **Webserver Tests**: 100% passing (Jest unit + integration tests)
+- ✅ **HA Integration Tests**: 39/39 passing (pytest with mocked HA core)
+- ✅ **Backend API**: Fully functional (create, toggle, status, WebSocket)
+- ⚠ **HA UI**: Requires manual testing through options flow
 
 ## Contact
 - **Support**: Email [support@vome.io](mailto:support@vome.io) or paid tier (€20/hour).

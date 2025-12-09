@@ -111,7 +111,7 @@ npm run test:watch
 pytest hacs-addon/tests/ -v
 
 # With coverage
-pytest hacs-addon/tests/ --cov=hacs-addon/custom_components --cov-report=html
+pytest hacs-addon/tests/ --cov=custom_components --cov-report=html
 ```
 
 **End-to-End Tests:**

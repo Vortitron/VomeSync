@@ -9,10 +9,45 @@
 	<link rel="icon" type="image/x-icon" href="favicon.ico">
 </head>
 <body>
-	<header>
+	<nav class="navbar">
 		<div class="container">
-			<h1>🌐 VomeSync</h1>
-			<p class="tagline">Public Remote Switch Directory</p>
+			<div class="nav-brand">
+				<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<circle cx="12" cy="12" r="10"/>
+					<path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+				</svg>
+				<span class="brand-name">VomeSync</span>
+			</div>
+			<div class="nav-links">
+				<a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration" class="btn btn-secondary" target="_blank" rel="noopener">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+					Add to HACS
+				</a>
+				<a href="https://sync.vome.io/login" class="btn btn-primary" target="_blank" rel="noopener">Login</a>
+			</div>
+		</div>
+	</nav>
+
+	<header class="hero">
+		<div class="container">
+			<div class="hero-content">
+				<h1 class="hero-title">
+					Shared Remote Switches<br>
+					<span class="gradient-text">For Home Assistant</span>
+				</h1>
+				<p class="hero-subtitle">
+					Connect to community-shared virtual switches. Monitor states in real-time and sync automations across the globe.
+				</p>
+				<div class="hero-buttons">
+					<a href="#switches" class="btn btn-primary btn-lg">
+						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+						Explore Switches
+					</a>
+					<a href="https://github.com/Vortitron/VomeSync" class="btn btn-ghost btn-lg" target="_blank" rel="noopener">
+						View on GitHub
+					</a>
+				</div>
+			</div>
 		</div>
 	</header>
 
@@ -22,11 +57,6 @@
 			<p class="description">
 				Browse public switches shared by the VomeSync community. Copy UIDs to subscribe in your Home Assistant and monitor real-time states from around the world.
 			</p>
-			
-			<div class="warning-box">
-				<h3>⚠️ Important Safety Notice</h3>
-				<p>Public switches can be viewed and toggled by anyone with the UID. <strong>Never use for sensitive devices</strong> like locks, alarms, or security systems. These switches are for community events, demonstrations, and non-critical IoT projects only.</p>
-			</div>
 		</section>
 
 		<section class="controls">
@@ -39,6 +69,12 @@
 					<option value="Personal">Personal</option>
 					<option value="Test">Test</option>
 					<option value="Other">Other</option>
+				</select>
+				<select id="userCountFilter">
+					<option value="">All user counts</option>
+					<option value="1">1+ users</option>
+					<option value="5">5+ users</option>
+					<option value="10">10+ users</option>
 				</select>
 				<button id="refreshBtn" class="refresh-btn">🔄 Refresh</button>
 			</div>
@@ -58,6 +94,10 @@
 				<span class="stat-label">Last Update</span>
 			</div>
 		</section>
+
+		<div class="info-note">
+			<p>Public switches are visible to anyone with the UID. Toggling requires the owner or an API key holder. Avoid sensitive devices (locks, alarms, etc.).</p>
+		</div>
 
 		<section class="switches">
 			<div id="loadingMessage" class="loading">
@@ -79,12 +119,78 @@
 			<div id="switchesGrid" class="switches-grid"></div>
 		</section>
 
+		<section class="categories">
+			<h2>Browse by Category</h2>
+			<div id="categoryList" class="category-list"></div>
+		</section>
+
+		<section id="switchDetail" class="switch-detail hidden">
+			<div class="detail-card">
+				<div class="detail-header">
+					<div>
+						<p class="detail-breadcrumb"><button id="backToList" class="link-button">← Back to switches</button></p>
+						<h2 id="detailTitle">Switch details</h2>
+						<p id="detailLocation" class="detail-subtitle"></p>
+					</div>
+					<div class="detail-actions">
+						<button id="copySwitchLink" class="ghost-btn">🔗 Copy link</button>
+						<a id="switchWebLink" class="ghost-btn" href="#" target="_blank" rel="noopener">🌐 Switch website</a>
+						<a id="ownerWebLink" class="ghost-btn" href="#" target="_blank" rel="noopener">👤 Owner website</a>
+					</div>
+				</div>
+
+				<div class="detail-meta">
+					<div class="meta-item">
+						<span class="meta-label">Category</span>
+						<span id="detailCategory" class="meta-value"></span>
+					</div>
+					<div class="meta-item">
+						<span class="meta-label">Users</span>
+						<span id="detailUsers" class="meta-value"></span>
+					</div>
+					<div class="meta-item">
+						<span class="meta-label">Toggle count</span>
+						<span id="detailToggles" class="meta-value"></span>
+					</div>
+					<div class="meta-item">
+						<span class="meta-label">Last change</span>
+						<span id="detailLastChange" class="meta-value"></span>
+					</div>
+					<div class="meta-item">
+						<span class="meta-label">UID</span>
+						<span id="detailUid" class="meta-value mono"></span>
+					</div>
+				</div>
+
+				<div class="detail-grid-two">
+					<div>
+						<h3>Activity</h3>
+						<ul id="detailEvents" class="timeline"></ul>
+					</div>
+					<div>
+						<h3>Comments (owner/API key)</h3>
+						<form id="commentForm" class="comment-form">
+							<label for="commentKey">Personal/API key (not stored):</label>
+							<input id="commentKey" type="password" autocomplete="off" placeholder="Enter key to comment">
+							<label for="commentText">Comment:</label>
+							<textarea id="commentText" rows="3" maxlength="500" placeholder="Why the switch changed, notes, etc."></textarea>
+							<div class="comment-actions">
+								<button type="submit" class="refresh-btn">💬 Post comment</button>
+								<span id="commentStatus" class="comment-status"></span>
+							</div>
+						</form>
+					</div>
+				</div>
+			</div>
+		</section>
+
 		<section class="how-to">
 			<h2>How to Use</h2>
 			<div class="steps">
 				<div class="step">
 					<h3>1. Install VomeSync</h3>
 					<p>Add the VomeSync integration to your Home Assistant via HACS.</p>
+					<p class="mt-2"><a class="inline-link" href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration" target="_blank" rel="noopener">Open in HACS</a></p>
 				</div>
 				<div class="step">
 					<h3>2. Copy UID</h3>
@@ -127,11 +233,12 @@
 				</div>
 			</div>
 			<div class="footer-bottom">
-				<p>&copy; 2024 Callycode Limited. VomeSync is not liable for misuse of public switches.</p>
+				<p>&copy; 2024 Vortitron. VomeSync is not liable for misuse of public switches.</p>
 			</div>
 		</div>
 	</footer>
 
+	<script src="network-bg.js"></script>
 	<script src="script.js"></script>
 </body>
 </html>

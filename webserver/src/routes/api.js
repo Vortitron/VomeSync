@@ -14,6 +14,13 @@ const webSocketManager = require('../websocket/manager');
 
 const router = express.Router();
 
+const abbreviateKey = (key) => {
+	if (!key) {
+		return 'unknown';
+	}
+	return `${key.substring(0, 8)}...`;
+};
+
 // Generate personal key endpoint
 router.post('/generate-key',
 	authManager.rateLimit('generate_key', 10, 3600000), // 10 per hour
@@ -58,18 +65,34 @@ router.post('/create-switch',
 		try {
 			const uid = uuidv4();
 			const { personalKey } = req;
-			const switchConfig = req.validatedData;
+			const switchConfig = { ...req.validatedData };
+			const captchaToken = switchConfig.captchaToken;
+			delete switchConfig.captchaToken;
+
+			// Enforce CAPTCHA for public listings if configured
+			if (switchConfig.publicize) {
+				const captcha = await authManager.verifyCaptcha(captchaToken);
+				if (!captcha.success) {
+					return res.status(400).json({
+						success: false,
+						error: captcha.error || 'Captcha verification failed'
+					});
+				}
+			}
 
 			// Create switch in Redis
 			const switchData = await redisClient.createSwitch(uid, personalKey, switchConfig);
 
 			logger.info(`Created new switch: ${uid} by ${personalKey.substring(0, 8)}...`);
 
+			// Retrieve parsed state for response
+			const parsedSwitch = await redisClient.getSwitchState(uid);
+
 			res.json({
 				success: true,
 				data: {
 					uid,
-					...sanitizePrivateSwitchData(switchData),
+					...sanitizePrivateSwitchData(parsedSwitch || switchData),
 					websocketUrl: `/ws?uid=${uid}`
 				}
 			});
@@ -92,13 +115,23 @@ router.post('/toggle/:uid',
 		try {
 			const { uid } = req.params;
 			const { switchData } = req;
+			const actorLabel = abbreviateKey(req.apiKeyUsed || req.personalKey);
+			const timestamp = Date.now();
 
 			// Toggle state
 			const newState = !switchData.state;
 
 			// Update in Redis
 			await redisClient.setSwitchState(uid, newState);
-			await redisClient.incrementToggleCount(uid);
+			const toggleCount = await redisClient.incrementToggleCount(uid);
+			await redisClient.recordUserInteraction(uid, req.personalKey);
+			await redisClient.appendEvent(uid, {
+				type: 'state',
+				state: newState,
+				actor: actorLabel,
+				viaApiKey: Boolean(req.apiKeyUsed),
+				timestamp
+			});
 
 			// Publish update via Redis for WebSocket broadcasting
 			await redisClient.publishSwitchUpdate(uid, newState);
@@ -110,7 +143,8 @@ router.post('/toggle/:uid',
 				data: {
 					uid,
 					state: newState,
-					timestamp: Date.now()
+					timestamp,
+					toggleCount
 				}
 			});
 		} catch (error) {
@@ -180,6 +214,55 @@ router.get('/public-switches',
 	}
 );
 
+// Public switch detail (for website deep links)
+router.get('/switch/:uid',
+	validateUID,
+	authManager.rateLimit('public_switch_detail', 200, 900000),
+	async (req, res) => {
+		try {
+			const { uid } = req.params;
+			const detail = await redisClient.getPublicSwitchDetail(uid);
+			if (!detail) {
+				return res.status(404).json({
+					success: false,
+					error: 'Switch not found or not public'
+				});
+			}
+
+			res.json({
+				success: true,
+				data: detail
+			});
+		} catch (error) {
+			logger.error(`Error getting switch detail ${req.params.uid}:`, error);
+			res.status(500).json({
+				success: false,
+				error: 'Failed to get switch detail'
+			});
+		}
+	}
+);
+
+// Public category listing
+router.get('/categories',
+	authManager.rateLimit('public_categories', 100, 900000),
+	async (_req, res) => {
+		try {
+			const categories = await redisClient.getCategoryCounts();
+			res.json({
+				success: true,
+				data: categories
+			});
+		} catch (error) {
+			logger.error('Error getting categories:', error);
+			res.status(500).json({
+				success: false,
+				error: 'Failed to get categories'
+			});
+		}
+	}
+);
+
 // Get user's switches
 router.get('/my-switches',
 	authManager.requireAuth(),
@@ -211,6 +294,187 @@ router.get('/my-switches',
 	}
 );
 
+// Update switch metadata (owner/API key)
+router.patch('/switch/:uid',
+	validateUID,
+	authManager.requireSwitchAuth(),
+	validateRequest(schemas.updateSwitch),
+	async (req, res) => {
+		try {
+			const { uid } = req.params;
+			const updates = { ...req.validatedData };
+			const captchaToken = updates.captchaToken;
+			delete updates.captchaToken;
+
+			if (updates.publicize === true) {
+				const captcha = await authManager.verifyCaptcha(captchaToken);
+				if (!captcha.success) {
+					return res.status(400).json({ success: false, error: captcha.error || 'Captcha verification failed' });
+				}
+			}
+
+			const updated = await redisClient.updateSwitch(uid, updates);
+			if (!updated) {
+				return res.status(404).json({ success: false, error: 'Switch not found' });
+			}
+
+			res.json({
+				success: true,
+				data: sanitizePrivateSwitchData(updated)
+			});
+		} catch (error) {
+			logger.error(`Error updating switch ${req.params.uid}:`, error);
+			res.status(500).json({
+				success: false,
+				error: 'Failed to update switch'
+			});
+		}
+	}
+);
+
+// Comments and timeline notes
+router.post('/switch/:uid/comment',
+	validateUID,
+	authManager.requireSwitchAuth(),
+	validateRequest(schemas.addComment),
+	async (req, res) => {
+		try {
+			const { uid } = req.params;
+			const actor = abbreviateKey(req.apiKeyUsed || req.personalKey);
+			const timestamp = Date.now();
+			const commentEvent = {
+				uid,
+				comment: req.validatedData.comment,
+				actor,
+				viaApiKey: Boolean(req.apiKeyUsed),
+				timestamp
+			};
+
+			await redisClient.recordUserInteraction(uid, req.personalKey);
+			await redisClient.addComment(uid, commentEvent);
+
+			res.json({
+				success: true,
+				data: commentEvent
+			});
+		} catch (error) {
+			logger.error(`Error adding comment for ${req.params.uid}:`, error);
+			res.status(500).json({
+				success: false,
+				error: 'Failed to add comment'
+			});
+		}
+	}
+);
+
+// API key management
+router.get('/api-keys',
+	authManager.requireAuth(),
+	async (req, res) => {
+		try {
+			const keys = await redisClient.listApiKeys(req.personalKey);
+			res.json({ success: true, data: keys });
+		} catch (error) {
+			logger.error('Error listing API keys:', error);
+			res.status(500).json({ success: false, error: 'Failed to list API keys' });
+		}
+	}
+);
+
+router.post('/api-keys',
+	authManager.requireAuth(),
+	authManager.rateLimit('create_api_key', 50, 900000),
+	async (req, res) => {
+		try {
+			const name = req.body.name || '';
+			const keyData = await redisClient.createApiKey(req.personalKey, name);
+			res.json({ success: true, data: keyData });
+		} catch (error) {
+			logger.error('Error creating API key:', error);
+			res.status(500).json({ success: false, error: 'Failed to create API key' });
+		}
+	}
+);
+
+// Owner profile link (for website display)
+router.post('/profile/link',
+	authManager.requireAuth(),
+	validateRequest(schemas.updateProfile),
+	async (req, res) => {
+		try {
+			const { profileUrl } = req.validatedData;
+			await redisClient.setProfileUrl(req.personalKey, profileUrl);
+			res.json({ success: true, data: { profileUrl } });
+		} catch (error) {
+			logger.error('Error saving profile link:', error);
+			res.status(500).json({ success: false, error: 'Failed to save profile link' });
+		}
+	}
+);
+
+router.delete('/api-keys/:apiKey',
+	authManager.requireAuth(),
+	async (req, res) => {
+		try {
+			const { apiKey } = req.params;
+			const revoked = await redisClient.revokeApiKey(req.personalKey, apiKey);
+			if (!revoked) {
+				return res.status(404).json({ success: false, error: 'API key not found' });
+			}
+			res.json({ success: true });
+		} catch (error) {
+			logger.error('Error revoking API key:', error);
+			res.status(500).json({ success: false, error: 'Failed to revoke API key' });
+		}
+	}
+);
+
+// Session token for web login (one-time, short-lived)
+router.post('/session-token',
+	authManager.requireAuth(),
+	async (req, res) => {
+		try {
+			const tokenData = await redisClient.createSessionToken(req.personalKey, 300);
+			res.json({ success: true, data: tokenData });
+		} catch (error) {
+			logger.error('Error creating session token:', error);
+			res.status(500).json({ success: false, error: 'Failed to create session token' });
+		}
+	}
+);
+
+// Redeem session token (called by website)
+router.post('/session-token/redeem',
+	async (req, res) => {
+		try {
+			const { token } = req.body;
+			if (!token) {
+				return res.status(400).json({ success: false, error: 'Token required' });
+			}
+
+			const tokenData = await redisClient.redeemSessionToken(token);
+			if (!tokenData) {
+				return res.status(404).json({ success: false, error: 'Token not found or expired' });
+			}
+
+			// Issue a short-lived API key tied to the personal key
+			const apiKeyData = await redisClient.createApiKey(tokenData.personalKey, 'web-session');
+
+			res.json({
+				success: true,
+				data: {
+					personalKey: tokenData.personalKey,
+					apiKey: apiKeyData.apiKey,
+					expiresIn: '1 year' // aligns with existing keys; adjust if needed
+				}
+			});
+		} catch (error) {
+			logger.error('Error redeeming session token:', error);
+			res.status(500).json({ success: false, error: 'Failed to redeem session token' });
+		}
+	}
+);
+
 // Delete switch
 router.delete('/switch/:uid',
 	validateUID,
@@ -223,6 +487,8 @@ router.delete('/switch/:uid',
 
 			// Remove from Redis
 			await redisClient.client.del(`switch:${uid}`);
+			await redisClient.client.del(`switch:${uid}:users`);
+			await redisClient.client.del(`switch:${uid}:events`);
 			await redisClient.client.sRem(`user:${personalKey}`, uid);
 			await redisClient.client.sRem('public_switches', uid);
 

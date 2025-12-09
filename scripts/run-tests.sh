@@ -186,7 +186,7 @@ run_linting() {
 	# Python linting (if available)
 	if command -v flake8 &> /dev/null; then
 		log_info "Running flake8..."
-		if flake8 "$PROJECT_ROOT/hacs-addon/custom_components" "$PROJECT_ROOT/tests"; then
+		if flake8 "$PROJECT_ROOT/hacs-addon" "$PROJECT_ROOT/tests"; then
 			log_success "flake8 passed"
 		else
 			log_warning "flake8 issues found (not blocking)"

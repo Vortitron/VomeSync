@@ -3,7 +3,6 @@ const { v4: uuidv4 } = require('uuid');
 const config = require('../config/config');
 const redisClient = require('./redis');
 const logger = require('./logger');
-
 class AuthManager {
 	generatePersonalKey() {
 		return uuidv4();
@@ -62,6 +61,51 @@ class AuthManager {
 		}
 	}
 
+	async verifyCaptcha(token) {
+		const { secret, bypassToken } = config.hcaptcha;
+
+		// Disabled when secret is not set
+		if (!secret) {
+			return { success: true, reason: 'captcha_disabled' };
+		}
+
+		if (!token) {
+			return { success: false, error: 'Captcha required' };
+		}
+
+		// Test/staging bypass
+		if (bypassToken) {
+			if (token === bypassToken) {
+				return { success: true, reason: 'bypass_token' };
+			}
+			// Fail fast when bypass token is configured but mismatched (avoids external call in tests)
+			return { success: false, error: 'Captcha verification failed' };
+		}
+
+		try {
+			const params = new URLSearchParams();
+			params.append('response', token);
+			params.append('secret', secret);
+
+			const response = await fetch('https://hcaptcha.com/siteverify', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: params
+			});
+
+			const data = await response.json();
+			if (data.success) {
+				return { success: true };
+			}
+
+			logger.warn('Captcha verification failed', data['error-codes']);
+			return { success: false, error: 'Captcha verification failed' };
+		} catch (error) {
+			logger.error('Captcha verification error:', error);
+			return { success: false, error: 'Captcha verification failed' };
+		}
+	}
+
 	// Middleware for protecting routes that require personal key
 	requireAuth() {
 		return async (req, res, next) => {
@@ -88,16 +132,22 @@ class AuthManager {
 		};
 	}
 
-	// Middleware for switch-specific authentication
+	// Middleware for switch-specific authentication (supports personalKey or apiKey)
 	requireSwitchAuth() {
 		return async (req, res, next) => {
 			const { uid } = req.params;
-			const personalKey = req.body.personalKey || req.headers['x-personal-key'];
+			const apiKey = req.body.apiKey || req.headers['x-api-key'] || req.query.apiKey;
+			let personalKey = req.body.personalKey || req.headers['x-personal-key'] || req.query.personalKey;
+
+			// If apiKey provided, resolve to personalKey
+			if (!personalKey && apiKey) {
+				personalKey = await redisClient.resolvePersonalKeyFromApiKey(apiKey);
+			}
 
 			if (!personalKey) {
 				return res.status(401).json({
 					success: false,
-					error: 'Personal key required'
+					error: 'Personal key or API key required'
 				});
 			}
 
@@ -111,6 +161,7 @@ class AuthManager {
 			}
 
 			req.personalKey = personalKey;
+			req.apiKeyUsed = apiKey || null;
 			req.switchData = authResult.switchData;
 			next();
 		};
@@ -146,6 +197,18 @@ class AuthManager {
 
 	// Rate limiting middleware
 	rateLimit(action, limit = null, windowMs = null) {
+		// Disable rate limiting during automated tests
+		if (process.env.NODE_ENV === 'test') {
+			return (_req, res, next) => {
+				res.set({
+					'X-RateLimit-Limit': limit || config.security.rateLimitMaxRequests,
+					'X-RateLimit-Remaining': (limit || config.security.rateLimitMaxRequests),
+					'X-RateLimit-Reset': new Date(Date.now() + (windowMs || config.security.rateLimitWindowMs)).toISOString()
+				});
+				next();
+			};
+		}
+
 		const effectiveLimit = limit || config.security.rateLimitMaxRequests;
 		const effectiveWindow = windowMs || config.security.rateLimitWindowMs;
 

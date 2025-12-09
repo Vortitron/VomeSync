@@ -1,0 +1,153 @@
+{
+	"config": {
+		"step": {
+			"user": {
+				"title": "Set up VomeSync",
+				"description": "Enter the server URLs. Leave Personal Key empty to generate a new one on the next step. Public mode is NOT private — anyone with the UID can view or toggle the switch.",
+				"data": {
+					"server_url": "Server URL",
+					"websocket_url": "WebSocket URL",
+					"personal_key": "Personal Key (leave blank to generate)"
+				}
+			},
+			"generate_key": {
+				"title": "Generate a personal key",
+				"description": "Tick consent to create and store a personal key on the VomeSync server for authentication. You can delete it later from the integration options (GDPR delete key).",
+				"data": {
+					"consent": "I consent to storing a personal key on the VomeSync server for authentication."
+				}
+			}
+		},
+		"error": {
+			"invalid_key": "The personal key is invalid.",
+			"generate_key_failed": "Could not generate a personal key. Check network access to the server.",
+			"switch_not_found": "Switch UID not found.",
+			"invalid_uid": "UID must be a valid UUID."
+		}
+	},
+	"options": {
+		"step": {
+			"init": {
+				"title": "Manage VomeSync",
+				"menu_options": {
+					"create_switch": "Create switch",
+					"subscribe_switch": "Subscribe to switch",
+					"manage_switches": "Manage switches",
+					"manage_api_keys": "Manage API keys",
+					"connect_website": "Connect to website",
+					"show_details": "Show connection details"
+				}
+			},
+			"create_switch": {
+				"title": "Create a switch",
+				"description": "Create a switch owned by you. Publicise will list it publicly so anyone can toggle it.",
+				"data": {
+					"name": "Name",
+					"description": "Description",
+					"location": "Location",
+					"category": "Category",
+					"publicize": "Publicise (list publicly)"
+				}
+			},
+			"subscribe_switch": {
+				"title": "Subscribe to a switch",
+				"description": "Enter a switch UID to monitor. You can find public UIDs at remoteswitch.vome.io.",
+				"data": {
+					"name": "Name",
+					"uid": "Switch UID"
+				}
+			},
+			"manage_switches": {
+				"title": "Manage switches",
+				"description": "Select a switch to view, edit, or delete",
+				"data": {
+					"switch": "Select switch"
+				}
+			},
+			"manage_switch_action": {
+				"title": "Switch actions",
+				"menu_options": {
+					"view_switch": "View details",
+					"edit_switch": "Edit settings",
+					"delete_switch": "Delete switch"
+				}
+			},
+			"connect_website": {
+				"title": "Connect to VomeSync website",
+				"description": "Copy the URL below and paste it into your browser to sign in to the VomeSync website. The token is one-time and expires in 5 minutes.\n\nLogin URL:\n{login_url}\n\nSession Token:\n{session_token}"
+			},
+			"view_switch": {
+				"title": "Switch details",
+				"description": "{info}",
+				"data": {
+					"uid": "UID",
+					"websocket_url": "WebSocket URL",
+					"webhook_url": "Webhook URL",
+					"curl_command": "curl command"
+				}
+			},
+			"edit_switch": {
+				"title": "Edit switch",
+				"description": "Update switch settings (only owners can edit)",
+				"data": {
+					"description": "Description",
+					"location": "Location",
+					"category": "Category",
+					"publicize": "Publicise (list publicly)"
+				}
+			},
+			"delete_switch": {
+				"title": "Delete switch",
+				"description": "{warning}",
+				"data": {
+					"confirm": "Confirm deletion"
+				}
+			},
+			"show_details": {
+				"title": "Connection details",
+				"description": "Server: {server_url}\nWebSocket: {websocket_url}\nPersonal Key: {personal_key}"
+			},
+			"manage_api_keys": {
+				"title": "Manage API keys",
+				"description": "API keys allow webhook authentication without exposing your personal key. You have {api_key_count} key(s).",
+				"data": {
+					"delete_key": "Select key to delete",
+					"create_key": "Create new API key"
+				}
+			},
+			"create_api_key": {
+				"title": "Create API key",
+				"description": "Create a new API key for webhook authentication. Give it a label to identify its purpose.",
+				"data": {
+					"label": "Label (optional)"
+				}
+			},
+			"create_api_key_success": {
+				"title": "API key created",
+				"description": "{info}",
+				"data": {
+					"api_key": "API key (copy and save)"
+				}
+			},
+			"delete_api_key": {
+				"title": "Delete API key",
+				"description": "Are you sure you want to delete API key {api_key}? This cannot be undone.",
+				"data": {
+					"confirm": "Confirm deletion"
+				}
+			}
+		},
+		"error": {
+			"create_failed": "Failed to create switch. Check server URL, key, and connectivity.",
+			"subscribe_failed": "Failed to subscribe to switch.",
+			"connect_failed": "Failed to create session token. Check server URL/key and try again.",
+			"fetch_failed": "Failed to fetch API keys from server.",
+			"delete_failed": "Failed to delete API key."
+		},
+		"abort": {
+			"no_switches": "No switches to manage. Create or subscribe to switches first.",
+			"not_owner": "Only switch owners can edit settings."
+		}
+	}
+}
+
