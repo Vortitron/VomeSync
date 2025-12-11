@@ -1,7 +1,5 @@
 """VomeSync Home Assistant Integration."""
-import asyncio
 import logging
-from typing import Any, Dict
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -25,6 +23,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	"""Set up VomeSync from a config entry."""
 	_LOGGER.info("Setting up VomeSync integration")
+	_LOGGER.info("Entry data keys: %s", list(entry.data.keys()))
+	_LOGGER.info("Entry options keys: %s", list(entry.options.keys()) if entry.options else "None")
+	_LOGGER.info("Entry options content: %s", entry.options)
 	
 	# Create coordinator
 	coordinator = VomeSyncCoordinator(hass, entry)
@@ -33,11 +34,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	hass.data.setdefault(DOMAIN, {})
 	hass.data[DOMAIN][entry.entry_id] = coordinator
 	
-	# Setup platforms
-	await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-	
-	# Start coordinator
+	# Start coordinator and fetch data from API before setting up platforms
 	await coordinator.async_config_entry_first_refresh()
+	
+	# Setup platforms (entities will be created from coordinator data)
+	await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 	
 	# Register options update listener
 	entry.async_on_unload(entry.add_update_listener(async_reload_entry))

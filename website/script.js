@@ -1,6 +1,10 @@
 // VomeSync Website JavaScript (static SPA)
 
-const API_BASE_URL = 'https://sync.vome.io/api';
+// Auto-detect API URL based on environment
+const API_BASE_URL = window.location.port === '8112' 
+	? 'http://localhost:3091/api'  // Dev environment
+	: 'https://sync.vome.io/api';   // Production environment
+
 let allSwitches = [];
 let filteredSwitches = [];
 let categories = {};

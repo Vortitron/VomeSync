@@ -95,6 +95,18 @@ body {
 	gap: 0.75rem;
 }
 
+.nav-links .btn {
+	font-size: 0.875rem;
+	padding: 0.5rem 1rem;
+	font-weight: 500;
+}
+
+.nav-links .btn img {
+	width: 16px;
+	height: 16px;
+	opacity: 0.9;
+}
+
 /* Hero */
 .hero {
 	padding: 5rem 0 6rem;
@@ -208,6 +220,7 @@ body {
 	cursor: pointer;
 	border: none;
 	white-space: nowrap;
+	line-height: 1.5;
 }
 
 .btn-lg {
@@ -216,38 +229,43 @@ body {
 }
 
 .btn-primary {
-	background: var(--primary);
+	background: linear-gradient(135deg, var(--primary) 0%, #7c3aed 100%);
 	color: white;
-	box-shadow: var(--shadow);
+	box-shadow: 0 4px 6px -1px rgba(124, 58, 237, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1);
+	border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .btn-primary:hover {
-	background: var(--primary-dark);
-	transform: translateY(-1px);
-	box-shadow: var(--shadow-lg);
+	background: linear-gradient(135deg, var(--primary-dark) 0%, #6d28d9 100%);
+	transform: translateY(-2px);
+	box-shadow: 0 10px 15px -3px rgba(124, 58, 237, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
 }
 
 .btn-secondary {
 	background: var(--bg-tertiary);
 	color: var(--text-primary);
 	border: 1px solid var(--border-light);
+	box-shadow: var(--shadow);
 }
 
 .btn-secondary:hover {
 	background: var(--bg-secondary);
 	border-color: var(--primary);
+	transform: translateY(-1px);
 }
 
 .btn-ghost {
-	background: transparent;
+	background: rgba(255, 255, 255, 0.03);
 	color: var(--text-secondary);
 	border: 1px solid var(--border);
+	box-shadow: none;
 }
 
 .btn-ghost:hover {
-	color: var(--text-primary);
-	border-color: var(--border-light);
-	background: rgba(255, 255, 255, 0.05);
+	color: var(--primary);
+	border-color: var(--primary);
+	background: rgba(124, 58, 237, 0.1);
+	transform: translateY(-1px);
 }
 
 /* Main Content */
@@ -312,6 +330,7 @@ section {
 	color: var(--text-primary);
 	font-size: 0.9375rem;
 	transition: var(--transition);
+	box-shadow: var(--shadow);
 }
 
 #searchBox {
@@ -325,6 +344,12 @@ section {
 	outline: none;
 	border-color: var(--primary);
 	background: var(--bg-primary);
+	box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+}
+
+#categoryFilter,
+#userCountFilter {
+	min-width: 150px;
 }
 
 select {

@@ -1,3 +1,5 @@
 node_modules
 venv
 webserver/.env
+.redisdata/
+custom_components/vomesync/__pycache__/

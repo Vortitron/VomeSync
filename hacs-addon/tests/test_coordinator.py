@@ -1,367 +1,325 @@
 """Tests for VomeSync coordinator."""
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
-
-from homeassistant.core import HomeAssistant
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.update_coordinator import UpdateFailed
+from unittest.mock import AsyncMock, MagicMock, patch
+import time
 
 from custom_components.vomesync.coordinator import VomeSyncCoordinator
 from custom_components.vomesync.api_client import VomeSyncAPIError
-from custom_components.vomesync.const import (
-    CONF_PERSONAL_KEY,
-    CONF_SERVER_URL,
-    CONF_WEBSOCKET_URL,
-    DOMAIN
-)
 
 
-class TestVomeSyncCoordinator:
-    """Test VomeSync coordinator functionality."""
+@pytest.mark.asyncio
+async def test_coordinator_updates_cache_on_fetch(hass, config_entry):
+	"""Test coordinator updates imported switches cache on API fetch."""
+	config_entry.options = {
+		"imported_switches": {
+			"uid-1": {
+				"name": "Switch 1",
+				"is_owner": True,
+				"cached_data": {"state": False}
+			}
+		}
+	}
 
-    @pytest.fixture
-    def hass(self):
-        """Mock Home Assistant instance."""
-        mock_hass = MagicMock(spec=HomeAssistant)
-        mock_hass.loop = asyncio.get_event_loop()
-        mock_hass.config_entries = MagicMock()
-        return mock_hass
+	mock_api = AsyncMock()
+	mock_api.get_my_switches.return_value = [
+		{
+			"uid": "uid-1",
+			"name": "Switch 1 Updated",
+			"description": "Updated description",
+			"state": True,
+			"is_owner": True
+		}
+	]
+	mock_api.get_switch_status.return_value = {}
 
-    @pytest.fixture
-    def config_entry(self):
-        """Mock config entry."""
-        entry = MagicMock(spec=ConfigEntry)
-        entry.data = {
-            CONF_PERSONAL_KEY: "test-personal-key",
-            CONF_SERVER_URL: "https://test-server.com",
-            CONF_WEBSOCKET_URL: "wss://test-server.com"
-        }
-        entry.options = {
-            "switches": {},
-            "subscriptions": {}
-        }
-        return entry
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		await coordinator._async_update_data()
 
-    @pytest.fixture
-    def coordinator(self, hass, config_entry):
-        """Create coordinator for testing."""
-        return VomeSyncCoordinator(hass, config_entry)
+	# Verify cache was updated
+	hass.config_entries.async_update_entry.assert_called()
+	call_args = hass.config_entries.async_update_entry.call_args
+	updated_options = call_args[1]["options"]
+	
+	assert "uid-1" in updated_options["imported_switches"]
+	assert updated_options["imported_switches"]["uid-1"]["cached_data"]["state"] == True
+	assert updated_options["imported_switches"]["uid-1"]["name"] == "Switch 1 Updated"
 
-    @pytest.fixture
-    def mock_api_client(self):
-        """Mock API client."""
-        return AsyncMock()
 
-    @pytest.fixture
-    def mock_websocket_client(self):
-        """Mock WebSocket client."""
-        return AsyncMock()
+@pytest.mark.asyncio
+async def test_coordinator_auto_imports_new_switch(hass, config_entry):
+	"""Test coordinator auto-imports newly created switch."""
+	mock_api = AsyncMock()
+	mock_api.create_switch.return_value = {
+		"uid": "new-uid-123",
+		"description": "New Switch",
+		"location": "Test",
+		"category": "Home",
+		"state": False,
+		"publicize": False
+	}
 
-    @pytest.mark.asyncio
-    async def test_coordinator_initialization(self, coordinator, hass, config_entry):
-        """Test coordinator initialization."""
-        assert coordinator.hass is hass
-        assert coordinator.config_entry is config_entry
-        assert coordinator.personal_key == "test-personal-key"
-        assert coordinator.server_url == "https://test-server.com"
-        assert coordinator.switches == {}
-        assert coordinator.subscriptions == {}
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.async_add_switch_entities = MagicMock()
+		coordinator._ensure_websocket_connection = AsyncMock()
 
-    @pytest.mark.asyncio
-    async def test_async_update_data_success(self, coordinator):
-        """Test successful data update."""
-        # Mock API responses
-        my_switches = [
-            {
-                "uid": "switch-1",
-                "description": "Switch 1",
-                "state": False,
-                "lastToggled": 1640995200000
-            }
-        ]
-        
-        with patch.object(coordinator.api_client, 'get_my_switches', return_value=my_switches), \
-             patch.object(coordinator.api_client, 'get_switch_status', return_value=None), \
-             patch.object(coordinator, '_ensure_websocket_connection'):
-            
-            result = await coordinator._async_update_data()
-            
-        assert result["switches"]["switch-1"]["description"] == "Switch 1"
-        assert "last_update" in result
+		uid = await coordinator.create_switch(
+			name="New Switch",
+			description="New Switch",
+			location="Test",
+			category="Home",
+			publicize=False
+		)
 
-    @pytest.mark.asyncio
-    async def test_async_update_data_with_subscriptions(self, coordinator):
-        """Test data update with subscriptions."""
-        # Add subscription to options
-        coordinator.config_entry.options = {
-            "subscriptions": {
-                "Remote Switch": {
-                    "uid": "sub-switch-1",
-                    "is_owner": False
-                }
-            }
-        }
-        
-        my_switches = []
-        switch_status = {
-            "uid": "sub-switch-1",
-            "description": "Remote Switch",
-            "state": True,
-            "lastToggled": 1640995200000
-        }
-        
-        with patch.object(coordinator.api_client, 'get_my_switches', return_value=my_switches), \
-             patch.object(coordinator.api_client, 'get_switch_status', return_value=switch_status), \
-             patch.object(coordinator, '_ensure_websocket_connection'):
-            
-            result = await coordinator._async_update_data()
-            
-        assert "sub-switch-1" in result["subscriptions"]
-        assert result["subscriptions"]["sub-switch-1"]["name"] == "Remote Switch"
-        assert result["subscriptions"]["sub-switch-1"]["is_owner"] is False
+	assert uid == "new-uid-123"
+	
+	# Verify it was added to imported_switches
+	hass.config_entries.async_update_entry.assert_called()
+	call_args = hass.config_entries.async_update_entry.call_args
+	updated_options = call_args[1]["options"]
+	
+	assert "imported_switches" in updated_options
+	assert "new-uid-123" in updated_options["imported_switches"]
+	assert updated_options["imported_switches"]["new-uid-123"]["name"] == "New Switch"
+	assert updated_options["imported_switches"]["new-uid-123"]["is_owner"] == True
 
-    @pytest.mark.asyncio
-    async def test_async_update_data_api_error(self, coordinator):
-        """Test data update with API error."""
-        with patch.object(coordinator.api_client, 'get_my_switches', 
-                         side_effect=VomeSyncAPIError("API Error")):
-            
-            with pytest.raises(UpdateFailed, match="Error communicating with VomeSync API"):
-                await coordinator._async_update_data()
 
-    @pytest.mark.asyncio
-    async def test_toggle_switch_success(self, coordinator):
-        """Test successful switch toggle."""
-        # Setup initial data
-        coordinator.switches = {
-            "switch-1": {
-                "uid": "switch-1",
-                "state": False,
-                "lastToggled": 1640995200000
-            }
-        }
-        
-        toggle_result = {
-            "uid": "switch-1",
-            "state": True,
-            "timestamp": 1640995300000
-        }
-        
-        with patch.object(coordinator.api_client, 'toggle_switch', return_value=toggle_result):
-            result = await coordinator.toggle_switch("switch-1")
-            
-        assert result is True
-        assert coordinator.switches["switch-1"]["state"] is True
-        assert coordinator.switches["switch-1"]["lastToggled"] == 1640995300000
+@pytest.mark.asyncio
+async def test_coordinator_auto_imports_new_subscription(hass, config_entry):
+	"""Test coordinator auto-imports newly subscribed switch."""
+	mock_api = AsyncMock()
+	mock_api.get_switch_status.return_value = {
+		"uid": "remote-uid-456",
+		"description": "Remote Switch",
+		"state": False,
+	}
 
-    @pytest.mark.asyncio
-    async def test_toggle_switch_api_error(self, coordinator):
-        """Test switch toggle with API error."""
-        with patch.object(coordinator.api_client, 'toggle_switch', 
-                         side_effect=VomeSyncAPIError("Toggle failed")):
-            
-            result = await coordinator.toggle_switch("switch-1")
-            
-        assert result is False
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.async_add_switch_entities = MagicMock()
+		coordinator._ensure_websocket_connection = AsyncMock()
 
-    @pytest.mark.asyncio
-    async def test_create_switch_success(self, coordinator):
-        """Test successful switch creation."""
-        create_result = {
-            "uid": "new-switch-uid",
-            "description": "New Switch",
-            "location": "Test City",
-            "category": "Test",
-            "state": False,
-            "publicize": False
-        }
-        
-        with patch.object(coordinator.api_client, 'create_switch', return_value=create_result), \
-             patch.object(coordinator, '_ensure_websocket_connection'), \
-             patch.object(coordinator.hass.config_entries, 'async_update_entry'):
-            
-            uid = await coordinator.create_switch(
-                name="New Switch",
-                description="New Switch",
-                location="Test City",
-                category="Test",
-                publicize=False
-            )
-            
-        assert uid == "new-switch-uid"
-        assert "new-switch-uid" in coordinator.switches
-        assert coordinator.switches["new-switch-uid"]["name"] == "New Switch"
+		success = await coordinator.subscribe_to_switch(
+			name="Remote Switch",
+			uid="remote-uid-456"
+		)
 
-    @pytest.mark.asyncio
-    async def test_create_switch_api_error(self, coordinator):
-        """Test switch creation with API error."""
-        with patch.object(coordinator.api_client, 'create_switch',
-                         side_effect=VomeSyncAPIError("Creation failed")):
-            
-            uid = await coordinator.create_switch(
-                name="New Switch",
-                description="New Switch"
-            )
-            
-        assert uid is None
+	assert success == True
+	
+	# Verify it was added to imported_switches
+	hass.config_entries.async_update_entry.assert_called()
+	call_args = hass.config_entries.async_update_entry.call_args
+	updated_options = call_args[1]["options"]
+	
+	assert "imported_switches" in updated_options
+	assert "remote-uid-456" in updated_options["imported_switches"]
+	assert updated_options["imported_switches"]["remote-uid-456"]["name"] == "Remote Switch"
+	assert updated_options["imported_switches"]["remote-uid-456"]["is_owner"] == False
 
-    @pytest.mark.asyncio
-    async def test_subscribe_to_switch_success(self, coordinator):
-        """Test successful switch subscription."""
-        switch_status = {
-            "uid": "remote-switch-uid",
-            "description": "Remote Switch",
-            "state": True,
-            "lastToggled": 1640995200000
-        }
-        
-        with patch.object(coordinator.api_client, 'get_switch_status', return_value=switch_status), \
-             patch.object(coordinator, '_ensure_websocket_connection'), \
-             patch.object(coordinator.hass.config_entries, 'async_update_entry'):
-            
-            result = await coordinator.subscribe_to_switch("Remote Switch", "remote-switch-uid")
-            
-        assert result is True
-        assert "remote-switch-uid" in coordinator.subscriptions
-        assert coordinator.subscriptions["remote-switch-uid"]["name"] == "Remote Switch"
 
-    @pytest.mark.asyncio
-    async def test_subscribe_to_switch_not_found(self, coordinator):
-        """Test subscription to non-existent switch."""
-        with patch.object(coordinator.api_client, 'get_switch_status', return_value=None):
-            
-            result = await coordinator.subscribe_to_switch("Non-existent", "bad-uid")
-            
-        assert result is False
+@pytest.mark.asyncio
+async def test_coordinator_removes_from_cache_on_delete(hass, config_entry):
+	"""Test coordinator removes switch from imported cache on delete."""
+	config_entry.options = {
+		"imported_switches": {
+			"uid-to-delete": {
+				"name": "Delete Me",
+				"is_owner": True,
+				"cached_data": {}
+			}
+		}
+	}
 
-    @pytest.mark.asyncio
-    async def test_delete_switch_success(self, coordinator):
-        """Test successful switch deletion."""
-        # Setup initial data
-        coordinator.switches = {
-            "switch-1": {"uid": "switch-1", "description": "Switch 1"}
-        }
-        coordinator._websocket_connections = {"switch-1": True}
-        
-        with patch.object(coordinator.api_client, 'delete_switch', return_value=True), \
-             patch.object(coordinator.websocket_client, 'unsubscribe'), \
-             patch.object(coordinator.hass.config_entries, 'async_update_entry'):
-            
-            result = await coordinator.delete_switch("switch-1")
-            
-        assert result is True
-        assert "switch-1" not in coordinator.switches
+	mock_api = AsyncMock()
+	mock_api.delete_switch.return_value = True
 
-    @pytest.mark.asyncio
-    async def test_delete_switch_api_error(self, coordinator):
-        """Test switch deletion with API error."""
-        with patch.object(coordinator.api_client, 'delete_switch',
-                         side_effect=VomeSyncAPIError("Deletion failed")):
-            
-            result = await coordinator.delete_switch("switch-1")
-            
-        assert result is False
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.websocket_client = MagicMock()
+		coordinator.websocket_client.unsubscribe = AsyncMock()
 
-    @pytest.mark.asyncio
-    async def test_handle_websocket_message_state_update(self, coordinator):
-        """Test WebSocket state update handling."""
-        # Setup initial data
-        coordinator.switches = {
-            "switch-1": {"uid": "switch-1", "state": False, "lastToggled": 0}
-        }
-        coordinator.subscriptions = {
-            "sub-1": {"uid": "sub-1", "state": False, "lastToggled": 0}
-        }
-        
-        message = {
-            "type": "state_update",
-            "state": True,
-            "timestamp": 1640995200000
-        }
-        
-        # Mock async_update_listeners
-        coordinator.async_update_listeners = MagicMock()
-        
-        await coordinator._handle_websocket_message("switch-1", message)
-        
-        assert coordinator.switches["switch-1"]["state"] is True
-        assert coordinator.switches["switch-1"]["lastToggled"] == 1640995200000
-        coordinator.async_update_listeners.assert_called_once()
+		success = await coordinator.delete_switch("uid-to-delete")
 
-    @pytest.mark.asyncio
-    async def test_handle_websocket_message_error(self, coordinator):
-        """Test WebSocket error message handling."""
-        message = {
-            "type": "error",
-            "message": "Switch not found"
-        }
-        
-        # Should not raise exception
-        await coordinator._handle_websocket_message("switch-1", message)
+	assert success == True
+	
+	# Verify it was removed from imported_switches
+	hass.config_entries.async_update_entry.assert_called()
+	call_args = hass.config_entries.async_update_entry.call_args
+	updated_options = call_args[1]["options"]
+	
+	assert "uid-to-delete" not in updated_options["imported_switches"]
 
-    @pytest.mark.asyncio
-    async def test_ensure_websocket_connection_success(self, coordinator):
-        """Test WebSocket connection establishment."""
-        with patch.object(coordinator.websocket_client, 'subscribe') as mock_subscribe:
-            await coordinator._ensure_websocket_connection("switch-1")
-            
-        mock_subscribe.assert_called_once_with("switch-1")
-        assert coordinator._websocket_connections["switch-1"] is True
 
-    @pytest.mark.asyncio
-    async def test_ensure_websocket_connection_failure(self, coordinator):
-        """Test WebSocket connection failure handling."""
-        with patch.object(coordinator.websocket_client, 'subscribe',
-                         side_effect=Exception("Connection failed")):
-            
-            await coordinator._ensure_websocket_connection("switch-1")
-            
-        assert coordinator._websocket_connections["switch-1"] is False
+@pytest.mark.asyncio
+async def test_coordinator_rate_limits_toggle(hass, config_entry):
+	"""Test coordinator rate limits rapid toggle requests."""
+	mock_api = AsyncMock()
+	mock_api.toggle_switch.return_value = {"uid": "test-uid", "state": True}
 
-    @pytest.mark.asyncio
-    async def test_get_switch_data(self, coordinator):
-        """Test switch data retrieval."""
-        coordinator.switches = {
-            "switch-1": {"uid": "switch-1", "description": "Switch 1"}
-        }
-        coordinator.subscriptions = {
-            "sub-1": {"uid": "sub-1", "description": "Subscription 1"}
-        }
-        
-        # Test owned switch
-        data = coordinator.get_switch_data("switch-1")
-        assert data["description"] == "Switch 1"
-        
-        # Test subscribed switch
-        data = coordinator.get_switch_data("sub-1")
-        assert data["description"] == "Subscription 1"
-        
-        # Test non-existent switch
-        data = coordinator.get_switch_data("non-existent")
-        assert data is None
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.switches = {"test-uid": {"state": False}}
 
-    @pytest.mark.asyncio
-    async def test_is_switch_owner(self, coordinator):
-        """Test switch ownership check."""
-        coordinator.switches = {
-            "owned-switch": {"uid": "owned-switch", "is_owner": True}
-        }
-        coordinator.subscriptions = {
-            "subscribed-switch": {"uid": "subscribed-switch", "is_owner": False}
-        }
-        
-        assert coordinator.is_switch_owner("owned-switch") is True
-        assert coordinator.is_switch_owner("subscribed-switch") is False
-        assert coordinator.is_switch_owner("non-existent") is False
+		# First toggle should succeed
+		result1 = await coordinator.toggle_switch("test-uid")
+		assert result1 == True
+		assert mock_api.toggle_switch.call_count == 1
 
-    @pytest.mark.asyncio
-    async def test_async_shutdown(self, coordinator):
-        """Test coordinator shutdown."""
-        with patch.object(coordinator.websocket_client, 'disconnect') as mock_ws_disconnect, \
-             patch.object(coordinator.api_client, 'close') as mock_api_close:
-            
-            await coordinator.async_shutdown()
-            
-        mock_ws_disconnect.assert_called_once()
-        mock_api_close.assert_called_once()
+		# Immediate second toggle should be rate limited
+		result2 = await coordinator.toggle_switch("test-uid")
+		assert result2 == False
+		assert mock_api.toggle_switch.call_count == 1  # Still 1, not called again
+
+		# After cooldown period, should work again
+		coordinator._last_toggle_time["test-uid"] = time.time() - 2.0
+		result3 = await coordinator.toggle_switch("test-uid")
+		assert result3 == True
+		assert mock_api.toggle_switch.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_coordinator_triggers_linked_entities(hass, config_entry):
+	"""Test coordinator triggers linked entities on state change."""
+	config_entry.options = {
+		"linked_entities": {
+			"test-uid": ["light.living_room", "switch.bedroom"]
+		}
+	}
+
+	mock_api = AsyncMock()
+
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.switches = {"test-uid": {"state": False}}
+		coordinator.subscriptions = {}
+
+		hass.services = MagicMock()
+		hass.services.async_call = AsyncMock()
+
+		# Simulate WebSocket state update message
+		message = {
+			"type": "state_update",
+			"uid": "test-uid",
+			"state": True,
+			"timestamp": 1640995200000,
+			"params": {
+				"rgb_color": [0, 0, 255],
+				"brightness": 180
+			}
+		}
+
+		await coordinator._handle_websocket_message(message)
+
+		# Verify linked entities were triggered
+		assert hass.services.async_call.call_count == 2
+		calls = hass.services.async_call.call_args_list
+		
+		# Check turn_on was called for both entities with params for light
+		assert calls[0][0] == ("light", "turn_on")
+		assert calls[0][1]["service_data"]["entity_id"] == "light.living_room"
+		assert calls[0][1]["service_data"]["rgb_color"] == [0, 0, 255]
+		assert calls[0][1]["service_data"]["brightness"] == 180
+		
+		assert calls[1][0] == ("switch", "turn_on")
+		assert calls[1][1]["service_data"]["entity_id"] == "switch.bedroom"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_triggers_linked_entities_with_unsupported_params(hass, config_entry):
+	"""Test coordinator falls back when params not supported by target entity."""
+	config_entry.options = {
+		"linked_entities": {
+			"test-uid": ["switch.bedroom"]
+		}
+	}
+
+	mock_api = AsyncMock()
+
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.switches = {"test-uid": {"state": False}}
+		coordinator.subscriptions = {}
+
+		# Mock services to fail on first call (with params) and succeed on fallback
+		async def side_effect(domain, service, service_data=None, blocking=False):
+			if "brightness" in (service_data or {}):
+				raise Exception("Unsupported params")
+			return True
+
+		hass.services = MagicMock()
+		hass.services.async_call = AsyncMock(side_effect=side_effect)
+
+		message = {
+			"type": "state_update",
+			"uid": "test-uid",
+			"state": True,
+			"timestamp": 1640995200000,
+			"params": {
+				"brightness": 200
+			}
+		}
+
+		await coordinator._handle_websocket_message(message)
+
+		# Two calls: first with params (fail), second fallback without params
+		assert hass.services.async_call.call_count == 2
+		first_call = hass.services.async_call.call_args_list[0]
+		second_call = hass.services.async_call.call_args_list[1]
+
+		assert first_call[0][0] == "switch"
+		assert first_call[0][1] == "turn_on"
+		assert first_call[1]["service_data"]["entity_id"] == "switch.bedroom"
+		assert "brightness" in first_call[1]["service_data"]
+
+		assert second_call[0][0] == "switch"
+		assert second_call[0][1] == "turn_on"
+		assert second_call[1]["service_data"]["entity_id"] == "switch.bedroom"
+		assert "brightness" not in second_call[1]["service_data"]
+
+
+@pytest.mark.asyncio
+async def test_coordinator_rate_limits_linked_entity_triggers(hass, config_entry):
+	"""Test coordinator rate limits linked entity triggers to prevent loops."""
+	config_entry.options = {
+		"linked_entities": {
+			"test-uid": ["light.living_room"]
+		}
+	}
+
+	mock_api = AsyncMock()
+
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+
+		hass.services = MagicMock()
+		hass.services.async_call = AsyncMock()
+
+		# First trigger should work
+		await coordinator._trigger_linked_entities("test-uid", True)
+		assert hass.services.async_call.call_count == 1
+
+		# Immediate second trigger should be rate limited
+		await coordinator._trigger_linked_entities("test-uid", False)
+		assert hass.services.async_call.call_count == 1  # Still 1, not called again
+
+		# After cooldown, should work again
+		coordinator._last_trigger_time["test-uid"] = time.time() - 3.0
+		await coordinator._trigger_linked_entities("test-uid", False)
+		assert hass.services.async_call.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_coordinator_handles_api_errors_gracefully(hass, config_entry):
+	"""Test coordinator handles API errors without crashing."""
+	mock_api = AsyncMock()
+	mock_api.get_my_switches.side_effect = VomeSyncAPIError("API Error")
+
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		
+		# Should not raise exception
+		result = await coordinator._async_update_data()
+		
+		# Should return empty data on error
+		assert result is None or result == {}

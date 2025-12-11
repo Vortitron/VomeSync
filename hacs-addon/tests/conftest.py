@@ -44,8 +44,8 @@ def config_entry():
 		"websocket_url": "wss://test-server.com"
 	}
 	entry.options = {
-		"switches": {},
-		"subscriptions": {}
+		"imported_switches": {},
+		"linked_entities": {}
 	}
 	entry.entry_id = "test-entry-id"
 	return entry

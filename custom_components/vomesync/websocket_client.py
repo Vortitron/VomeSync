@@ -2,7 +2,7 @@
 import asyncio
 import json
 import logging
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict
 import websockets
 from websockets.exceptions import ConnectionClosed, InvalidURI
 
@@ -12,7 +12,6 @@ from .const import (
 	WS_MSG_PING,
 	WS_MSG_PONG,
 	WS_MSG_SUBSCRIBE,
-	WS_MSG_UNSUBSCRIBE,
 	WEBSOCKET_RECONNECT_DELAY,
 )
 
@@ -32,6 +31,7 @@ class VomeSyncWebSocketClient:
 		self.message_handler = message_handler
 		self.connections: Dict[str, websockets.WebSocketServerProtocol] = {}
 		self.connection_tasks: Dict[str, asyncio.Task] = {}
+		self.reconnect_attempts: Dict[str, int] = {}
 		self._shutdown = False
 
 	async def subscribe(self, uid: str) -> None:
@@ -68,22 +68,38 @@ class VomeSyncWebSocketClient:
 				_LOGGER.debug("Error closing WebSocket for %s: %s", uid, ex)
 
 	async def _maintain_connection(self, uid: str) -> None:
-		"""Maintain WebSocket connection for a switch."""
+		"""Maintain WebSocket connection for a switch with exponential backoff."""
+		self.reconnect_attempts[uid] = 0
+		
 		while not self._shutdown:
 			try:
 				await self._connect_to_switch(uid)
+				# Reset backoff on successful connection
+				self.reconnect_attempts[uid] = 0
 			except asyncio.CancelledError:
 				break
 			except Exception as ex:
 				_LOGGER.warning("WebSocket connection failed for %s: %s", uid, ex)
 			
 			if not self._shutdown:
-				_LOGGER.debug("Reconnecting to switch %s in %s seconds", uid, WEBSOCKET_RECONNECT_DELAY)
-				await asyncio.sleep(WEBSOCKET_RECONNECT_DELAY)
+				# Exponential backoff: 5s, 10s, 20s, 40s, max 60s
+				self.reconnect_attempts[uid] += 1
+				backoff = min(WEBSOCKET_RECONNECT_DELAY * (2 ** (self.reconnect_attempts[uid] - 1)), 60)
+				_LOGGER.debug(
+					"Reconnecting to switch %s in %s seconds (attempt %d)",
+					uid,
+					backoff,
+					self.reconnect_attempts[uid],
+				)
+				await asyncio.sleep(backoff)
 
 	async def _connect_to_switch(self, uid: str) -> None:
 		"""Connect to a specific switch's WebSocket."""
-		url = f"{self.base_url}/ws?uid={uid}"
+		# Construct URL - add /ws only if not already present
+		if self.base_url.endswith('/ws'):
+			url = f"{self.base_url}?uid={uid}"
+		else:
+			url = f"{self.base_url}/ws?uid={uid}"
 		
 		try:
 			_LOGGER.debug("Connecting to WebSocket: %s", url)

@@ -1,8 +1,8 @@
 {
-	"name": "VomeSync",
-	"content_in_root": false,
+	"name": "VomeSync - Remote Shared Switches",
+	"content_in_root": true,
 	"render_readme": true,
-	"country": "ALL",
-	"homeassistant": "2023.7.0"
+	"domains": ["switch", "sensor"],
+	"homeassistant": "2024.1.0",
+	"iot_class": "Cloud Push"
 }
-

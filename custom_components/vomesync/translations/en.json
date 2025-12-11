@@ -3,10 +3,9 @@
 		"step": {
 			"user": {
 				"title": "Set up VomeSync",
-				"description": "Enter the server URLs. Leave Personal Key empty to generate a new one on the next step. Public mode is NOT private — anyone with the UID can view or toggle the switch.",
+				"description": "Enter the server URL. WebSocket URL will be automatically set to `/ws` on the same server. Leave Personal Key empty to generate a new one on the next step.\n\n{websocket_info}\n\n⚠️ Public mode is NOT private — anyone with the UID can view the switch.",
 				"data": {
 					"server_url": "Server URL",
-					"websocket_url": "WebSocket URL",
 					"personal_key": "Personal Key (leave blank to generate)"
 				}
 			},
@@ -30,12 +29,20 @@
 			"init": {
 				"title": "Manage VomeSync",
 				"menu_options": {
+					"import_switches": "Import switches from API",
 					"create_switch": "Create switch",
 					"subscribe_switch": "Subscribe to switch",
 					"manage_switches": "Manage switches",
 					"manage_api_keys": "Manage API keys",
 					"connect_website": "Connect to website",
-					"show_details": "Show connection details"
+					"edit_connection": "Edit connection URLs"
+				}
+			},
+			"import_switches": {
+				"title": "Import switches",
+				"description": "{info}",
+				"data": {
+					"switches": "Select switches to import"
 				}
 			},
 			"create_switch": {
@@ -69,7 +76,9 @@
 				"menu_options": {
 					"view_switch": "View details",
 					"edit_switch": "Edit settings",
-					"delete_switch": "Delete switch"
+					"link_entities": "Link local entities",
+					"delete_switch": "Delete switch",
+					"remove_from_installation": "Remove from this installation"
 				}
 			},
 			"connect_website": {
@@ -81,6 +90,7 @@
 				"description": "{info}",
 				"data": {
 					"uid": "UID",
+					"entity_id": "Entity ID",
 					"websocket_url": "WebSocket URL",
 					"webhook_url": "Webhook URL",
 					"curl_command": "curl command"
@@ -96,6 +106,13 @@
 					"publicize": "Publicise (list publicly)"
 				}
 			},
+			"link_entities": {
+				"title": "Link local entities",
+				"description": "{info}",
+				"data": {
+					"entities": "Select entities to link"
+				}
+			},
 			"delete_switch": {
 				"title": "Delete switch",
 				"description": "{warning}",
@@ -103,9 +120,20 @@
 					"confirm": "Confirm deletion"
 				}
 			},
-			"show_details": {
-				"title": "Connection details",
-				"description": "Server: {server_url}\nWebSocket: {websocket_url}\nPersonal Key: {personal_key}"
+			"remove_from_installation": {
+				"title": "Remove from installation",
+				"description": "{warning}",
+				"data": {
+					"confirm": "Confirm removal"
+				}
+			},
+			"edit_connection": {
+				"title": "Edit connection URLs",
+				"description": "{info}",
+				"data": {
+					"server_url": "Server URL",
+					"websocket_url": "WebSocket URL"
+				}
 			},
 			"manage_api_keys": {
 				"title": "Manage API keys",
@@ -146,7 +174,10 @@
 		},
 		"abort": {
 			"no_switches": "No switches to manage. Create or subscribe to switches first.",
-			"not_owner": "Only switch owners can edit settings."
+			"not_owner": "Only switch owners can edit settings.",
+			"no_linkable_entities": "No linkable entities found. Add switches, lights, or other controllable entities first.",
+			"no_switches_selected": "No switches were selected to import.",
+			"api_error": "Failed to fetch switches from API. Check your connection and try again."
 		}
 	}
 }

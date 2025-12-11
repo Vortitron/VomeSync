@@ -115,10 +115,28 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
       publicize: true
   ```
 
+## Installation
+
+### Via HACS (Recommended)
+
+1. Open Home Assistant and go to **HACS** → **Integrations**
+2. Click the **+** button and search for **"VomeSync"**
+3. Click **Install**
+4. Restart Home Assistant
+5. Go to **Settings** → **Devices & Services** → **Add Integration**
+6. Search for **VomeSync** and follow the setup wizard
+
+### Manual Installation
+
+1. Copy the `custom_components/vomesync` directory to your Home Assistant's `config/custom_components/` directory
+2. Restart Home Assistant
+3. Go to **Settings** → **Devices & Services** → **Add Integration**
+4. Search for **VomeSync** and follow the setup wizard
+
 ## User Flow
-1. **Install Add-On**:
-   - User installs `VomeSync` via HACS.
-   - Add-on generates a personal key via `POST /generate-key` to sync.vome.io.
+1. **Install Integration**:
+   - User installs `VomeSync` via HACS or manually.
+   - Integration generates a personal key via `POST /generate-key` to sync.vome.io.
 
 2. **Create Switch**:
    - In HA UI, user configures a new switch with optional fields (description, city-level location, category).
@@ -134,7 +152,9 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
 4. **Subscribe to Switch**:
    - User pastes UID in add-on UI (from remoteswitch.vome.io or shared directly).
    - Add-on creates local sensor/switch (e.g., `sensor.remote_public_1`) and connects to `WSS /ws/{UID}` for real-time updates.
-   - User sets automations (e.g., "If sensor.remote_public_1 is on, turn on switch.my_light").
+   - User can either:
+     - Set automations (e.g., "If sensor.remote_public_1 is on, turn on switch.my_light"), OR
+     - Use **Entity Linking**: Link local entities directly to VomeSync switches via the integration options menu. Linked entities automatically toggle when the VomeSync switch state changes.
 
 5. **Public Directory**:
    - Users browse remoteswitch.vome.io for public switches (e.g., "Festival Light, Stockholm").

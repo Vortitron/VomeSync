@@ -1,6 +1,5 @@
 """API client for VomeSync server communication."""
 import asyncio
-import json
 import logging
 from typing import Any, Dict, Optional
 import aiohttp

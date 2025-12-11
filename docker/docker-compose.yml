@@ -78,6 +78,59 @@ services:
       timeout: 10s
       retries: 3
 
+  vomesync-redis-dev:
+    image: redis:7-alpine
+    container_name: vomesync-redis-dev
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - ../.redisdata:/data
+    networks:
+      - vomesync_network
+    ports:
+      - "127.0.0.1:6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  vomesync-webserver-dev:
+    build:
+      context: ../webserver
+      dockerfile: Dockerfile
+    container_name: vomesync-webserver-dev
+    restart: unless-stopped
+    depends_on:
+      vomesync-redis-dev:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=development
+      - PORT=3091
+      - WS_PORT=3002
+      - REDIS_HOST=vomesync-redis-dev
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - JWT_SECRET=dev-secret-change-in-production
+      - CORS_ORIGINS=http://localhost:8112,http://localhost:8123
+      - RATE_LIMIT_WINDOW_MS=900000
+      - RATE_LIMIT_MAX_REQUESTS=100
+      - ENABLE_ANALYTICS=false
+      - LOG_LEVEL=debug
+      - HCAPTCHA_SECRET=
+      - HCAPTCHA_BYPASS_TOKEN=test-bypass-token
+    ports:
+      - "3091:3091"
+      - "3002:3002"
+    networks:
+      - vomesync_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3091/api/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
   vomesync-website-dev:
     image: nginx:alpine
     container_name: vomesync-website-dev
@@ -90,8 +143,9 @@ services:
     networks:
       - vomesync_network
     environment:
-      - NGINX_HOST=${WEBSITE_DOMAIN:-sync.vome.io}
+      - NGINX_HOST=localhost
       - NGINX_PORT=80
+      - API_URL=http://localhost:3091
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
       interval: 30s
