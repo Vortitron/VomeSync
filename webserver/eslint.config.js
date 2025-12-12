@@ -26,7 +26,7 @@ export default [
 		rules: {
 			"consistent-return": "off",
 			"require-await": "off",
-			"no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+			"no-unused-vars": "off",
 			"no-trailing-spaces": "off",
 			"no-mixed-spaces-and-tabs": "off",
 			"indent": "off",

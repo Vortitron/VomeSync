@@ -305,8 +305,9 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 				)
 				
 				if uid:
-					# Switches are automatically fetched from API on next load
-					return self.async_create_entry(title="", data={})
+					# IMPORTANT: return current options so the options flow doesn't overwrite them with {}
+					# Coordinator already updated options (imported cache) and added the entity dynamically.
+					return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
 				else:
 					errors["base"] = "create_failed"
 				
@@ -353,12 +354,12 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 				coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
 				
 				# Subscribe via coordinator (handles API check + dynamic entity addition)
-				switch_name = user_input[CONF_SWITCH_NAME]
-				success = await coordinator.subscribe_to_switch(switch_name, uid)
+				success = await coordinator.subscribe_to_switch(uid)
 				
 				if success:
-					# Subscriptions are automatically fetched from API on next load
-					return self.async_create_entry(title="", data={})
+					# IMPORTANT: return current options so the options flow doesn't overwrite them with {}
+					# Coordinator already updated options (imported cache) and added the entity dynamically.
+					return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
 				else:
 					errors[CONF_SWITCH_UID] = "switch_not_found"
 					
@@ -369,7 +370,6 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 				errors["base"] = "subscribe_failed"
 
 		data_schema = vol.Schema({
-			vol.Required(CONF_SWITCH_NAME): str,
 			vol.Required(CONF_SWITCH_UID): str,
 		})
 
@@ -430,9 +430,28 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 			# Everyone can remove from this installation
 			actions.append("remove_from_installation")
 			
+			# Best-effort entity_id lookup for UI context
+			entity_id = None
+			try:
+				entity_reg = er.async_get(self.hass)
+				entity_id = entity_reg.async_get_entity_id("switch", DOMAIN, f"vomesync_{selected_uid}")
+				if not entity_id:
+					for entity in entity_reg.entities.values():
+						if entity.config_entry_id == self._config_entry.entry_id and entity.unique_id == f"vomesync_{selected_uid}":
+							entity_id = entity.entity_id
+							break
+			except Exception as ex:  # noqa: BLE001
+				_LOGGER.debug("Failed to resolve entity_id for %s: %s", selected_uid, ex)
+			
+			uid_hint = selected_uid[-6:]
 			return self.async_show_menu(
 				step_id="manage_switch_action",
-				menu_options=actions
+				menu_options=actions,
+				description_placeholders={
+					"name": selected_name,
+					"uid_hint": uid_hint,
+					"entity_id": entity_id or "Not created yet",
+				},
 			)
 		
 		return self.async_show_form(

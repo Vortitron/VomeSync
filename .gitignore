@@ -3,3 +3,4 @@ venv
 webserver/.env
 .redisdata/
 custom_components/vomesync/__pycache__/
+hacs-addon/tests/__pycache__/

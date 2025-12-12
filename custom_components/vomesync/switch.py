@@ -1,6 +1,7 @@
 """Switch platform for VomeSync integration."""
 import logging
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 from unittest.mock import AsyncMock, MagicMock
 import voluptuous as vol
 
@@ -102,6 +103,31 @@ async def async_setup_entry(
 class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 	"""Representation of a VomeSync switch."""
 
+	def _get_configuration_url(self) -> Optional[str]:
+		"""Return a valid absolute configuration URL for this device, if possible."""
+		# Device registry requires an absolute URL with scheme/host.
+		# Prefer the VomeSync website URL so "Visit" goes to per-switch management.
+		server_url = None
+		try:
+			server_url = self.coordinator.config_entry.data.get("server_url")
+		except Exception:  # noqa: BLE001
+			server_url = None
+		
+		if server_url and (server_url.startswith("http://") or server_url.startswith("https://")):
+			uid_q = quote(self._uid, safe="")
+			return f"{server_url.rstrip('/')}/?switch={uid_q}"
+		
+		# Fallback to HA base URL for integration-level navigation if configured
+		try:
+			base_url = (self.coordinator.hass.config.external_url or self.coordinator.hass.config.internal_url)
+		except Exception:  # noqa: BLE001
+			base_url = None
+		
+		if not base_url:
+			return None
+		
+		return f"{base_url.rstrip('/')}/config/integrations/integration/vomesync"
+
 	def __init__(
 		self,
 		coordinator: VomeSyncCoordinator,
@@ -123,13 +149,19 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 		self._attr_has_entity_name = True
 		
 		# Device info
-		self._attr_device_info = {
+		device_info = {
 			"identifiers": {(DOMAIN, uid)},
 			"name": f"VomeSync Switch ({name})",
 			"manufacturer": DEVICE_MANUFACTURER,
 			"model": DEVICE_MODEL,
 			"sw_version": "1.0.0",
 		}
+		
+		config_url = self._get_configuration_url()
+		if config_url:
+			device_info["configuration_url"] = config_url
+		
+		self._attr_device_info = device_info
 
 	@property
 	def switch_data(self) -> Optional[Dict[str, Any]]:

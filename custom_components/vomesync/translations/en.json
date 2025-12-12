@@ -3,7 +3,7 @@
 		"step": {
 			"user": {
 				"title": "Set up VomeSync",
-				"description": "Enter the server URL. WebSocket URL will be automatically set to `/ws` on the same server. Leave Personal Key empty to generate a new one on the next step.\n\n{websocket_info}\n\n⚠️ Public mode is NOT private — anyone with the UID can view the switch.",
+				"description": "Enter the server URL. WebSocket URL will be automatically set to `/ws` on the same server. Leave Personal Key empty to generate a new one on the next step.\n\n⚠️ Public mode is NOT private — anyone with the UID can view the switch.",
 				"data": {
 					"server_url": "Server URL",
 					"personal_key": "Personal Key (leave blank to generate)"
@@ -58,9 +58,8 @@
 			},
 			"subscribe_switch": {
 				"title": "Subscribe to a switch",
-				"description": "Enter a switch UID to monitor. You can find public UIDs at remoteswitch.vome.io.",
+				"description": "Enter a switch UID to subscribe to. The name will be fetched automatically, and you can rename the entity afterwards in Home Assistant.\n\nYou can find public UIDs at remoteswitch.vome.io.",
 				"data": {
-					"name": "Name",
 					"uid": "Switch UID"
 				}
 			},
@@ -73,6 +72,7 @@
 			},
 			"manage_switch_action": {
 				"title": "Switch actions",
+				"description": "Actions for **{name}** (…{uid_hint})\nEntity ID: `{entity_id}`",
 				"menu_options": {
 					"view_switch": "View details",
 					"edit_switch": "Edit settings",

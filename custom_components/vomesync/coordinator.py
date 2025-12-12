@@ -1,4 +1,5 @@
 """Data update coordinator for VomeSync integration."""
+import inspect
 import logging
 from datetime import timedelta
 from typing import Any, Dict, Optional
@@ -22,6 +23,12 @@ _LOGGER = logging.getLogger(__name__)
 
 class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 	"""VomeSync data update coordinator."""
+
+	async def _async_update_entry_options(self, options: Dict[str, Any]) -> None:
+		"""Update config entry options, awaiting only if HA returns an awaitable."""
+		result = self.hass.config_entries.async_update_entry(self.config_entry, options=options)
+		if inspect.isawaitable(result):
+			await result
 
 	def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
 		"""Initialize the coordinator."""
@@ -158,9 +165,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					# Update options with fresh cache
 					new_options = dict(options)
 					new_options["imported_switches"] = imported_switches
-					self.hass.config_entries.async_update_entry(
-						self.config_entry, options=new_options
-					)
+					await self._async_update_entry_options(new_options)
 					_LOGGER.debug("Updated cache for %d imported switches", len(imported_switches))
 			
 			return {
@@ -301,9 +306,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			}
 			options["imported_switches"] = imported_switches
 			
-			self.hass.config_entries.async_update_entry(
-				self.config_entry, options=options
-			)
+			await self._async_update_entry_options(options)
 			_LOGGER.info("Auto-imported newly created switch: %s", name)
 			
 			# Establish WebSocket connection
@@ -328,13 +331,17 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			_LOGGER.error("Failed to create switch: %s", ex)
 			return None
 
-	async def subscribe_to_switch(self, name: str, uid: str) -> bool:
+	async def subscribe_to_switch(self, uid: str) -> bool:
 		"""Subscribe to an existing switch."""
 		try:
 			# Check if switch exists
 			status = await self.api_client.get_switch_status(uid)
 			if not status:
+				_LOGGER.warning("Subscribe failed: switch not found or no status returned (uid=%s)", uid)
 				return False
+			
+			# Derive a sensible default name from the API (user can rename the entity in HA UI)
+			name = status.get("name") or status.get("description") or f"Switch {uid[:8]}"
 			
 			_LOGGER.info("Subscribed to switch via API: uid=%s, name=%s", uid, name)
 			
@@ -348,6 +355,38 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			# Automatically import this subscription (add to local cache)
 			options = dict(self.config_entry.options or {})
 			imported_switches = options.get("imported_switches", {})
+			
+			# If already imported, don't try to add a duplicate entity
+			if uid in imported_switches:
+				_LOGGER.info("Switch already imported in this installation; skipping entity add (uid=%s)", uid)
+				await self._ensure_websocket_connection(uid)
+				self.async_update_listeners()
+				return True
+			
+			# If entity already exists in HA registry, also skip add (prevents duplicate unique_id errors)
+			try:
+				from homeassistant.helpers import entity_registry as er
+				entity_reg = er.async_get(self.hass)
+				existing_entity_id = entity_reg.async_get_entity_id("switch", DOMAIN, f"vomesync_{uid}")
+				if existing_entity_id:
+					_LOGGER.info(
+						"Entity already exists for uid=%s (%s); updating cache only",
+						uid,
+						existing_entity_id,
+					)
+					imported_switches[uid] = {
+						"name": imported_switches.get(uid, {}).get("name", name),
+						"is_owner": False,
+						"cached_data": self.subscriptions[uid],
+					}
+					options["imported_switches"] = imported_switches
+					await self._async_update_entry_options(options)
+					await self._ensure_websocket_connection(uid)
+					self.async_update_listeners()
+					return True
+			except Exception as ex:  # noqa: BLE001
+				_LOGGER.debug("Entity registry check failed (non-fatal): %s", ex)
+			
 			imported_switches[uid] = {
 				"name": name,
 				"is_owner": False,
@@ -355,9 +394,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			}
 			options["imported_switches"] = imported_switches
 			
-			self.hass.config_entries.async_update_entry(
-				self.config_entry, options=options
-			)
+			await self._async_update_entry_options(options)
 			_LOGGER.info("Auto-imported newly subscribed switch: %s", name)
 			
 			# Establish WebSocket connection
@@ -401,9 +438,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				if uid in imported_switches:
 					del imported_switches[uid]
 					options["imported_switches"] = imported_switches
-					self.hass.config_entries.async_update_entry(
-						self.config_entry, options=options
-					)
+					await self._async_update_entry_options(options)
 					_LOGGER.info("Removed switch %s from imported cache", uid)
 				
 				# Close WebSocket connection

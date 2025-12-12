@@ -100,10 +100,7 @@ async def test_coordinator_auto_imports_new_subscription(hass, config_entry):
 		coordinator.async_add_switch_entities = MagicMock()
 		coordinator._ensure_websocket_connection = AsyncMock()
 
-		success = await coordinator.subscribe_to_switch(
-			name="Remote Switch",
-			uid="remote-uid-456"
-		)
+		success = await coordinator.subscribe_to_switch("remote-uid-456")
 
 	assert success == True
 	

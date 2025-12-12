@@ -140,14 +140,11 @@ async def test_options_flow_subscribe_switch_auto_imports(hass, config_entry):
 	flow.hass = hass
 
 	result = await flow.async_step_subscribe_switch({
-		CONF_SWITCH_NAME: "Remote Switch",
 		CONF_SWITCH_UID: "remote-uid-456",
 	})
 
 	assert result["type"] == FlowResultType.CREATE_ENTRY
-	mock_coordinator.subscribe_to_switch.assert_called_once_with(
-		"Remote Switch", "remote-uid-456"
-	)
+	mock_coordinator.subscribe_to_switch.assert_called_once_with("remote-uid-456")
 
 
 @pytest.mark.asyncio
@@ -185,6 +182,37 @@ async def test_options_flow_remove_from_installation(hass, config_entry):
 	assert result["type"] == FlowResultType.CREATE_ENTRY
 	options = result["data"]
 	assert "uid-to-remove" not in options["imported_switches"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_manage_switch_action_shows_entity_id(hass, config_entry):
+	"""Manage switch actions should show resolved entity_id in description placeholders."""
+	config_entry.options = {
+		"imported_switches": {
+			"uid-abc": {
+				"name": "My Switch",
+				"is_owner": True,
+				"cached_data": {}
+			}
+		}
+	}
+
+	mock_entity_reg = MagicMock()
+	mock_entity_reg.async_get_entity_id.return_value = "switch.vomesync_my_switch"
+
+	hass.data = {DOMAIN: {config_entry.entry_id: MagicMock()}}
+	hass.config_entries = MagicMock()
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	with patch("custom_components.vomesync.config_flow.er.async_get", return_value=mock_entity_reg):
+		result = await flow.async_step_manage_switches({"switch": "uid-abc"})
+
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "manage_switch_action"
+	assert result["description_placeholders"]["name"] == "My Switch"
+	assert result["description_placeholders"]["entity_id"] == "switch.vomesync_my_switch"
 
 
 @pytest.mark.asyncio
