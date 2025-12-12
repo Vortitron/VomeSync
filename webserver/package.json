@@ -12,8 +12,8 @@
 		"test:unit": "cross-env NODE_ENV=test jest tests/unit",
 		"test:integration": "cross-env NODE_ENV=test jest tests/integration",
 		"test:simple": "cross-env NODE_ENV=test jest --config=jest.simple.config.js tests/unit",
-		"lint": "eslint src/ tests/",
-		"lint:fix": "eslint src/ tests/ --fix",
+		"lint": "eslint --config eslint.config.js src/ tests/",
+		"lint:fix": "eslint --config eslint.config.js src/ tests/ --fix",
 		"docker:build": "docker build -t vomesync-webserver .",
 		"docker:run": "docker run -p 3090:3090 -p 3001:3001 vomesync-webserver"
 	},
@@ -47,6 +47,35 @@
 		"@types/jest": "^29.5.8",
 		"redis-memory-server": "^0.9.0",
 		"cross-env": "^7.0.3"
+	},
+	"eslintConfig": {
+		"env": {
+			"es2021": true,
+			"node": true,
+			"jest": true
+		},
+		"extends": [
+			"eslint:recommended"
+		],
+		"parserOptions": {
+			"ecmaVersion": "latest",
+			"sourceType": "module"
+		},
+		"rules": {
+			"consistent-return": "off",
+			"require-await": "off",
+			"no-unused-vars": [
+				"warn",
+				{
+					"argsIgnorePattern": "^_",
+					"varsIgnorePattern": "^_"
+				}
+			],
+			"no-trailing-spaces": "off",
+			"no-mixed-spaces-and-tabs": "off",
+			"indent": "off",
+			"prefer-const": "off"
+		}
 	},
 	"engines": {
 		"node": ">=18.0.0"
