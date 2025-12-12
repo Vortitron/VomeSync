@@ -1,8 +1,8 @@
 # VomeSync - Home Assistant Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/your-org/vomesync)](https://github.com/your-org/vomesync/releases)
-[![GitHub](https://img.shields.io/github/license/your-org/vomesync)](https://github.com/your-org/vomesync/blob/main/LICENSE)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/Vortitron/VomeSync)](https://github.com/Vortitron/VomeSync/releases)
+[![GitHub](https://img.shields.io/github/license/Vortitron/VomeSync)](https://github.com/Vortitron/VomeSync/blob/main/LICENSE)
 
 **VomeSync** is a Home Assistant custom integration that enables public remote switch sharing between Home Assistant instances worldwide. Create virtual switches that others can monitor or toggle, perfect for community events, multi-property synchronisation, or sharing non-sensitive device states.
 
@@ -32,7 +32,7 @@
 1. Install [HACS](https://hacs.xyz/) if you haven't already
 2. Go to HACS → Integrations
 3. Click the three dots menu → Custom repositories
-4. Add repository URL: `https://github.com/your-org/vomesync`
+4. Add repository URL: `https://github.com/Vortitron/VomeSync`
 5. Select category: Integration
 6. Find "VomeSync" and install
 7. Restart Home Assistant
@@ -209,8 +209,8 @@ Visit [remoteswitch.vome.io](https://remoteswitch.vome.io) to browse community s
 
 ## Support
 
-- **Documentation**: [GitHub Repository](https://github.com/your-org/vomesync)
-- **Issues**: [GitHub Issues](https://github.com/your-org/vomesync/issues)
+- **Documentation**: [GitHub Repository](https://github.com/Vortitron/VomeSync)
+- **Issues**: [GitHub Issues](https://github.com/Vortitron/VomeSync/issues)
 - **Community**: [r/homeassistant](https://reddit.com/r/homeassistant)
 - **Email**: [support@vome.io](mailto:support@vome.io)
 

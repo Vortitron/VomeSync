@@ -45,12 +45,6 @@ subscribe_switch:
   name: Subscribe to Switch
   description: Subscribe to an existing VomeSync switch
   fields:
-    name:
-      name: Switch Name
-      description: Name for the monitoring entity
-      required: true
-      selector:
-        text:
     uid:
       name: Switch UID
       description: UID of the switch to subscribe to

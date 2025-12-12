@@ -14,10 +14,10 @@ VomeSync consists of four main components:
 - **Features**: Switch creation, state management, real-time broadcasting
 - **Deployment**: Docker container with health checks
 
-### 2. **Home Assistant Integration** (`/hacs-addon/`)
-- **Purpose**: HACS custom component for Home Assistant
-- **Technology**: Python, asyncio, WebSocket client
-- **Features**: Config flow UI, switch/sensor entities, real-time updates
+### 2. **Home Assistant Integration** (`/custom_components/vomesync/`)
+- **Purpose**: HACS custom integration for Home Assistant
+- **Technology**: Python, asyncio, `aiohttp`, `websockets`
+- **Features**: Config flow UI, switch/sensor entities, real-time updates, entity linking
 - **Installation**: Via HACS or manual installation
 
 ### 3. **Public Website** (`/website/`)
@@ -71,7 +71,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - `POST /create-switch`: Creates a virtual switch with UID, optional fields (description, geocode location, category), and public flag.
   - `POST /toggle/{UID}`: Toggles the virtual switch state (requires personal key).
   - `GET /status/{UID}`: Returns current switch state (publicly accessible).
-  - `WSS /ws/{UID}`: WebSocket for real-time state updates to subscribed clients.
+  - `WSS /ws?uid={uid}`: WebSocket for real-time state updates to subscribed clients.
 - **Privacy**:
   - Stores only encrypted personal keys and anonymized switch data (no IPs beyond logs).
   - Public mode uses differential privacy for aggregated analytics (e.g., trigger counts).
@@ -88,32 +88,13 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - No user accounts—public read-only access.
 - **Privacy**: Anonymized data only (no personal identifiers). Links to privacy policy.
 
-### 3. HACS Add-On
-- **Purpose**: User interface in Home Assistant for creating, toggling, and subscribing to switches.
-- **Tech Stack**:
-  - Python using Home Assistant’s `switch` platform.
-  - WebSocket client (`websocket-client` package) for real-time updates.
-  - YAML configuration for user settings.
+### 3. Home Assistant Integration (HACS)
+- **Purpose**: Home Assistant integration for creating, toggling, subscribing, importing, and linking switches.
 - **Features**:
-  - Generates personal key on first run (stored in `secrets.yaml`).
-  - UI to create switches (fields: description, location, category; checkbox: "Publicize on website").
-  - Creates local `switch` entity (e.g., `switch.remote_public_1`) for toggling.
-  - Subscribe to other UIDs (creates local sensor/switch to monitor/toggle).
-  - Clear warning: "Public mode is NOT private—anyone with UID can view/toggle."
-- **Configuration Example**:
-  ```yaml
-  switch:
-    - platform: vomesync
-      name: "Public Porch Light"
-      unique_id: "remote_switch_1"
-      personal_key: !secret vomesync_key
-      uid: "abc123"
-      mode: "public"
-      description: "Festival Light Event"
-      location: "Stockholm"
-      category: "Community"
-      publicize: true
-  ```
+  - Config flow UI (no YAML required)
+  - Fast startup from locally cached imported switches
+  - Real-time updates via WebSocket (`/ws?uid=<uid>`)
+  - Optional entity linking (turn local entities on/off when VomeSync changes)
 
 ## Installation
 
@@ -150,8 +131,8 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
    - Server updates virtual switch state and broadcasts via WebSocket to subscribers.
 
 4. **Subscribe to Switch**:
-   - User pastes UID in add-on UI (from remoteswitch.vome.io or shared directly).
-   - Add-on creates local sensor/switch (e.g., `sensor.remote_public_1`) and connects to `WSS /ws/{UID}` for real-time updates.
+   - User pastes UID in the integration UI (from remoteswitch.vome.io or shared directly).
+   - Integration imports the switch and connects to `WSS /ws?uid=<uid>` for real-time updates.
    - User can either:
      - Set automations (e.g., "If sensor.remote_public_1 is on, turn on switch.my_light"), OR
      - Use **Entity Linking**: Link local entities directly to VomeSync switches via the integration options menu. Linked entities automatically toggle when the VomeSync switch state changes.

@@ -103,7 +103,7 @@ class VomeSyncServer {
 					api: '/api',
 					websocket: '/ws?uid={switch_uid}',
 					health: '/api/health',
-					docs: 'https://github.com/your-org/vomesync'
+					docs: 'https://github.com/Vortitron/VomeSync'
 				},
 				status: 'operational'
 			});

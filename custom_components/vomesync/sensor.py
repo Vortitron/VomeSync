@@ -30,16 +30,22 @@ async def async_setup_entry(
 	async_add_entities: AddEntitiesCallback,
 ) -> None:
 	"""Set up VomeSync sensors from a config entry."""
-	coordinator: VomeSyncCoordinator = hass.data[DOMAIN][config_entry.entry_id]
+	coordinator: VomeSyncCoordinator = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
+	if coordinator is None:
+		_LOGGER.warning("Coordinator not found during sensor setup; skipping sensor entities")
+		return
 	
 	# Create sensor entities for subscribed switches (read-only monitoring)
 	entities = []
 	
-	options = config_entry.options
-	subscriptions = options.get("subscriptions", {})
+	options = config_entry.options or {}
+	imported_switches = options.get("imported_switches", {})
 	
-	for name, sub_config in subscriptions.items():
-		uid = sub_config["uid"]
+	# Create sensors for imported switches where is_owner is False
+	for uid, info in imported_switches.items():
+		if info.get("is_owner", False):
+			continue
+		name = info.get("name", f"Switch {uid[:8]}")
 		entity = VomeSyncSensor(coordinator, uid, name)
 		entities.append(entity)
 	
@@ -67,11 +73,12 @@ class VomeSyncSensor(CoordinatorEntity[VomeSyncCoordinator], SensorEntity):
 		self._attr_name = f"{name} Status"
 		
 		# Device info
+		# Match the switch entity's device identifiers so the sensor groups under the same device.
 		self._attr_device_info = {
-			"identifiers": {(DOMAIN, f"sensor_{uid}")},
-			"name": f"VomeSync Monitor ({name})",
+			"identifiers": {(DOMAIN, uid)},
+			"name": f"VomeSync Switch ({name})",
 			"manufacturer": DEVICE_MANUFACTURER,
-			"model": f"{DEVICE_MODEL} Monitor",
+			"model": DEVICE_MODEL,
 			"sw_version": "1.0.0",
 		}
 

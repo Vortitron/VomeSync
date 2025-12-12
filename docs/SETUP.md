@@ -25,7 +25,7 @@ This guide covers setting up VomeSync for development and production deployment.
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-org/vomesync.git
+   git clone https://github.com/Vortitron/VomeSync.git
    cd vomesync
    ```
 
@@ -108,7 +108,7 @@ This guide covers setting up VomeSync for development and production deployment.
 
 2. **Deploy VomeSync:**
    ```bash
-   git clone https://github.com/your-org/vomesync.git
+   git clone https://github.com/Vortitron/VomeSync.git
    cd vomesync/docker
    
    # Configure environment
@@ -179,7 +179,7 @@ This guide covers setting up VomeSync for development and production deployment.
    
    # Deploy code
    cd /opt/vomesync
-   git clone https://github.com/your-org/vomesync.git .
+   git clone https://github.com/Vortitron/VomeSync.git .
    cd webserver
    npm ci --production
    ```
@@ -504,6 +504,6 @@ vomesync_key: "your-personal-key-uuid"
 ### Getting Help
 
 1. **Check logs first** - most issues can be diagnosed from logs
-2. **GitHub Issues** - https://github.com/your-org/vomesync/issues
+2. **GitHub Issues** - https://github.com/Vortitron/VomeSync/issues
 3. **Community** - r/homeassistant on Reddit
 4. **Email Support** - support@vome.io (paid tiers)
