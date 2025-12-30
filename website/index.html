@@ -24,13 +24,14 @@
 					<path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
 				</svg>
 				<span class="brand-name">VomeSync</span>
+				<span id="envBadge" class="env-badge" style="display:none"></span>
 			</div>
 			<div class="nav-links">
 				<a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration" class="btn btn-secondary" target="_blank" rel="noopener">
 					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
 					Add to HACS
 				</a>
-				<a href="https://sync.vome.io/login" class="btn btn-primary" target="_blank" rel="noopener">Login</a>
+				<a id="loginLink" href="/login" class="btn btn-primary" target="_blank" rel="noopener">Login</a>
 			</div>
 		</div>
 	</nav>
@@ -227,7 +228,7 @@
 					<ul>
 						<li><a href="https://github.com/Vortitron/VomeSync">GitHub Repository</a></li>
 						<li><a href="https://github.com/Vortitron/VomeSync#readme">Documentation</a></li>
-						<li><a href="https://sync.vome.io/api/health">Server Status</a></li>
+						<li><a id="serverStatusLink" href="/api/health">Server Status</a></li>
 					</ul>
 				</div>
 				<div class="footer-section">
@@ -235,7 +236,7 @@
 					<ul>
 						<li><a href="mailto:support@vome.io">Contact Support</a></li>
 						<li><a href="https://reddit.com/r/homeassistant">r/homeassistant</a></li>
-						<li><a href="/privacy">Privacy Policy</a></li>
+						<li><a href="/privacy/">Privacy Policy</a></li>
 					</ul>
 				</div>
 			</div>

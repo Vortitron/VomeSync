@@ -13,7 +13,7 @@
 - 🌐 **Public Switch Sharing**: Create switches that others can discover and interact with
 - 🔄 **Real-time Updates**: WebSocket connections ensure instant state synchronisation  
 - 🏠 **Native Home Assistant**: Integrates seamlessly as standard switch/sensor entities
-- 🔍 **Public Directory**: Browse community switches at [remoteswitch.vome.io](https://remoteswitch.vome.io)
+- 🔍 **Public Directory**: Browse community switches at [sync.vome.io](https://sync.vome.io)
 - 🛡️ **Privacy Focused**: Optional anonymised metadata, city-level location only
 - 📱 **Easy Setup**: Simple configuration flow with guided setup
 
@@ -164,7 +164,7 @@ Delete a switch you own (removes from server).
 
 ## Finding Public Switches
 
-Visit [remoteswitch.vome.io](https://remoteswitch.vome.io) to browse community switches. The directory shows:
+Visit [sync.vome.io](https://sync.vome.io) to browse community switches. The directory shows:
 - Switch description
 - Location (city-level)
 - Category  

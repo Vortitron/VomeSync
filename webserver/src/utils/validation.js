@@ -1,5 +1,22 @@
 const Joi = require('joi');
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const V2_UID_REGEX = /^vs_[0-9a-hjkmnpqrstvwxyz]{26}$/i;
+
+const isValidSwitchUid = (uid) => {
+	if (typeof uid !== 'string' || uid.length === 0) {
+		return false;
+	}
+	return UUID_REGEX.test(uid) || V2_UID_REGEX.test(uid);
+};
+
+const switchUidSchema = Joi.string().required().custom((value, helpers) => {
+	if (!isValidSwitchUid(value)) {
+		return helpers.error('any.invalid');
+	}
+	return value;
+}, 'Switch UID validation');
+
 const schemas = {
 	createSwitch: Joi.object({
 		description: Joi.string().max(200).allow('').default(''),
@@ -32,7 +49,7 @@ const schemas = {
 	}),
 
 	subscribeSwitch: Joi.object({
-		uid: Joi.string().uuid().required()
+		uid: switchUidSchema
 	}),
 
 	generateKey: Joi.object({
@@ -42,6 +59,38 @@ const schemas = {
 	deleteKey: Joi.object({
 		personalKey: Joi.string().uuid().required(),
 		confirmation: Joi.string().valid('DELETE_ALL_DATA').required()
+	}),
+
+	// V2 signed endpoints (crypto identity)
+	v2CreateSwitch: Joi.object({
+		ownerPubKey: Joi.string().max(120).required(),
+		switchPubKey: Joi.string().max(120).required(),
+		index: Joi.number().integer().min(0).max(1000000).required(),
+		ts: Joi.number().integer().min(0).required(),
+		nonce: Joi.string().min(8).max(128).required(),
+		sigOwner: Joi.string().max(200).required(),
+		sigSwitch: Joi.string().max(200).required(),
+		description: Joi.string().max(200).allow('').default(''),
+		location: Joi.string().max(100).allow('').default(''),
+		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other').default('Other'),
+		publicize: Joi.boolean().default(false),
+		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(500).allow('').default(''),
+		captchaToken: Joi.string().max(2000).allow('')
+	}),
+
+	v2MySwitches: Joi.object({
+		ownerPubKey: Joi.string().max(120).required(),
+		ts: Joi.number().integer().min(0).required(),
+		nonce: Joi.string().min(8).max(128).required(),
+		sigOwner: Joi.string().max(200).required()
+	}),
+
+	v2SetState: Joi.object({
+		ts: Joi.number().integer().min(0).required(),
+		nonce: Joi.string().min(8).max(128).required(),
+		sigSwitch: Joi.string().max(200).required(),
+		state: Joi.boolean().required(),
+		params: Joi.object().unknown(true).default({})
 	})
 };
 
@@ -73,10 +122,7 @@ const validateRequest = (schema) => {
 const validateUID = (req, res, next) => {
 	const { uid } = req.params;
 
-	const schema = Joi.string().uuid().required();
-	const { error } = schema.validate(uid);
-
-	if (error) {
+	if (!isValidSwitchUid(uid)) {
 		return res.status(400).json({
 			success: false,
 			error: 'Invalid UID format'
@@ -116,7 +162,9 @@ const sanitizePrivateSwitchData = (switchData) => {
 		createdAt: switchData.createdAt || 0,
 		toggleCount: switchData.toggleCount || 0,
 		publicize: switchData.publicize || false,
-		link: switchData.link || ''
+		link: switchData.link || '',
+		...(typeof switchData.index === 'number' ? { index: switchData.index } : {}),
+		...(switchData.authVersion ? { authVersion: switchData.authVersion } : {})
 	};
 };
 
@@ -124,6 +172,7 @@ module.exports = {
 	schemas,
 	validateRequest,
 	validateUID,
+	isValidSwitchUid,
 	sanitizePublicSwitchData,
 	sanitizePrivateSwitchData
 };

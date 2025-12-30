@@ -119,6 +119,13 @@ This guide covers setting up VomeSync for development and production deployment.
    ./scripts/deploy.sh
    ```
 
+#### Persistence note (important for production)
+
+VomeSync persists switch directory data in a Docker volume. If you accidentally change the Compose project name or volume name, Docker may create a **new empty Redis volume**, which can look like “all switches disappeared”.
+
+- Keep `VOMESYNC_REDIS_VOLUME_NAME` stable in `docker/.env` (recommended).
+- `docker/scripts/deploy.sh` will attempt to auto-adopt an existing `*_redis_data` volume when possible.
+
 3. **Configure reverse proxy (optional):**
    If you're not using the included nginx proxy, configure your web server:
 
@@ -129,7 +136,7 @@ This guide covers setting up VomeSync for development and production deployment.
        server_name sync.vome.io;
        
        location /api/ {
-           proxy_pass http://localhost:3000;
+           proxy_pass http://localhost:3090;
            proxy_set_header Host $host;
            proxy_set_header X-Real-IP $remote_addr;
        }
@@ -275,7 +282,7 @@ RATE_LIMIT_WINDOW_MS=900000
 RATE_LIMIT_MAX_REQUESTS=100
 
 # CORS
-CORS_ORIGINS=https://remoteswitch.vome.io,http://localhost:8123
+CORS_ORIGINS=https://sync.vome.io,http://localhost:8123
 
 # SSL (optional)
 SSL_CERT_PATH=/path/to/cert.pem
@@ -324,7 +331,7 @@ vomesync_key: "your-personal-key-uuid"
 
 2. **Obtain certificates:**
    ```bash
-   sudo certbot certonly --standalone -d sync.vome.io -d remoteswitch.vome.io
+   sudo certbot certonly --standalone -d sync.vome.io
    ```
 
 3. **Update configuration:**

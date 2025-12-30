@@ -1,11 +1,15 @@
 """Data update coordinator for VomeSync integration."""
+from collections import deque
 import inspect
 import logging
+import time
 from datetime import timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Set
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api_client import VomeSyncAPIClient, VomeSyncAPIError
@@ -15,10 +19,54 @@ from .const import (
 	CONF_PERSONAL_KEY,
 	CONF_SERVER_URL,
 	CONF_WEBSOCKET_URL,
+	CONF_AUTH_MODE,
+	CONF_CRYPTO_SEED,
+	AUTH_MODE_CRYPTO,
 	UPDATE_INTERVAL_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+_OPT_IMPORTED_SWITCHES = "imported_switches"
+_OPT_CRYPTO_NEXT_INDEX = "crypto_next_index"
+_OPT_CRYPTO_INDEX = "crypto_index"
+
+_LINKED_TRIGGER_BURST_WINDOW_SECONDS = 10.0
+_LINKED_TRIGGER_BURST_MAX = 6
+_LINKED_TRIGGER_BLOCK_SECONDS = 30.0
+
+_LINKED_ENTITY_SUPPRESSION_SECONDS = 2.0
+
+_TOGGLE_COOLDOWN_SECONDS = 1.0
+
+_LINK_CFG_ENTITIES = "entities"
+_LINK_CFG_MODE = "mode"
+_LINK_CFG_MASTER = "master"
+_LINK_CFG_DIRECTION = "direction"
+_LINK_CFG_READ_ONLY = "read_only"  # legacy (replaced by direction)
+
+_LINK_MODE_MASTER = "master"
+_LINK_MODE_OR = "or"
+_LINK_MODE_AND = "and"
+
+_VALID_LINK_MODES: Set[str] = {_LINK_MODE_MASTER, _LINK_MODE_OR, _LINK_MODE_AND}
+
+_LINK_DIR_BOTH = "both"
+_LINK_DIR_SWITCH_TO_ENTITIES = "switch_to_entities"
+_LINK_DIR_ENTITIES_TO_SWITCH = "entities_to_switch"
+
+_VALID_LINK_DIRECTIONS: Set[str] = {_LINK_DIR_BOTH, _LINK_DIR_SWITCH_TO_ENTITIES, _LINK_DIR_ENTITIES_TO_SWITCH}
+
+_LINK_PARAM_KEYS: tuple[str, ...] = (
+	"rgb_color",
+	"hs_color",
+	"xy_color",
+	"color_temp",
+	"brightness",
+	"transition",
+	"effect",
+	"color_mode",
+)
 
 
 class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
@@ -33,12 +81,15 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 	def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
 		"""Initialize the coordinator."""
 		self.config_entry = config_entry
+		entry_data = config_entry.data or {}
 		self.api_client = VomeSyncAPIClient(
-			config_entry.data[CONF_SERVER_URL],
-			config_entry.data[CONF_PERSONAL_KEY]
+			entry_data[CONF_SERVER_URL],
+			entry_data.get(CONF_PERSONAL_KEY),
+			auth_mode=entry_data.get(CONF_AUTH_MODE),
+			crypto_seed=entry_data.get(CONF_CRYPTO_SEED),
 		)
 		self.websocket_client = VomeSyncWebSocketClient(
-			config_entry.data[CONF_WEBSOCKET_URL],
+			entry_data[CONF_WEBSOCKET_URL],
 			self._handle_websocket_message
 		)
 		
@@ -62,13 +113,20 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		# Entity name mapping (uid -> friendly_name)
 		self.entity_names: Dict[str, str] = {}
 		
-		# Rate limiting for linked entity triggers (prevent loops)
-		self._last_trigger_time: Dict[str, float] = {}
-		self._trigger_cooldown = 2.0  # 2 seconds between triggers for same switch
+		# Loop protection for linked entity triggers:
+		# allow a short burst (user flicking on/off), but block runaway feedback loops.
+		self._linked_trigger_history: Dict[str, deque[float]] = {}
+		self._linked_trigger_blocked_until: Dict[str, float] = {}
+		
+		# Bidirectional linking (entity -> owned switch)
+		self._linked_entity_listener_unsub: Optional[Callable[[], None]] = None
+		self._linked_entity_to_uids: Dict[str, Set[str]] = {}
+		self._linked_config_by_uid: Dict[str, Dict[str, Any]] = {}
+		self._linked_entity_suppress_until: Dict[str, float] = {}
 		
 		# Rate limiting for toggle requests (prevent API spam)
 		self._last_toggle_time: Dict[str, float] = {}
-		self._toggle_cooldown = 1.0  # 1 second between API toggles for same switch
+		self._toggle_cooldown = _TOGGLE_COOLDOWN_SECONDS
 
 	async def _async_update_data(self) -> Dict[str, Any]:
 		"""Fetch data from API."""
@@ -119,26 +177,46 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			if not switches_data:
 				_LOGGER.warning("No owned switches returned from API; entities may appear unavailable")
 			
-			# Get status for subscribed switches from options
+			# Get status for subscribed switches.
+			#
+			# Primary source: imported cache entries with is_owner=False (this is what the UI uses).
+			# Backward-compat: older versions stored subscriptions under options["subscriptions"].
 			options = self.config_entry.options or {}
-			subscriptions = options.get("subscriptions", {})
+			imported_switches = options.get("imported_switches", {}) or {}
+			legacy_subscriptions = options.get("subscriptions", {}) or {}
 			
-			subscriptions_data = {}
-			for name, sub_config in subscriptions.items():
-				uid = sub_config["uid"]
+			# Build uid->name mapping for subscriptions
+			sub_uid_to_name: Dict[str, str] = {}
+			for uid, info in imported_switches.items():
+				if not isinstance(uid, str) or not isinstance(info, dict):
+					continue
+				if info.get("is_owner", False):
+					continue
+				sub_uid_to_name[uid] = info.get("name") or uid[:8]
+			
+			# Legacy format: {friendly_name: {"uid": "..."}}
+			for name, sub_config in legacy_subscriptions.items():
+				if not isinstance(sub_config, dict):
+					continue
+				uid = sub_config.get("uid")
+				if isinstance(uid, str) and uid not in sub_uid_to_name:
+					sub_uid_to_name[uid] = name or uid[:8]
+			
+			subscriptions_data: Dict[str, Dict[str, Any]] = {}
+			for uid, name in sub_uid_to_name.items():
 				status = await self.api_client.get_switch_status(uid)
 				if status:
 					subscriptions_data[uid] = {
 						**status,
 						"name": name,
-						"is_owner": False
+						"is_owner": False,
 					}
 					
 					# Ensure WebSocket connection for subscriptions
-					if uid not in self._websocket_connections:
+					if self._websocket_connections.get(uid) is not True:
 						await self._ensure_websocket_connection(uid)
 				else:
-					_LOGGER.warning("Subscription %s (uid=%s) returned no status from API", name, uid)
+					_LOGGER.warning("Imported subscription %s (uid=%s) returned no status from API", name, uid)
 			
 			# Store current data
 			self.switches = switches_data
@@ -226,6 +304,26 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 
 	async def toggle_switch(self, uid: str) -> bool:
 		"""Toggle a switch with rate limiting."""
+		current = bool(self.get_switch_data(uid) and self.get_switch_data(uid).get("state", False))
+		return await self.set_switch_state(uid, not current)
+
+	def _get_crypto_index_for_uid(self, uid: str) -> Optional[int]:
+		"""Resolve crypto index for a v2-owned switch."""
+		switch_data = self.switches.get(uid) or {}
+		idx = switch_data.get("index")
+		if isinstance(idx, int):
+			return idx
+		
+		options = self.config_entry.options or {}
+		imported = options.get(_OPT_IMPORTED_SWITCHES, {}) or {}
+		info = imported.get(uid) or {}
+		idx2 = info.get(_OPT_CRYPTO_INDEX)
+		if isinstance(idx2, int):
+			return idx2
+		return None
+
+	async def set_switch_state(self, uid: str, state: bool, params: Optional[Dict[str, Any]] = None) -> bool:
+		"""Set a switch state (v2 signed endpoint)."""
 		import time
 		
 		# Rate limiting to prevent API spam
@@ -242,7 +340,19 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		try:
 			# Update last toggle time before making the request
 			self._last_toggle_time[uid] = current_time
-			
+
+			# Crypto path (owned switches only)
+			if self.crypto_enabled and self.is_switch_owner(uid):
+				idx = self._get_crypto_index_for_uid(uid)
+				if idx is None:
+					_LOGGER.error("Cannot set state for %s: missing crypto index", uid)
+					return False
+				result = await self.api_client.set_switch_state_v2(uid, idx, state, params=params)
+			else:
+				# Legacy path: only toggle when change is required (toggle endpoint flips)
+				current = bool(self.get_switch_data(uid) and self.get_switch_data(uid).get("state", False))
+				if current == bool(state):
+					return True
 			result = await self.api_client.toggle_switch(uid)
 			
 			# Update local state immediately
@@ -250,7 +360,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			if timestamp is None:
 				timestamp = current_time
 			
-			new_state = result.get("state", not self.switches.get(uid, {}).get("state", False))
+			new_state = result.get("state", bool(state))
 			if uid in self.switches:
 				self.switches[uid]["state"] = new_state
 				self.switches[uid]["lastToggled"] = timestamp
@@ -268,6 +378,103 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			_LOGGER.error("Failed to toggle switch %s: %s", uid, ex)
 			return False
 
+	async def reannounce_owned_switches(self) -> Dict[str, Any]:
+		"""Re-announce (re-create if missing) v2-owned switches on the current server.
+
+		This is useful when pointing the integration at a fresh server/DB: v2 switch UIDs are
+		deterministic from the signing key + index, so we can re-create the same UIDs.
+		"""
+		result: Dict[str, Any] = {
+			"eligible": 0,
+			"attempted": 0,
+			"succeeded": 0,
+			"skipped": 0,
+			"errors": [],
+		}
+
+		if not self.crypto_enabled:
+			result["errors"].append("No signing key configured for this entry.")
+			return result
+
+		options = dict(self.config_entry.options or {})
+		imported = options.get(_OPT_IMPORTED_SWITCHES, {}) or {}
+		changed = False
+
+		# Build a list first (avoid mutating while iterating)
+		targets: list[tuple[str, int, Dict[str, Any]]] = []
+		for uid, info in imported.items():
+			if not isinstance(uid, str):
+				result["skipped"] += 1
+				continue
+			if not isinstance(info, dict):
+				result["skipped"] += 1
+				continue
+			if not info.get("is_owner", False):
+				continue
+
+			# Only v2 UIDs are re-announceable (deterministic)
+			if not uid.startswith("vs_"):
+				result["skipped"] += 1
+				continue
+
+			idx = info.get(_OPT_CRYPTO_INDEX)
+			cached = info.get("cached_data") if isinstance(info.get("cached_data"), dict) else {}
+			if not isinstance(idx, int):
+				# Fall back to cached_data.index if present
+				idx2 = cached.get("index") if isinstance(cached, dict) else None
+				if isinstance(idx2, int):
+					idx = idx2
+					info[_OPT_CRYPTO_INDEX] = idx
+					changed = True
+
+			if not isinstance(idx, int):
+				result["skipped"] += 1
+				continue
+
+			targets.append((uid, idx, cached if isinstance(cached, dict) else {}))
+
+		result["eligible"] = len(targets)
+		if changed:
+			options[_OPT_IMPORTED_SWITCHES] = imported
+			await self._async_update_entry_options(options)
+
+		for uid, idx, cached in targets:
+			result["attempted"] += 1
+			try:
+				# Best-effort metadata restore
+				description = cached.get("description", "") if isinstance(cached, dict) else ""
+				location = cached.get("location", "") if isinstance(cached, dict) else ""
+				category = cached.get("category", "Other") if isinstance(cached, dict) else "Other"
+				publicize = bool(cached.get("publicize", False)) if isinstance(cached, dict) else False
+				link = cached.get("link", "") if isinstance(cached, dict) else ""
+
+				resp = await self.api_client.create_switch_v2(
+					index=idx,
+					description=description,
+					location=location,
+					category=category,
+					publicize=publicize,
+					link=link,
+					captcha_token="",
+				)
+				created_uid = resp.get("uid")
+				if created_uid and created_uid != uid:
+					result["errors"].append(f"{uid}: server returned different UID ({created_uid}) for index={idx}")
+					continue
+				result["succeeded"] += 1
+			except VomeSyncAPIError as ex:
+				result["errors"].append(f"{uid}: {ex}")
+			except Exception as ex:  # noqa: BLE001
+				result["errors"].append(f"{uid}: unexpected error: {ex}")
+
+		# Refresh local state after re-announcing
+		try:
+			await self.async_request_refresh()
+		except Exception as ex:  # noqa: BLE001
+			_LOGGER.debug("Refresh after re-announce skipped (non-fatal): %s", ex)
+
+		return result
+
 	async def create_switch(
 		self,
 		name: str,
@@ -278,14 +485,55 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 	) -> Optional[str]:
 		"""Create a new switch."""
 		try:
-			result = await self.api_client.create_switch(
-				description=description,
-				location=location,
-				category=category,
-				publicize=publicize
-			)
+			# If the user only provided a local entity name, use it as the server-visible description
+			# so the website doesn't show "Untitled switch".
+			if not description and name:
+				description = name
 			
-			uid = result["uid"]
+			options = dict(self.config_entry.options or {})
+			imported_switches = options.get(_OPT_IMPORTED_SWITCHES, {}) or {}
+			
+			if self.crypto_enabled:
+				# Pick the next free index for deterministic subkeys
+				used_indices: set[int] = set()
+
+				for info in imported_switches.values():
+					idx = info.get(_OPT_CRYPTO_INDEX)
+					if isinstance(idx, int):
+						used_indices.add(idx)
+				
+				for sw in (self.switches or {}).values():
+					idx = sw.get("index")
+					if isinstance(idx, int):
+						used_indices.add(idx)
+				
+				start_idx = options.get(_OPT_CRYPTO_NEXT_INDEX, 0)
+				if not isinstance(start_idx, int) or start_idx < 0:
+					start_idx = 0
+				
+				index = start_idx
+				while index in used_indices:
+					index += 1
+				
+				result = await self.api_client.create_switch_v2(
+					index=index,
+					description=description,
+					location=location,
+					category=category,
+					publicize=publicize,
+				)
+				uid = result["uid"]
+				# Ensure index is stored locally even if server omits it for any reason
+				result.setdefault("index", index)
+				options[_OPT_CRYPTO_NEXT_INDEX] = index + 1
+			else:
+				result = await self.api_client.create_switch(
+					description=description,
+					location=location,
+					category=category,
+					publicize=publicize
+				)
+				uid = result["uid"]
 			
 			_LOGGER.info("Switch created via API: uid=%s, name=%s", uid, name)
 			
@@ -297,14 +545,13 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			}
 			
 			# Automatically import this switch (add to local cache)
-			options = dict(self.config_entry.options or {})
-			imported_switches = options.get("imported_switches", {})
 			imported_switches[uid] = {
 				"name": name,
 				"is_owner": True,
-				"cached_data": self.switches[uid]
+				"cached_data": self.switches[uid],
+				**({_OPT_CRYPTO_INDEX: self.switches[uid].get("index")} if self.crypto_enabled else {}),
 			}
-			options["imported_switches"] = imported_switches
+			options[_OPT_IMPORTED_SWITCHES] = imported_switches
 			
 			await self._async_update_entry_options(options)
 			_LOGGER.info("Auto-imported newly created switch: %s", name)
@@ -458,6 +705,14 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		"""Shutdown the coordinator."""
 		_LOGGER.info("Shutting down VomeSync coordinator")
 		
+		# Unregister linked entity listener
+		if self._linked_entity_listener_unsub:
+			try:
+				self._linked_entity_listener_unsub()
+			except Exception as ex:  # noqa: BLE001
+				_LOGGER.debug("Failed to unsubscribe linked-entity listener: %s", ex)
+			self._linked_entity_listener_unsub = None
+		
 		# Close WebSocket connections
 		await self.websocket_client.disconnect()
 		
@@ -476,35 +731,59 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 	@property
 	def personal_key(self) -> str:
 		"""Get personal key."""
-		return self.config_entry.data[CONF_PERSONAL_KEY]
+		return self.config_entry.data.get(CONF_PERSONAL_KEY, "")
+
+	@property
+	def crypto_enabled(self) -> bool:
+		"""Whether this entry is configured for crypto auth."""
+		return bool(self.config_entry.data.get(CONF_AUTH_MODE) == AUTH_MODE_CRYPTO and self.config_entry.data.get(CONF_CRYPTO_SEED))
 
 	async def _trigger_linked_entities(self, uid: str, state: bool, params: Optional[Dict[str, Any]] = None) -> None:
 		"""Trigger linked entities when switch state changes."""
-		import time
-		
-		# Rate limiting to prevent infinite loops
-		current_time = time.time()
-		last_trigger = self._last_trigger_time.get(uid, 0)
-		
-		if current_time - last_trigger < self._trigger_cooldown:
-			_LOGGER.warning(
-				"Rate limit: Skipping trigger for %s (%.1fs since last trigger, cooldown: %.1fs)",
-				uid, current_time - last_trigger, self._trigger_cooldown
-			)
-			return
-		
 		options = self.config_entry.options or {}
-		linked_entities = options.get("linked_entities", {})
+		linked_entities = options.get("linked_entities", {}) or {}
 		
 		_LOGGER.debug("Checking linked entities for %s. All linked: %s", uid, linked_entities)
 		
-		entities_to_trigger = linked_entities.get(uid, [])
+		cfg = self._parse_link_config(linked_entities.get(uid))
+		direction = cfg.get(_LINK_CFG_DIRECTION, _LINK_DIR_BOTH)
+		if direction == _LINK_DIR_ENTITIES_TO_SWITCH:
+			_LOGGER.debug("Linked entities direction for %s is entities->switch; skipping switch->entities triggers", uid)
+			return
+		
+		entities_to_trigger = cfg.get(_LINK_CFG_ENTITIES, [])
 		if not entities_to_trigger:
 			_LOGGER.debug("No linked entities found for switch %s", uid)
 			return
 		
-		# Update last trigger time
-		self._last_trigger_time[uid] = current_time
+		now = time.monotonic()
+		blocked_until = self._linked_trigger_blocked_until.get(uid, 0.0)
+		if now < blocked_until:
+			remaining = blocked_until - now
+			_LOGGER.warning(
+				"Loop protection: Skipping linked-entity trigger for %s (blocked for %.1fs)",
+				uid,
+				remaining,
+			)
+			return
+		
+		history = self._linked_trigger_history.setdefault(uid, deque())
+		cutoff = now - _LINKED_TRIGGER_BURST_WINDOW_SECONDS
+		while history and history[0] < cutoff:
+			history.popleft()
+		history.append(now)
+		
+		if len(history) > _LINKED_TRIGGER_BURST_MAX:
+			self._linked_trigger_blocked_until[uid] = now + _LINKED_TRIGGER_BLOCK_SECONDS
+			history.clear()
+			_LOGGER.warning(
+				"Loop protection: Blocking linked-entity triggers for %s for %.0fs (> %d triggers within %.0fs)",
+				uid,
+				_LINKED_TRIGGER_BLOCK_SECONDS,
+				_LINKED_TRIGGER_BURST_MAX,
+				_LINKED_TRIGGER_BURST_WINDOW_SECONDS,
+			)
+			return
 		
 		_LOGGER.info(
 			"Triggering %d linked entities for switch %s (state: %s): %s",
@@ -519,6 +798,9 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		
 		for entity_id in entities_to_trigger:
 			try:
+				# Suppress the resulting state-change event so we don't echo back to the switch.
+				self._linked_entity_suppress_until[entity_id] = now + _LINKED_ENTITY_SUPPRESSION_SECONDS
+				
 				domain = entity_id.split(".")[0]
 				_LOGGER.info("Calling %s.%s for %s", domain, service, entity_id)
 				
@@ -548,13 +830,249 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				except Exception as err2:
 					_LOGGER.error("Failed to trigger linked entity %s (fallback): %s", entity_id, err2)
 
+	def _extract_linked_entity_ids(self, raw_value: Any) -> list[str]:
+		"""Normalise linked entity config value to a list of entity_ids."""
+		if isinstance(raw_value, list):
+			return [e for e in raw_value if isinstance(e, str) and e]
+		if isinstance(raw_value, dict):
+			entities = raw_value.get(_LINK_CFG_ENTITIES, [])
+			if isinstance(entities, list):
+				return [e for e in entities if isinstance(e, str) and e]
+		return []
+
+	def _parse_link_config(self, raw_value: Any) -> Dict[str, Any]:
+		"""Parse a per-switch link config into a normalised dict."""
+		entities = self._extract_linked_entity_ids(raw_value)
+		mode = _LINK_MODE_MASTER
+		master: Optional[str] = entities[0] if entities else None
+		direction = _LINK_DIR_BOTH
+		
+		if isinstance(raw_value, dict):
+			raw_mode = raw_value.get(_LINK_CFG_MODE)
+			if isinstance(raw_mode, str) and raw_mode in _VALID_LINK_MODES:
+				mode = raw_mode
+			raw_master = raw_value.get(_LINK_CFG_MASTER)
+			if isinstance(raw_master, str) and raw_master in entities:
+				master = raw_master
+			elif entities:
+				master = entities[0]
+			
+			raw_direction = raw_value.get(_LINK_CFG_DIRECTION)
+			if isinstance(raw_direction, str) and raw_direction in _VALID_LINK_DIRECTIONS:
+				direction = raw_direction
+			else:
+				# Backwards compatibility for the short-lived "read_only" flag:
+				# True meant "switch → entities only" (disable entity → switch).
+				if raw_value.get(_LINK_CFG_READ_ONLY) is True:
+					direction = _LINK_DIR_SWITCH_TO_ENTITIES
+		
+		return {
+			_LINK_CFG_ENTITIES: entities,
+			_LINK_CFG_MODE: mode,
+			_LINK_CFG_MASTER: master,
+			_LINK_CFG_DIRECTION: direction,
+		}
+
+	def _schedule_hass_task(self, coro) -> None:
+		"""Schedule a coroutine on Home Assistant without assuming hass.async_create_task exists."""
+		try:
+			create_task = getattr(self.hass, "async_create_task", None)
+			if callable(create_task):
+				create_task(coro)
+				return
+			self.hass.loop.create_task(coro)
+		except Exception as ex:  # noqa: BLE001
+			_LOGGER.debug("Failed to schedule task: %s", ex)
+
+	def _state_is_on(self, state_obj: Any) -> Optional[bool]:
+		"""Best-effort 'is on' conversion for a Home Assistant State-like object."""
+		if state_obj is None:
+			return None
+		state = getattr(state_obj, "state", None)
+		if not isinstance(state, str):
+			return None
+		if state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+			return None
+		return state == STATE_ON
+
+	def _extract_link_params_from_state(self, state_obj: Any) -> Optional[Dict[str, Any]]:
+		"""Extract supported parameter fields from a State-like object's attributes."""
+		if state_obj is None:
+			return None
+		attrs = getattr(state_obj, "attributes", None)
+		if not isinstance(attrs, dict) or not attrs:
+			return None
+		params: Dict[str, Any] = {}
+		for key in _LINK_PARAM_KEYS:
+			if key in attrs:
+				params[key] = attrs[key]
+		return params or None
+
+	def _link_params_changed(self, old_state: Any, new_state: Any) -> bool:
+		"""Whether any supported param attribute changed."""
+		if old_state is None or new_state is None:
+			return True
+		old_attrs = getattr(old_state, "attributes", None)
+		new_attrs = getattr(new_state, "attributes", None)
+		if not isinstance(old_attrs, dict) or not isinstance(new_attrs, dict):
+			return True
+		for key in _LINK_PARAM_KEYS:
+			if old_attrs.get(key) != new_attrs.get(key):
+				return True
+		return False
+
+	async def _async_handle_linked_entity_state_change(self, entity_id: str, old_state: Any, new_state: Any) -> None:
+		"""Handle a linked entity state change by updating owned switch state."""
+		if not isinstance(entity_id, str) or not entity_id:
+			return
+		
+		now = time.monotonic()
+		if now < self._linked_entity_suppress_until.get(entity_id, 0.0):
+			return
+		
+		uids = self._linked_entity_to_uids.get(entity_id)
+		if not uids:
+			return
+		
+		new_is_on = self._state_is_on(new_state)
+		if new_is_on is None:
+			return
+		
+		state_changed = True
+		if old_state is not None and getattr(old_state, "state", None) == getattr(new_state, "state", None):
+			state_changed = False
+		
+		params: Optional[Dict[str, Any]] = None
+		if new_is_on:
+			extracted = self._extract_link_params_from_state(new_state)
+			if extracted and (state_changed or self._link_params_changed(old_state, new_state)):
+				params = extracted
+		
+		for uid in uids:
+			# Only owners can drive the upstream switch.
+			if not self.is_switch_owner(uid):
+				continue
+			
+			cfg = self._linked_config_by_uid.get(uid)
+			if not isinstance(cfg, dict):
+				continue
+			direction = cfg.get(_LINK_CFG_DIRECTION, _LINK_DIR_BOTH)
+			if direction == _LINK_DIR_SWITCH_TO_ENTITIES:
+				continue
+			
+			entities = cfg.get(_LINK_CFG_ENTITIES, [])
+			mode = cfg.get(_LINK_CFG_MODE, _LINK_MODE_MASTER)
+			master = cfg.get(_LINK_CFG_MASTER)
+			
+			if not isinstance(entities, list) or not entities:
+				continue
+			
+			desired: Optional[bool] = None
+			params_to_send: Optional[Dict[str, Any]] = None
+			
+			if mode == _LINK_MODE_MASTER:
+				# Only master changes drive the switch.
+				if isinstance(master, str) and master and entity_id != master:
+					continue
+				desired = new_is_on
+				params_to_send = params if desired else None
+			
+			elif mode in (_LINK_MODE_OR, _LINK_MODE_AND):
+				# Aggregate across linked entities using the freshest known state for the changed entity.
+				seen_any = False
+				agg_or = False
+				agg_and = True
+				
+				for eid in entities:
+					if not isinstance(eid, str) or not eid:
+						continue
+					seen_any = True
+					
+					state_obj = new_state if eid == entity_id else getattr(getattr(self.hass, "states", None), "get", lambda _x: None)(eid)
+					is_on = self._state_is_on(state_obj)
+					if is_on is None:
+						is_on = False
+					
+					agg_or = agg_or or is_on
+					agg_and = agg_and and is_on
+				
+				if not seen_any:
+					continue
+				
+				desired = agg_or if mode == _LINK_MODE_OR else agg_and
+				# If we're sending "on", forward params from the entity that changed (best effort).
+				params_to_send = params if desired else None
+			
+			else:
+				# Unknown mode: be safe and do nothing.
+				continue
+			
+			current = bool(self.get_switch_data(uid) and self.get_switch_data(uid).get("state", False))
+			if current == bool(desired) and not params_to_send:
+				continue
+			
+			await self.set_switch_state(uid, bool(desired), params=params_to_send)
+
+	@callback
+	def _linked_entity_state_change_event(self, event) -> None:
+		"""Handle the HA state_changed event for linked entities."""
+		entity_id = event.data.get("entity_id")
+		old_state = event.data.get("old_state")
+		new_state = event.data.get("new_state")
+		self._schedule_hass_task(self._async_handle_linked_entity_state_change(entity_id, old_state, new_state))
+
 	async def async_setup_entity_links(self) -> None:
 		"""Set up entity links (called after updating config options)."""
 		options = self.config_entry.options or {}
-		linked_entities = options.get("linked_entities", {})
-		_LOGGER.info("Entity links configured: %s", linked_entities)
-		# Refresh the data to ensure we have latest state
-		await self.async_request_refresh()
+		linked_entities = options.get("linked_entities", {}) or {}
+		
+		self._linked_entity_to_uids = {}
+		self._linked_config_by_uid = {}
+		
+		tracked_entity_ids: Set[str] = set()
+		
+		for uid, raw_cfg in linked_entities.items():
+			if not isinstance(uid, str) or not uid:
+				continue
+			
+			cfg = self._parse_link_config(raw_cfg)
+			entities = cfg.get(_LINK_CFG_ENTITIES, [])
+			if not entities:
+				continue
+			
+			self._linked_config_by_uid[uid] = cfg
+			
+			# Only track HA entity state changes for bidirectional (owned + direction includes entities->switch) links.
+			if not self.is_switch_owner(uid):
+				continue
+			direction = cfg.get(_LINK_CFG_DIRECTION, _LINK_DIR_BOTH)
+			if direction == _LINK_DIR_SWITCH_TO_ENTITIES:
+				continue
+			
+			for entity_id in entities:
+				tracked_entity_ids.add(entity_id)
+				self._linked_entity_to_uids.setdefault(entity_id, set()).add(uid)
+		
+		if self._linked_entity_listener_unsub:
+			try:
+				self._linked_entity_listener_unsub()
+			except Exception as ex:  # noqa: BLE001
+				_LOGGER.debug("Failed to unsubscribe previous linked-entity listener: %s", ex)
+			self._linked_entity_listener_unsub = None
+		
+		if tracked_entity_ids:
+			self._linked_entity_listener_unsub = async_track_state_change_event(
+				self.hass,
+				list(tracked_entity_ids),
+				self._linked_entity_state_change_event,
+			)
+			_LOGGER.info(
+				"Entity links configured for bidirectional sync: %d entities (%d switches)",
+				len(tracked_entity_ids),
+				len(self._linked_config_by_uid),
+			)
+		else:
+			_LOGGER.info("No linked entities configured for bidirectional sync")
 
 	async def async_add_imported_entities(self) -> None:
 		"""Dynamically add entities for imported switches without reloading the entry."""

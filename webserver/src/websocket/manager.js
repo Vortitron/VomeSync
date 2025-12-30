@@ -3,7 +3,7 @@ const url = require('url');
 const { v4: uuidv4 } = require('uuid');
 const redisClient = require('../utils/redis');
 const logger = require('../utils/logger');
-// validateUID imported but not used - using inline validation instead
+const { isValidSwitchUid } = require('../utils/validation');
 
 class WebSocketManager {
 	constructor() {
@@ -34,9 +34,7 @@ class WebSocketManager {
 	}
 
 	isValidUID(uid) {
-		// Basic UUID validation
-		const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-		return uuidRegex.test(uid);
+		return isValidSwitchUid(uid);
 	}
 
 	handleConnection(ws, req) {
@@ -177,12 +175,16 @@ class WebSocketManager {
 			const switchData = await redisClient.getSwitchState(uid);
 
 			if (switchData) {
-				this.sendToClient(clientId, {
+				const payload = {
 					type: 'state_update',
 					uid,
 					state: switchData.state,
 					timestamp: switchData.lastToggled || Date.now()
-				});
+				};
+				if (switchData.params && Object.keys(switchData.params).length > 0) {
+					payload.params = switchData.params;
+				}
+				this.sendToClient(clientId, payload);
 			} else {
 				this.sendToClient(clientId, {
 					type: 'error',
@@ -237,12 +239,16 @@ class WebSocketManager {
 					const updateData = JSON.parse(message);
 
 					// Broadcast to WebSocket clients
-					this.broadcastToSwitch(uid, {
+					const payload = {
 						type: 'state_update',
 						uid: updateData.uid,
 						state: updateData.state,
 						timestamp: updateData.timestamp
-					});
+					};
+					if (updateData.params && Object.keys(updateData.params).length > 0) {
+						payload.params = updateData.params;
+					}
+					this.broadcastToSwitch(uid, payload);
 				} catch (error) {
 					logger.error('Error processing Redis switch update:', error);
 				}

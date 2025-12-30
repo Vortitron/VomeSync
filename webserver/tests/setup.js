@@ -55,5 +55,21 @@ global.testUtils = {
 	createTestPersonalKey: () => {
 		const { v4: uuidv4 } = require('uuid');
 		return uuidv4();
+	},
+
+	// Create Ed25519 keypair and return raw public key + key objects
+	createEd25519Keypair: () => {
+		const crypto = require('crypto');
+		const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+		const spki = publicKey.export({ format: 'der', type: 'spki' });
+		const rawPublicKey = spki.subarray(spki.length - 32); // Ed25519 raw key is final 32 bytes in SPKI
+		return { publicKey, privateKey, rawPublicKey };
+	},
+
+	// Sign a UTF-8 message with an Ed25519 private key; returns base64url
+	ed25519SignBase64Url: (privateKey, message) => {
+		const crypto = require('crypto');
+		const sig = crypto.sign(null, Buffer.from(message, 'utf8'), privateKey);
+		return Buffer.from(sig).toString('base64url');
 	}
 };

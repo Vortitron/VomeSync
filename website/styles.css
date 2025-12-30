@@ -89,6 +89,39 @@ body {
 	font-weight: 700;
 }
 
+.env-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0.25rem 0.5rem;
+	border-radius: 9999px;
+	border: 1px solid var(--border);
+	background: rgba(255, 255, 255, 0.04);
+	color: var(--text-secondary);
+	font-size: 0.75rem;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.env-badge.env-live {
+	border-color: rgba(239, 68, 68, 0.5);
+	background: rgba(239, 68, 68, 0.12);
+	color: #fecaca;
+}
+
+.env-badge.env-dev {
+	border-color: rgba(34, 197, 94, 0.5);
+	background: rgba(34, 197, 94, 0.12);
+	color: #bbf7d0;
+}
+
+.env-badge.env-custom {
+	border-color: rgba(59, 130, 246, 0.5);
+	background: rgba(59, 130, 246, 0.12);
+	color: #bfdbfe;
+}
+
 .nav-links {
 	display: flex;
 	align-items: center;
@@ -221,6 +254,78 @@ body {
 	border: none;
 	white-space: nowrap;
 	line-height: 1.5;
+}
+
+/* Button-like elements (for plain <button>/<a> not using .btn) */
+button {
+	font: inherit;
+}
+
+.refresh-btn,
+.retry-btn,
+.ghost-btn,
+.copy-uid-btn,
+.view-details-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.5rem;
+	padding: 0.625rem 1rem;
+	border-radius: var(--radius);
+	font-weight: 600;
+	font-size: 0.9375rem;
+	line-height: 1.5;
+	cursor: pointer;
+	transition: var(--transition);
+	white-space: nowrap;
+	text-decoration: none;
+	border: 1px solid var(--border);
+	background: var(--bg-secondary);
+	color: var(--text-primary);
+	box-shadow: var(--shadow-sm);
+}
+
+.refresh-btn:hover,
+.retry-btn:hover,
+.ghost-btn:hover,
+.copy-uid-btn:hover,
+.view-details-btn:hover {
+	background: var(--bg-tertiary);
+	border-color: var(--border-light);
+	transform: translateY(-1px);
+}
+
+.ghost-btn {
+	background: rgba(255, 255, 255, 0.03);
+	color: var(--text-secondary);
+	box-shadow: none;
+}
+
+.ghost-btn:hover {
+	color: var(--primary);
+	border-color: var(--primary);
+	background: rgba(124, 58, 237, 0.1);
+}
+
+/* Small "chip" buttons used inside cards */
+.chip-link {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0.25rem 0.625rem;
+	border-radius: 9999px;
+	border: 1px solid var(--border);
+	background: var(--bg-tertiary);
+	color: var(--text-secondary);
+	cursor: pointer;
+	transition: var(--transition);
+	font-size: 0.875rem;
+	line-height: 1.4;
+}
+
+.chip-link:hover {
+	border-color: var(--primary);
+	color: var(--text-primary);
 }
 
 .btn-lg {

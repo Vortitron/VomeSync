@@ -34,8 +34,7 @@ async def test_config_flow_derives_websocket_url(hass):
 		CONF_SERVER_URL: "http://example.com:3000",
 	})
 
-	assert result["type"] == FlowResultType.FORM
-	assert result["step_id"] == "generate_key"
+	assert result["type"] == FlowResultType.CREATE_ENTRY
 	assert flow._websocket_url == "ws://example.com:3000/ws"
 
 	# Test HTTPS -> WSS
@@ -45,22 +44,22 @@ async def test_config_flow_derives_websocket_url(hass):
 		CONF_SERVER_URL: "https://secure.example.com",
 	})
 
+	assert result2["type"] == FlowResultType.CREATE_ENTRY
 	assert flow2._websocket_url == "wss://secure.example.com/ws"
 
 
 @pytest.mark.asyncio
 async def test_config_flow_with_existing_personal_key(hass):
-	"""Test config flow accepts existing personal key."""
+	"""Test config flow creates a keypair entry."""
 	flow = VomeSyncConfigFlow()
 	flow.hass = hass
 
 	result = await flow.async_step_user({
 		CONF_SERVER_URL: "https://test.com",
-		CONF_PERSONAL_KEY: "existing-key-12345",
 	})
 
 	assert result["type"] == FlowResultType.CREATE_ENTRY
-	assert result["data"][CONF_PERSONAL_KEY] == "existing-key-12345"
+	assert result["data"][CONF_SERVER_URL] == "https://test.com"
 
 
 @pytest.mark.asyncio
@@ -258,10 +257,24 @@ async def test_options_flow_link_entities(hass, config_entry):
 			"entities": ["light.living_room", "switch.bedroom"]
 		})
 
-	assert result["type"] == FlowResultType.CREATE_ENTRY
-	options = result["data"]
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "link_entities_behaviour"
+
+	# Choose behaviour (default/master)
+	result2 = await flow.async_step_link_entities_behaviour({
+		"mode": "master",
+		"master": "light.living_room",
+		"direction": "both",
+	})
+
+	assert result2["type"] == FlowResultType.CREATE_ENTRY
+	options = result2["data"]
 	assert "linked_entities" in options
-	assert options["linked_entities"]["switch-uid"] == ["light.living_room", "switch.bedroom"]
+	cfg = options["linked_entities"]["switch-uid"]
+	assert cfg["entities"] == ["light.living_room", "switch.bedroom"]
+	assert cfg["mode"] == "master"
+	assert cfg["master"] == "light.living_room"
+	assert cfg["direction"] == "both"
 
 
 @pytest.mark.asyncio
@@ -311,11 +324,12 @@ async def test_options_flow_edit_connection_urls(hass, config_entry):
 	assert result["type"] == FlowResultType.FORM
 	assert CONF_SERVER_URL in result["data_schema"].schema
 	assert CONF_WEBSOCKET_URL in result["data_schema"].schema
+	assert "crypto_seed" not in result["data_schema"].schema
+	assert "owner_pubkey" not in result["data_schema"].schema
 
 	# Update URLs
 	with patch.object(hass.config_entries, "async_reload", new=AsyncMock()):
 		result = await flow.async_step_edit_connection({
-			"personal_key": "test-key",
 			CONF_SERVER_URL: "https://new-server.com",
 			CONF_WEBSOCKET_URL: "wss://new-server.com/ws",
 		})

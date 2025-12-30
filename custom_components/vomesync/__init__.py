@@ -39,13 +39,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	# Start coordinator and fetch data from API before setting up platforms
 	await coordinator.async_config_entry_first_refresh()
 	
+	# Set up entity linking (including bidirectional tracking for owned switches)
+	await coordinator.async_setup_entity_links()
+	
 	# Setup platforms (entities will be created from coordinator data)
 	await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 	
 	_register_services(hass)
-	
-	# Register options update listener
-	entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 	
 	return True
 

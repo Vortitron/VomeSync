@@ -37,7 +37,7 @@ The Docker Compose setup includes:
 
 ### Optional
 - `API_DOMAIN`: Domain for API server (default: sync.vome.io)
-- `WEBSITE_DOMAIN`: Domain for website (default: remoteswitch.vome.io)
+- `WEBSITE_DOMAIN`: Domain for website (default: sync.vome.io)
 - `SSL_CERT_PATH`: Path to SSL certificate
 - `SSL_KEY_PATH`: Path to SSL private key
 - `CORS_ORIGINS`: Allowed CORS origins (comma-separated)
@@ -65,7 +65,10 @@ To enable HTTPS:
 
 ### Update services
 ```bash
-./scripts/deploy.sh update
+./scripts/deploy.sh update       # updates dev + live
+./scripts/deploy.sh update-dev   # dev only
+./scripts/deploy.sh update-live  # live only
+./scripts/deploy.sh push-live    # alias for update-live
 ```
 
 ### View status
@@ -104,38 +107,53 @@ If you prefer to use Docker Compose directly:
 
 ```bash
 # Start services
-docker-compose up -d
+docker compose up -d
 
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # Stop services
-docker-compose down
+docker compose down
 
 # Rebuild specific service
-docker-compose build vomesync-webserver
-docker-compose up -d vomesync-webserver
+docker compose build vomesync-webserver
+docker compose up -d vomesync-webserver
 
 # View service status
-docker-compose ps
+docker compose ps
 ```
 
 ## Port Mapping
 
 Default port mappings:
 
-- `3000`: API server (HTTP)
+- `3090`: API server (HTTP)
 - `3001`: WebSocket server
-- `6379`: Redis (localhost only)
+- `8111`: Website (direct)
 - `8080`: Nginx proxy (HTTP)
 - `8443`: Nginx proxy (HTTPS)
+
+Ports are configurable via `.env`:
+
+- `VOMESYNC_API_HOST_PORT`
+- `VOMESYNC_WS_HOST_PORT`
+- `VOMESYNC_WEBSITE_HOST_PORT`
+- `VOMESYNC_PROXY_HTTP_HOST_PORT`
+- `VOMESYNC_PROXY_HTTPS_HOST_PORT`
 
 ## Data Persistence
 
 Data is persisted in Docker volumes:
 
-- `redis_data`: Redis database files
-- `webserver_logs`: Application logs
+- `redis_data` (defaults to `vomesync_redis_data`): Redis database files (includes public switch directory data)
+- `webserver_logs` (defaults to `vomesync_webserver_logs`): Application logs
+
+### Important: do not accidentally switch volumes
+
+If you change the Compose project name or volume names, Docker may create a **new empty Redis volume**, which can look like all switches have disappeared.
+
+- To keep production data stable, set (and keep) `VOMESYNC_REDIS_VOLUME_NAME` in `.env`.
+- The deployment script (`docker/scripts/deploy.sh`) will attempt to **auto-adopt** an existing `*_redis_data` volume if it can do so unambiguously.
 
 ## Monitoring
 
@@ -145,10 +163,10 @@ All services include health checks:
 
 ```bash
 # Check service health
-docker-compose ps
+docker compose ps
 
 # View detailed health status
-docker inspect $(docker-compose ps -q vomesync-webserver) | grep Health -A 10
+docker inspect $(docker compose ps -q vomesync-webserver) | grep Health -A 10
 ```
 
 ### Logs
@@ -206,10 +224,10 @@ docker-compose logs --tail=100
 1. **Port conflicts**
    ```bash
    # Check what's using port
-   sudo netstat -tulpn | grep :3000
+   ss -ltnp | grep :3090 || true
    
    # Kill process if needed
-   sudo kill -9 <PID>
+   kill -9 <PID>
    ```
 
 2. **Permission issues**
@@ -231,7 +249,7 @@ docker-compose logs --tail=100
 4. **Redis connection issues**
    ```bash
    # Test Redis connection
-   docker-compose exec vomesync-redis redis-cli ping
+   docker compose exec vomesync-redis redis-cli ping
    ```
 
 5. **WebSocket connection issues**
@@ -246,11 +264,11 @@ docker-compose logs --tail=100
 
 ```bash
 # Check for errors
-docker-compose logs | grep -i error
+docker compose logs | grep -i error
 
 # Check API requests
-docker-compose logs vomesync-webserver | grep "POST\|GET"
+docker compose logs vomesync-webserver | grep "POST\|GET"
 
 # Check WebSocket connections
-docker-compose logs vomesync-webserver | grep -i websocket
+docker compose logs vomesync-webserver | grep -i websocket
 ```

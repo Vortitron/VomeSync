@@ -1,9 +1,55 @@
 // VomeSync Website JavaScript (static SPA)
 
-// Auto-detect API URL based on environment
-const API_BASE_URL = window.location.port === '8112' 
-	? 'http://localhost:3091/api'  // Dev environment
-	: 'https://sync.vome.io/api';   // Production environment
+function normaliseApiBaseUrl(url) {
+	if (!url) return '';
+	return String(url).trim().replace(/\/+$/, '');
+}
+
+function getApiBaseUrlOverride() {
+	const params = new URLSearchParams(window.location.search);
+	const override = params.get('api');
+	return override ? normaliseApiBaseUrl(override) : '';
+}
+
+function resolveApiBaseUrl() {
+	const override = getApiBaseUrlOverride();
+	if (override) return override;
+	
+	const port = window.location.port;
+	const hostname = window.location.hostname;
+	
+	// When served via the combined proxy (sync.vome.io), the API is available at same-origin /api.
+	if (!port || port === '80' || port === '443' || port === '8080' || port === '8443') {
+		return `${window.location.origin}/api`;
+	}
+	
+	// Direct website ports (docker-compose defaults)
+	if (port === '8112') {
+		return `http://${hostname}:3091/api`; // dev webserver port
+	}
+	if (port === '8111') {
+		return `http://${hostname}:3090/api`; // live webserver port
+	}
+	
+	// Fallback to same-origin /api
+	return `${window.location.origin}/api`;
+}
+
+function resolveEnvBadge(apiBaseUrl) {
+	const host = window.location.hostname;
+	const port = window.location.port;
+	
+	if (host === 'sync.vome.io') {
+		return { label: 'LIVE', className: 'env-live', api: apiBaseUrl };
+	}
+	if (port === '8112' || apiBaseUrl.includes(':3091')) {
+		return { label: 'DEV', className: 'env-dev', api: apiBaseUrl };
+	}
+	return { label: 'CUSTOM', className: 'env-custom', api: apiBaseUrl };
+}
+
+// API base URL (resolved once at startup)
+const API_BASE_URL = resolveApiBaseUrl();
 
 let allSwitches = [];
 let filteredSwitches = [];
@@ -46,9 +92,34 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function init() {
+	applyEnvBadge();
+	applyDynamicLinks();
 	setupEventListeners();
 	loadAllData();
 	restoreSwitchFromQuery();
+}
+
+function applyEnvBadge() {
+	const badge = document.getElementById('envBadge');
+	if (!badge) return;
+	
+	const info = resolveEnvBadge(API_BASE_URL);
+	badge.textContent = info.label;
+	badge.className = `env-badge ${info.className}`;
+	badge.title = `API: ${info.api}`;
+	badge.style.display = 'inline-flex';
+}
+
+function applyDynamicLinks() {
+	const loginLink = document.getElementById('loginLink');
+	if (loginLink) {
+		loginLink.href = `${window.location.origin}/login`;
+	}
+	
+	const serverStatusLink = document.getElementById('serverStatusLink');
+	if (serverStatusLink) {
+		serverStatusLink.href = `${API_BASE_URL}/health`;
+	}
 }
 
 function setupEventListeners() {

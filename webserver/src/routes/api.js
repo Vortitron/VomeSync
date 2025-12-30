@@ -21,6 +21,61 @@ const abbreviateKey = (key) => {
 	return `${key.substring(0, 8)}...`;
 };
 
+// V2 crypto-auth helpers
+const {
+	stableJsonStringify,
+	deriveOwnerIdFromOwnerPubKeyB64Url,
+	deriveSwitchUidFromSwitchPubKeyB64Url,
+	verifyEd25519SignatureB64Url
+} = require('../utils/crypto_v2');
+
+const V2_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+const assertFreshTimestamp = (ts) => {
+	if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) {
+		return false;
+	}
+	return Math.abs(Date.now() - ts) <= V2_MAX_CLOCK_SKEW_MS;
+};
+
+const pickSwitchMetadata = (data) => ({
+	description: data.description || '',
+	location: data.location || '',
+	category: data.category || 'Other',
+	publicize: Boolean(data.publicize),
+	link: data.link || ''
+});
+
+const v2CanonicalCreate = (data, uid) => stableJsonStringify({
+	v: 2,
+	action: 'create_switch',
+	ownerPubKey: data.ownerPubKey,
+	switchPubKey: data.switchPubKey,
+	uid,
+	index: data.index,
+	ts: data.ts,
+	nonce: data.nonce,
+	payload: pickSwitchMetadata(data)
+});
+
+const v2CanonicalMySwitches = (data) => stableJsonStringify({
+	v: 2,
+	action: 'my_switches',
+	ownerPubKey: data.ownerPubKey,
+	ts: data.ts,
+	nonce: data.nonce
+});
+
+const v2CanonicalSetState = (uid, data) => stableJsonStringify({
+	v: 2,
+	action: 'set_state',
+	uid,
+	ts: data.ts,
+	nonce: data.nonce,
+	state: Boolean(data.state),
+	params: data.params || {}
+});
+
 // Generate personal key endpoint
 router.post('/generate-key',
 	authManager.rateLimit('generate_key', 10, 3600000), // 10 per hour
@@ -52,6 +107,203 @@ router.post('/generate-key',
 				success: false,
 				error: 'Failed to generate personal key'
 			});
+		}
+	}
+);
+
+// V2: Create switch (deterministic UID derived from switch pubkey, signed by owner + switch)
+router.post('/v2/switch',
+	authManager.rateLimit('v2_create_switch', 30, 3600000),
+	validateRequest(schemas.v2CreateSwitch),
+	async (req, res) => {
+		try {
+			const data = req.validatedData;
+			const captchaToken = data.captchaToken;
+
+			// Enforce CAPTCHA for public listings if configured
+			if (data.publicize) {
+				const captcha = await authManager.verifyCaptcha(captchaToken);
+				if (!captcha.success) {
+					return res.status(400).json({
+						success: false,
+						error: captcha.error || 'Captcha verification failed'
+					});
+				}
+			}
+
+			if (!assertFreshTimestamp(data.ts)) {
+				return res.status(400).json({ success: false, error: 'Invalid or stale timestamp' });
+			}
+
+			const ownerId = deriveOwnerIdFromOwnerPubKeyB64Url(data.ownerPubKey);
+			const uid = deriveSwitchUidFromSwitchPubKeyB64Url(data.switchPubKey);
+
+			const canonical = v2CanonicalCreate(data, uid);
+
+			// Verify signatures first (cheap, no Redis writes yet)
+			const ownerOk = verifyEd25519SignatureB64Url(data.ownerPubKey, canonical, data.sigOwner);
+			if (!ownerOk) {
+				return res.status(401).json({ success: false, error: 'Invalid owner signature' });
+			}
+
+			const switchOk = verifyEd25519SignatureB64Url(data.switchPubKey, canonical, data.sigSwitch);
+			if (!switchOk) {
+				return res.status(401).json({ success: false, error: 'Invalid switch signature' });
+			}
+
+			// Replay protection
+			const claimed = await redisClient.claimV2Nonce(ownerId, data.nonce, 10 * 60 * 1000);
+			if (!claimed) {
+				return res.status(409).json({ success: false, error: 'Nonce already used' });
+			}
+
+			// Idempotency: if already exists for same owner, return it
+			const existing = await redisClient.getSwitchState(uid);
+			if (existing) {
+				if (existing.authVersion === 2 && existing.ownerId === ownerId && existing.switchPubKey === data.switchPubKey) {
+					return res.json({
+						success: true,
+						data: {
+							uid,
+							...sanitizePrivateSwitchData(existing),
+							websocketUrl: `/ws?uid=${uid}`
+						}
+					});
+				}
+				return res.status(409).json({ success: false, error: 'Switch UID already exists' });
+			}
+
+			const switchConfig = pickSwitchMetadata(data);
+
+			await redisClient.createSwitchV2(uid, ownerId, data.ownerPubKey, data.switchPubKey, data.index, switchConfig);
+			const parsedSwitch = await redisClient.getSwitchState(uid);
+
+			logger.info(`Created v2 switch: ${uid} (owner=${ownerId.substring(0, 8)}...)`);
+
+			return res.json({
+				success: true,
+				data: {
+					uid,
+					...sanitizePrivateSwitchData(parsedSwitch),
+					websocketUrl: `/ws?uid=${uid}`
+				}
+			});
+		} catch (error) {
+			logger.error('Error creating v2 switch:', error);
+			return res.status(500).json({ success: false, error: 'Failed to create switch' });
+		}
+	}
+);
+
+// V2: List switches for owner (signed by owner key)
+router.post('/v2/my-switches',
+	authManager.rateLimit('v2_my_switches', 200, 900000),
+	validateRequest(schemas.v2MySwitches),
+	async (req, res) => {
+		try {
+			const data = req.validatedData;
+			if (!assertFreshTimestamp(data.ts)) {
+				return res.status(400).json({ success: false, error: 'Invalid or stale timestamp' });
+			}
+
+			const ownerId = deriveOwnerIdFromOwnerPubKeyB64Url(data.ownerPubKey);
+			const canonical = v2CanonicalMySwitches(data);
+			const ok = verifyEd25519SignatureB64Url(data.ownerPubKey, canonical, data.sigOwner);
+			if (!ok) {
+				return res.status(401).json({ success: false, error: 'Invalid owner signature' });
+			}
+
+			const claimed = await redisClient.claimV2Nonce(ownerId, data.nonce, 10 * 60 * 1000);
+			if (!claimed) {
+				return res.status(409).json({ success: false, error: 'Nonce already used' });
+			}
+
+			const switches = await redisClient.getOwnerSwitches(ownerId);
+			const sanitized = switches.map((s) => sanitizePrivateSwitchData(s));
+
+			return res.json({
+				success: true,
+				data: {
+					switches: sanitized,
+					count: sanitized.length
+				}
+			});
+		} catch (error) {
+			logger.error('Error getting v2 my-switches:', error);
+			return res.status(500).json({ success: false, error: 'Failed to get switches' });
+		}
+	}
+);
+
+// V2: Set switch state (signed by switch key; supports params passthrough)
+router.post('/v2/switch/:uid/state',
+	validateUID,
+	authManager.rateLimit('v2_set_state', 500, 900000),
+	validateRequest(schemas.v2SetState),
+	async (req, res) => {
+		try {
+			const { uid } = req.params;
+			const data = req.validatedData;
+
+			if (!assertFreshTimestamp(data.ts)) {
+				return res.status(400).json({ success: false, error: 'Invalid or stale timestamp' });
+			}
+
+			const switchData = await redisClient.getSwitchState(uid);
+			if (!switchData) {
+				return res.status(404).json({ success: false, error: 'Switch not found' });
+			}
+			if (switchData.authVersion !== 2 || !switchData.switchPubKey) {
+				return res.status(400).json({ success: false, error: 'Switch is not v2 (crypto) enabled' });
+			}
+
+			const ownerId = switchData.ownerId || 'unknown';
+			const claimed = await redisClient.claimV2Nonce(ownerId, data.nonce, 10 * 60 * 1000);
+			if (!claimed) {
+				return res.status(409).json({ success: false, error: 'Nonce already used' });
+			}
+
+			const canonical = v2CanonicalSetState(uid, data);
+			const ok = verifyEd25519SignatureB64Url(switchData.switchPubKey, canonical, data.sigSwitch);
+			if (!ok) {
+				return res.status(401).json({ success: false, error: 'Invalid switch signature' });
+			}
+
+			const newState = Boolean(data.state);
+			const oldState = Boolean(switchData.state);
+			const params = (data.params && typeof data.params === 'object') ? data.params : {};
+			const timestamp = Date.now();
+
+			await redisClient.setSwitchState(uid, newState, { params });
+
+			let toggleCount = switchData.toggleCount || 0;
+			if (newState !== oldState) {
+				toggleCount = await redisClient.incrementToggleCount(uid);
+			}
+
+			await redisClient.appendEvent(uid, {
+				type: 'state',
+				state: newState,
+				actor: `owner:${(ownerId || '').substring(0, 8)}...`,
+				viaApiKey: false,
+				params,
+				timestamp
+			});
+
+			await redisClient.publishSwitchUpdate(uid, newState, params);
+
+			return res.json({
+				success: true,
+				data: {
+					uid,
+					state: newState,
+					timestamp,
+					toggleCount
+				}
+			});
+		} catch (error) {
+			logger.error(`Error setting v2 switch state ${req.params.uid}:`, error);
+			return res.status(500).json({ success: false, error: 'Failed to set switch state' });
 		}
 	}
 );

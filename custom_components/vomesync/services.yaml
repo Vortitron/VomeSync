@@ -35,7 +35,7 @@ create_switch:
             - "Other"
     publicize:
       name: Publicize
-      description: List switch publicly on remoteswitch.vome.io
+      description: List switch publicly on sync.vome.io
       required: false
       default: false
       selector:

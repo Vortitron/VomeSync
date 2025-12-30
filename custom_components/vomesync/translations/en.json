@@ -3,10 +3,10 @@
 		"step": {
 			"user": {
 				"title": "Set up VomeSync",
-				"description": "Enter the server URL. WebSocket URL will be automatically set to `/ws` on the same server. Leave Personal Key empty to generate a new one on the next step.\n\n⚠️ Public mode is NOT private — anyone with the UID can view the switch.",
+				"description": "Set up VomeSync using **keypair authentication**. This uses a locally stored signing key so you can migrate servers later without changing UIDs.\n\nWebSocket URL will be automatically set to `/ws` on the same server.\n\n⚠️ Public mode is NOT private — anyone with the UID can view/toggle the switch.",
 				"data": {
 					"server_url": "Server URL",
-					"personal_key": "Personal Key (leave blank to generate)"
+					"crypto_seed": "Signing key (private) — leave blank to generate"
 				}
 			},
 			"generate_key": {
@@ -21,7 +21,7 @@
 			"invalid_key": "The personal key is invalid.",
 			"generate_key_failed": "Could not generate a personal key. Check network access to the server.",
 			"switch_not_found": "Switch UID not found.",
-			"invalid_uid": "UID must be a valid UUID."
+			"invalid_uid": "UID must be a valid switch UID."
 		}
 	},
 	"options": {
@@ -29,13 +29,19 @@
 			"init": {
 				"title": "Manage VomeSync",
 				"menu_options": {
-					"import_switches": "Import switches from API",
-					"create_switch": "Create switch",
-					"subscribe_switch": "Subscribe to switch",
-					"manage_switches": "Manage switches",
-					"manage_api_keys": "Manage API keys",
-					"connect_website": "Connect to website",
-					"edit_connection": "Edit connection URLs"
+					"create_switch": "➕ Create switch",
+					"subscribe_switch": "👁️ Subscribe to switch",
+					"manage_switches": "🛠️ Manage switches",
+					"more": "⋯ More"
+				}
+			},
+			"more": {
+				"title": "More",
+				"menu_options": {
+					"import_switches": "⬇️ Import switches from API",
+					"reannounce_owned_switches": "📣 Re-announce owned switches",
+					"cleanup_orphaned_devices": "🧹 Clean up orphaned devices",
+					"edit_connection": "⚙️ Edit connection URLs"
 				}
 			},
 			"import_switches": {
@@ -58,7 +64,7 @@
 			},
 			"subscribe_switch": {
 				"title": "Subscribe to a switch",
-				"description": "Enter a switch UID to subscribe to. The name will be fetched automatically, and you can rename the entity afterwards in Home Assistant.\n\nYou can find public UIDs at remoteswitch.vome.io.",
+				"description": "Enter a switch UID to subscribe to. The name will be fetched automatically, and you can rename the entity afterwards in Home Assistant.\n\nYou can find public UIDs at sync.vome.io.",
 				"data": {
 					"uid": "Switch UID"
 				}
@@ -110,7 +116,17 @@
 				"title": "Link local entities",
 				"description": "{info}",
 				"data": {
-					"entities": "Select entities to link"
+					"entities": "Select entities to link",
+					"direction": "Direction"
+				}
+			},
+			"link_entities_behaviour": {
+				"title": "Link behaviour",
+				"description": "{info}",
+				"data": {
+					"mode": "Behaviour",
+					"master": "Master entity (only used for Master mode)",
+					"direction": "Direction"
 				}
 			},
 			"delete_switch": {
@@ -127,12 +143,31 @@
 					"confirm": "Confirm removal"
 				}
 			},
+			"reannounce_owned_switches": {
+				"title": "Re-announce owned switches",
+				"description": "{info}",
+				"data": {
+					"confirm": "Confirm"
+				}
+			},
+			"reannounce_owned_switches_result": {
+				"title": "Re-announce results",
+				"description": "{info}"
+			},
+			"cleanup_orphaned_devices": {
+				"title": "Clean up orphaned devices",
+				"description": "{info}",
+				"data": {
+					"devices": "Select devices to remove"
+				}
+			},
 			"edit_connection": {
 				"title": "Edit connection URLs",
 				"description": "{info}",
 				"data": {
 					"server_url": "Server URL",
-					"websocket_url": "WebSocket URL"
+					"websocket_url": "WebSocket URL",
+					"test_connection": "Test connection before saving"
 				}
 			},
 			"manage_api_keys": {
@@ -170,14 +205,16 @@
 			"subscribe_failed": "Failed to subscribe to switch.",
 			"connect_failed": "Failed to create session token. Check server URL/key and try again.",
 			"fetch_failed": "Failed to fetch API keys from server.",
-			"delete_failed": "Failed to delete API key."
+			"delete_failed": "Failed to delete API key.",
+			"test_failed": "Connection test failed. Check the URLs and try again."
 		},
 		"abort": {
 			"no_switches": "No switches to manage. Create or subscribe to switches first.",
 			"not_owner": "Only switch owners can edit settings.",
 			"no_linkable_entities": "No linkable entities found. Add switches, lights, or other controllable entities first.",
 			"no_switches_selected": "No switches were selected to import.",
-			"api_error": "Failed to fetch switches from API. Check your connection and try again."
+			"api_error": "Failed to fetch switches from API. Check your connection and try again.",
+			"no_orphaned_devices": "No orphaned devices found."
 		}
 	}
 }

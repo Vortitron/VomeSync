@@ -12,6 +12,16 @@ from .const import (
 	API_GET_STATUS,
 	API_MY_SWITCHES,
 	API_PUBLIC_SWITCHES,
+	API_V2_CREATE_SWITCH,
+	API_V2_MY_SWITCHES,
+	API_V2_SET_STATE,
+	AUTH_MODE_CRYPTO,
+)
+
+from .crypto import (
+	build_v2_create_switch_request,
+	build_v2_my_switches_request,
+	build_v2_set_state_request,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,12 +34,24 @@ class VomeSyncAPIError(Exception):
 class VomeSyncAPIClient:
 	"""Client for VomeSync API communication."""
 
-	def __init__(self, server_url: str, personal_key: Optional[str] = None) -> None:
+	def __init__(
+		self,
+		server_url: str,
+		personal_key: Optional[str] = None,
+		auth_mode: Optional[str] = None,
+		crypto_seed: Optional[str] = None,
+	) -> None:
 		"""Initialize the API client."""
 		self.server_url = server_url.rstrip("/")
 		self.personal_key = personal_key
+		self.auth_mode = auth_mode
+		self.crypto_seed = crypto_seed
 		self.session: Optional[aiohttp.ClientSession] = None
 		self._timeout = ClientTimeout(total=30, connect=10)
+
+	@property
+	def crypto_enabled(self) -> bool:
+		return bool(self.auth_mode == AUTH_MODE_CRYPTO and self.crypto_seed)
 
 	async def _get_session(self) -> aiohttp.ClientSession:
 		"""Get or create aiohttp session."""
@@ -129,6 +151,9 @@ class VomeSyncAPIClient:
 		publicize: bool = False,
 	) -> Dict[str, Any]:
 		"""Create a new switch."""
+		if self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode enabled; use create_switch_v2()")
+		
 		data = {
 			"description": description,
 			"location": location,
@@ -137,10 +162,72 @@ class VomeSyncAPIClient:
 		}
 		return await self._make_request("POST", API_CREATE_SWITCH, data, require_auth=True)
 
+	async def create_switch_v2(
+		self,
+		index: int,
+		description: str = "",
+		location: str = "",
+		category: str = "Other",
+		publicize: bool = False,
+		link: str = "",
+		captcha_token: str = "",
+	) -> Dict[str, Any]:
+		"""Create a new switch using v2 crypto auth."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode is not enabled for this client")
+		
+		req = build_v2_create_switch_request(
+			self.crypto_seed,
+			index=index,
+			description=description,
+			location=location,
+			category=category,
+			publicize=publicize,
+			link=link,
+			captcha_token=captcha_token,
+		)
+		data = {
+			"ownerPubKey": req.ownerPubKey,
+			"switchPubKey": req.switchPubKey,
+			"index": req.index,
+			"ts": req.ts,
+			"nonce": req.nonce,
+			"sigOwner": req.sigOwner,
+			"sigSwitch": req.sigSwitch,
+			"description": req.description,
+			"location": req.location,
+			"category": req.category,
+			"publicize": req.publicize,
+			"link": req.link,
+			"captchaToken": req.captchaToken,
+		}
+		return await self._make_request("POST", API_V2_CREATE_SWITCH, data, require_auth=False)
+
 	async def toggle_switch(self, uid: str) -> Dict[str, Any]:
 		"""Toggle a switch."""
 		endpoint = API_TOGGLE_SWITCH.format(uid=uid)
 		return await self._make_request("POST", endpoint, {}, require_auth=True)
+
+	async def set_switch_state_v2(
+		self,
+		uid: str,
+		index: int,
+		state: bool,
+		params: Optional[Dict[str, Any]] = None,
+	) -> Dict[str, Any]:
+		"""Set switch state using v2 crypto auth (supports params)."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode is not enabled for this client")
+		
+		payload = build_v2_set_state_request(
+			self.crypto_seed,
+			uid=uid,
+			index=index,
+			state=state,
+			params=params or {},
+		)
+		endpoint = API_V2_SET_STATE.format(uid=uid)
+		return await self._make_request("POST", endpoint, payload, require_auth=False)
 
 	async def get_switch_status(self, uid: str) -> Optional[Dict[str, Any]]:
 		"""Get switch status (public endpoint)."""
@@ -153,6 +240,11 @@ class VomeSyncAPIClient:
 	async def get_my_switches(self) -> list[Dict[str, Any]]:
 		"""Get user's switches."""
 		try:
+			if self.crypto_enabled:
+				payload = build_v2_my_switches_request(self.crypto_seed)
+				response = await self._make_request("POST", API_V2_MY_SWITCHES, payload, require_auth=False)
+				return response.get("switches", [])
+			
 			response = await self._make_request("GET", API_MY_SWITCHES, require_auth=True)
 			return response.get("switches", [])
 		except VomeSyncAPIError:
@@ -200,3 +292,41 @@ class VomeSyncAPIClient:
 			return True
 		except VomeSyncAPIError:
 			return False
+
+	async def test_connection(self) -> Dict[str, Any]:
+		"""Test API connectivity and return a structured result for UI/debugging.
+
+		This is intended for config/options flows where the user wants quick feedback.
+		It does not raise and should not log sensitive values.
+		"""
+		result: Dict[str, Any] = {
+			"server_url": self.server_url,
+			"crypto_enabled": bool(self.crypto_enabled),
+			"health_ok": False,
+			"health_error": None,
+			"my_switches_ok": False,
+			"my_switches_error": None,
+			"my_switches_count": None,
+		}
+
+		# Health
+		try:
+			await self._make_request("GET", "/api/health")
+			result["health_ok"] = True
+		except VomeSyncAPIError as ex:
+			result["health_error"] = str(ex)
+
+		# My switches (only attempt if server reachable)
+		try:
+			if self.crypto_enabled:
+				payload = build_v2_my_switches_request(self.crypto_seed)
+				response = await self._make_request("POST", API_V2_MY_SWITCHES, payload, require_auth=False)
+			else:
+				response = await self._make_request("GET", API_MY_SWITCHES, require_auth=True)
+			switches = response.get("switches", [])
+			result["my_switches_ok"] = True
+			result["my_switches_count"] = len(switches) if isinstance(switches, list) else 0
+		except VomeSyncAPIError as ex:
+			result["my_switches_error"] = str(ex)
+
+		return result

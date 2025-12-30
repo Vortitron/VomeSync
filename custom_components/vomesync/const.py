@@ -9,6 +9,10 @@ CONF_SERVER_URL = "server_url"
 CONF_WEBSOCKET_URL = "websocket_url"
 CONF_SWITCHES = "switches"
 CONF_SUBSCRIPTIONS = "subscriptions"
+CONF_AUTH_MODE = "auth_mode"
+CONF_CRYPTO_SEED = "crypto_seed"
+
+AUTH_MODE_CRYPTO = "crypto"
 
 # Default configuration
 DEFAULT_SERVER_URL = "https://sync.vome.io"
@@ -38,6 +42,11 @@ API_TOGGLE_SWITCH = "/api/toggle/{uid}"
 API_GET_STATUS = "/api/status/{uid}"
 API_MY_SWITCHES = "/api/my-switches"
 API_PUBLIC_SWITCHES = "/api/public-switches"
+
+# API v2 (crypto identity)
+API_V2_CREATE_SWITCH = "/api/v2/switch"
+API_V2_MY_SWITCHES = "/api/v2/my-switches"
+API_V2_SET_STATE = "/api/v2/switch/{uid}/state"
 
 # WebSocket message types
 WS_MSG_STATE_UPDATE = "state_update"

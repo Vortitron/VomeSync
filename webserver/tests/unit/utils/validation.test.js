@@ -24,7 +24,8 @@ describe('Validation Utilities', () => {
 				const { error, value } = schemas.createSwitch.validate(validData);
 
 				expect(error).toBeUndefined();
-				expect(value).toEqual(validData);
+				expect(value).toMatchObject(validData);
+				expect(value.link).toBe('');
 			});
 
 			test('should apply defaults for missing fields', () => {
@@ -261,7 +262,8 @@ describe('Validation Utilities', () => {
 				lastToggled: 1234567890,
 				createdAt: 1234567890,
 				toggleCount: 5,
-				publicize: true
+				publicize: true,
+				link: ''
 			};
 
 			const sanitized = sanitizePublicSwitchData(switchData);
@@ -272,12 +274,15 @@ describe('Validation Utilities', () => {
 				location: 'Test City',
 				category: 'Test',
 				state: true,
-				lastToggled: 1234567890
+				lastToggled: 1234567890,
+				toggleCount: 5,
+				userCount: 0,
+				link: '',
+				ownerProfileUrl: ''
 			});
 
 			expect(sanitized.personalKey).toBeUndefined();
 			expect(sanitized.createdAt).toBeUndefined();
-			expect(sanitized.toggleCount).toBeUndefined();
 		});
 
 		test('should handle null input', () => {
@@ -312,7 +317,8 @@ describe('Validation Utilities', () => {
 				lastToggled: 1234567890,
 				createdAt: 1234567890,
 				toggleCount: 5,
-				publicize: true
+				publicize: true,
+				link: ''
 			};
 
 			const sanitized = sanitizePrivateSwitchData(switchData);
@@ -326,7 +332,8 @@ describe('Validation Utilities', () => {
 				lastToggled: 1234567890,
 				createdAt: 1234567890,
 				toggleCount: 5,
-				publicize: true
+				publicize: true,
+				link: ''
 			});
 
 			// Personal key should still be excluded

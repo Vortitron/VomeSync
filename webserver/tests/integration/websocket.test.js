@@ -18,16 +18,17 @@ describe('WebSocket Integration Tests', () => {
 		const app = express();
 		server = http.createServer(app);
 
-		// Find available port
-		testPort = 3002;
-
 		// Initialize WebSocket manager
 		await redisClient.connect();
 		await webSocketManager.initialize(server);
 
 		// Start server
-		await new Promise((resolve) => {
-			server.listen(testPort, resolve);
+		await new Promise((resolve, reject) => {
+			server.once('error', reject);
+			server.listen(0, () => {
+				testPort = server.address().port;
+				resolve();
+			});
 		});
 	});
 

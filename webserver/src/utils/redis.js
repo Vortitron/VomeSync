@@ -148,21 +148,24 @@ class RedisClient {
 
 	async getSwitchState(uid) {
 		const key = `switch:${uid}`;
-		const data = await this.client.hGetAll(key);
+		const raw = await this.client.hGetAll(key);
 
-		if (!data || Object.keys(data).length === 0) {
+		if (!raw || Object.keys(raw).length === 0) {
 			return null;
 		}
+
+		const data = this._deserializeHash(raw);
 
 		return {
 			...data,
 			uid: data.uid,
 			state: data.state === 'on',
-			publicize: data.publicize === 'true' || data.publicize === true,
-			toggleCount: parseInt(data.toggleCount, 10) || 0,
-			createdAt: parseInt(data.createdAt, 10) || 0,
-			lastToggled: parseInt(data.lastToggled, 10) || 0,
-			link: data.link || ''
+			publicize: Boolean(data.publicize),
+			toggleCount: Number(data.toggleCount) || 0,
+			createdAt: Number(data.createdAt) || 0,
+			lastToggled: Number(data.lastToggled) || 0,
+			link: data.link || '',
+			params: (data.params && typeof data.params === 'object') ? data.params : undefined
 		};
 	}
 
@@ -189,6 +192,43 @@ class RedisClient {
 		const userKey = `user:${personalKey}`;
 		await this.client.sAdd(userKey, uid);
 		await this.client.expire(userKey, 30 * 24 * 60 * 60);
+
+		// Add to public index if publicized
+		if (switchConfig.publicize) {
+			await this.client.sAdd('public_switches', uid);
+		}
+
+		return switchData;
+	}
+
+	async createSwitchV2(uid, ownerId, ownerPubKey, switchPubKey, index, switchConfig) {
+		const key = `switch:${uid}`;
+		const switchData = {
+			uid,
+			ownerId,
+			ownerPubKey,
+			switchPubKey,
+			authVersion: 2,
+			index,
+			state: 'off',
+			createdAt: Date.now(),
+			lastToggled: 0,
+			description: switchConfig.description || '',
+			location: switchConfig.location || '',
+			category: switchConfig.category || '',
+			publicize: switchConfig.publicize || false,
+			link: switchConfig.link || '',
+			toggleCount: 0,
+			params: {}
+		};
+
+		await this.client.hSet(key, this._serializeHash(switchData));
+		await this.client.expire(key, 30 * 24 * 60 * 60); // 30 day expiry
+
+		// Add to owner index
+		const ownerKey = `owner:${ownerId}`;
+		await this.client.sAdd(ownerKey, uid);
+		await this.client.expire(ownerKey, 30 * 24 * 60 * 60);
 
 		// Add to public index if publicized
 		if (switchConfig.publicize) {
@@ -273,6 +313,21 @@ class RedisClient {
 		return switches;
 	}
 
+	async getOwnerSwitches(ownerId) {
+		const ownerKey = `owner:${ownerId}`;
+		const switchUIDs = await this.client.sMembers(ownerKey);
+
+		const switches = [];
+		for (const uid of switchUIDs) {
+			const switchData = await this.getSwitchState(uid);
+			if (switchData) {
+				switches.push(switchData);
+			}
+		}
+
+		return switches;
+	}
+
 	async getPublicSwitches() {
 		const publicUIDs = await this.client.sMembers('public_switches');
 		const switches = [];
@@ -316,6 +371,15 @@ class RedisClient {
 		await this.client.expire(key, 30 * 24 * 60 * 60);
 	}
 
+	async claimV2Nonce(scopeId, nonce, ttlMs = 10 * 60 * 1000) {
+		if (!scopeId || !nonce) {
+			return false;
+		}
+		const key = `nonce:v2:${scopeId}:${nonce}`;
+		const result = await this.client.set(key, '1', { NX: true, PX: ttlMs });
+		return result === 'OK';
+	}
+
 	async getUserCount(uid) {
 		const key = `switch:${uid}:users`;
 		const count = await this.client.sCard(key);
@@ -351,13 +415,17 @@ class RedisClient {
 	}
 
 	// Pub/Sub operations for real-time updates
-	async publishSwitchUpdate(uid, state) {
+	async publishSwitchUpdate(uid, state, params = undefined) {
 		const channel = `switch_updates:${uid}`;
-		const message = JSON.stringify({
+		const payload = {
 			uid,
 			state,
 			timestamp: Date.now()
-		});
+		};
+		if (params && typeof params === 'object' && Object.keys(params).length > 0) {
+			payload.params = params;
+		}
+		const message = JSON.stringify(payload);
 
 		await this.pubClient.publish(channel, message);
 	}

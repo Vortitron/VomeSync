@@ -8,8 +8,6 @@ services:
       - redis_data:/data
     networks:
       - vomesync_network
-    ports:
-      - "127.0.0.1:${REDIS_HOST_PORT:-6380}:6379"
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     healthcheck:
@@ -35,7 +33,7 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - JWT_SECRET=${JWT_SECRET}
-      - CORS_ORIGINS=${CORS_ORIGINS:-https://remoteswitch.vome.io}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://sync.vome.io}
       - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-900000}
       - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-100}
       - SSL_CERT_PATH=${SSL_CERT_PATH:-}
@@ -43,8 +41,8 @@ services:
       - ENABLE_ANALYTICS=${ENABLE_ANALYTICS:-true}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     ports:
-      - "3090:3090"
-      - "3001:3001"
+      - "${VOMESYNC_API_HOST_PORT:-3090}:3090"
+      - "${VOMESYNC_WS_HOST_PORT:-3001}:3001"
     volumes:
       - webserver_logs:/usr/src/app/logs
       - ${SSL_CERT_PATH:-/dev/null}:${SSL_CERT_PATH:-/dev/null}:ro
@@ -66,7 +64,7 @@ services:
       - ../website:/usr/share/nginx/html:ro
       - ./nginx/website.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "8111:80"
+      - "${VOMESYNC_WEBSITE_HOST_PORT:-8111}:80"
     networks:
       - vomesync_network
     environment:
@@ -88,7 +86,7 @@ services:
     networks:
       - vomesync_network
     ports:
-      - "127.0.0.1:6381:6379"
+      - "127.0.0.1:${VOMESYNC_REDIS_DEV_HOST_PORT:-6381}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -120,8 +118,8 @@ services:
       - HCAPTCHA_SECRET=
       - HCAPTCHA_BYPASS_TOKEN=test-bypass-token
     ports:
-      - "3091:3091"
-      - "3002:3002"
+      - "${VOMESYNC_API_DEV_HOST_PORT:-3091}:3091"
+      - "${VOMESYNC_WS_DEV_HOST_PORT:-3002}:3002"
     networks:
       - vomesync_network
     healthcheck:
@@ -139,7 +137,7 @@ services:
       - ../website:/usr/share/nginx/html:ro
       - ./nginx/website.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "8112:80"
+      - "${VOMESYNC_WEBSITE_DEV_HOST_PORT:-8112}:80"
     networks:
       - vomesync_network
     environment:
@@ -164,19 +162,21 @@ services:
       - ${SSL_CERT_PATH:-/dev/null}:/etc/ssl/certs/vomesync.pem:ro
       - ${SSL_KEY_PATH:-/dev/null}:/etc/ssl/private/vomesync.key:ro
     ports:
-      - "8080:80"
-      - "8443:443"
+      - "${VOMESYNC_PROXY_HTTP_HOST_PORT:-8080}:80"
+      - "${VOMESYNC_PROXY_HTTPS_HOST_PORT:-8443}:443"
     networks:
       - vomesync_network
     environment:
       - API_DOMAIN=${API_DOMAIN:-sync.vome.io}
-      - WEBSITE_DOMAIN=${WEBSITE_DOMAIN:-remoteswitch.vome.io}
+      - WEBSITE_DOMAIN=${WEBSITE_DOMAIN:-sync.vome.io}
       - ENABLE_SSL=${ENABLE_SSL:-false}
 
 volumes:
   redis_data:
+    name: ${VOMESYNC_REDIS_VOLUME_NAME:-vomesync_redis_data}
     driver: local
   webserver_logs:
+    name: ${VOMESYNC_LOGS_VOLUME_NAME:-vomesync_webserver_logs}
     driver: local
 
 networks:

@@ -116,6 +116,32 @@ async def test_coordinator_auto_imports_new_subscription(hass, config_entry):
 
 
 @pytest.mark.asyncio
+async def test_coordinator_keeps_imported_subscriptions_available_on_refresh(hass, config_entry):
+	"""Imported non-owner switches should be treated as subscriptions on refresh."""
+	config_entry.options = {
+		"imported_switches": {
+			"vs_testsub_123": {
+				"name": "Subscribed Switch",
+				"is_owner": False,
+				"cached_data": {"uid": "vs_testsub_123", "state": False}
+			}
+		}
+	}
+
+	mock_api = AsyncMock()
+	mock_api.get_my_switches.return_value = []  # This entry owns nothing
+	mock_api.get_switch_status.return_value = {"uid": "vs_testsub_123", "state": True, "description": "Remote"}
+
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator._ensure_websocket_connection = AsyncMock()
+		await coordinator._async_update_data()
+
+	assert "vs_testsub_123" in coordinator.subscriptions
+	assert coordinator.subscriptions["vs_testsub_123"]["is_owner"] == False
+	assert coordinator.subscriptions["vs_testsub_123"]["state"] == True
+
+@pytest.mark.asyncio
 async def test_coordinator_removes_from_cache_on_delete(hass, config_entry):
 	"""Test coordinator removes switch from imported cache on delete."""
 	config_entry.options = {
@@ -276,8 +302,140 @@ async def test_coordinator_triggers_linked_entities_with_unsupported_params(hass
 
 
 @pytest.mark.asyncio
+async def test_coordinator_bidirectional_link_updates_owned_switch(hass, config_entry):
+	"""Linked entity state changes should update an owned switch (bidirectional linking)."""
+	config_entry.options = {
+		"linked_entities": {
+			"test-uid": {
+				"entities": ["light.living_room"],
+				"mode": "master",
+				"master": "light.living_room",
+				"direction": "both",
+			}
+		}
+	}
+
+	mock_api = AsyncMock()
+
+	with (
+		patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api),
+		patch("custom_components.vomesync.coordinator.async_track_state_change_event", return_value=lambda: None),
+	):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.switches = {"test-uid": {"state": False, "is_owner": True}}
+		coordinator.subscriptions = {}
+		coordinator.set_switch_state = AsyncMock(return_value=True)
+
+		hass.states = MagicMock()
+		hass.states.get.return_value = None
+
+		await coordinator.async_setup_entity_links()
+
+		old_state = MagicMock()
+		old_state.state = "off"
+		old_state.attributes = {}
+
+		new_state = MagicMock()
+		new_state.state = "on"
+		new_state.attributes = {"rgb_color": [0, 0, 255], "brightness": 180}
+
+		await coordinator._async_handle_linked_entity_state_change("light.living_room", old_state, new_state)
+
+		coordinator.set_switch_state.assert_called_once_with(
+			"test-uid",
+			True,
+			params={"rgb_color": [0, 0, 255], "brightness": 180},
+		)
+
+
+@pytest.mark.asyncio
+async def test_coordinator_read_only_link_does_not_update_switch(hass, config_entry):
+	"""Read-only links should not update the owned switch from entity state changes."""
+	config_entry.options = {
+		"linked_entities": {
+			"test-uid": {
+				"entities": ["light.living_room"],
+				"mode": "master",
+				"master": "light.living_room",
+				"direction": "switch_to_entities",
+			}
+		}
+	}
+
+	mock_api = AsyncMock()
+
+	with (
+		patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api),
+		patch("custom_components.vomesync.coordinator.async_track_state_change_event", return_value=lambda: None),
+	):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.switches = {"test-uid": {"state": False, "is_owner": True}}
+		coordinator.subscriptions = {}
+		coordinator.set_switch_state = AsyncMock(return_value=True)
+
+		hass.states = MagicMock()
+		hass.states.get.return_value = None
+
+		await coordinator.async_setup_entity_links()
+
+		old_state = MagicMock()
+		old_state.state = "off"
+		old_state.attributes = {}
+
+		new_state = MagicMock()
+		new_state.state = "on"
+		new_state.attributes = {}
+
+		await coordinator._async_handle_linked_entity_state_change("light.living_room", old_state, new_state)
+
+		coordinator.set_switch_state.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_coordinator_bidirectional_link_master_ignores_non_master(hass, config_entry):
+	"""In Master mode, only the master entity should drive the switch."""
+	config_entry.options = {
+		"linked_entities": {
+			"test-uid": {
+				"entities": ["light.living_room", "switch.bedroom"],
+				"mode": "master",
+				"master": "switch.bedroom",
+			}
+		}
+	}
+
+	mock_api = AsyncMock()
+
+	with (
+		patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api),
+		patch("custom_components.vomesync.coordinator.async_track_state_change_event", return_value=lambda: None),
+	):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.switches = {"test-uid": {"state": False, "is_owner": True}}
+		coordinator.subscriptions = {}
+		coordinator.set_switch_state = AsyncMock(return_value=True)
+
+		hass.states = MagicMock()
+		hass.states.get.return_value = None
+
+		await coordinator.async_setup_entity_links()
+
+		old_state = MagicMock()
+		old_state.state = "off"
+		old_state.attributes = {}
+
+		new_state = MagicMock()
+		new_state.state = "on"
+		new_state.attributes = {}
+
+		await coordinator._async_handle_linked_entity_state_change("light.living_room", old_state, new_state)
+
+		coordinator.set_switch_state.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_coordinator_rate_limits_linked_entity_triggers(hass, config_entry):
-	"""Test coordinator rate limits linked entity triggers to prevent loops."""
+	"""Test coordinator limits linked entity triggers to prevent runaway loops."""
 	config_entry.options = {
 		"linked_entities": {
 			"test-uid": ["light.living_room"]
@@ -292,18 +450,22 @@ async def test_coordinator_rate_limits_linked_entity_triggers(hass, config_entry
 		hass.services = MagicMock()
 		hass.services.async_call = AsyncMock()
 
-		# First trigger should work
-		await coordinator._trigger_linked_entities("test-uid", True)
-		assert hass.services.async_call.call_count == 1
+		# Allow a small burst (e.g. user flicking on/off)
+		with patch("custom_components.vomesync.coordinator.time.monotonic", side_effect=[0, 1, 2, 3, 4, 5]):
+			for _ in range(6):
+				await coordinator._trigger_linked_entities("test-uid", True)
+		assert hass.services.async_call.call_count == 6
 
-		# Immediate second trigger should be rate limited
-		await coordinator._trigger_linked_entities("test-uid", False)
-		assert hass.services.async_call.call_count == 1  # Still 1, not called again
+		# Next trigger within the burst window should be blocked as a suspected loop
+		with patch("custom_components.vomesync.coordinator.time.monotonic", return_value=6):
+			await coordinator._trigger_linked_entities("test-uid", False)
+		assert hass.services.async_call.call_count == 6
 
-		# After cooldown, should work again
-		coordinator._last_trigger_time["test-uid"] = time.time() - 3.0
-		await coordinator._trigger_linked_entities("test-uid", False)
-		assert hass.services.async_call.call_count == 2
+		# After block expires, triggers should work again
+		blocked_until = coordinator._linked_trigger_blocked_until["test-uid"]
+		with patch("custom_components.vomesync.coordinator.time.monotonic", return_value=blocked_until + 0.1):
+			await coordinator._trigger_linked_entities("test-uid", True)
+		assert hass.services.async_call.call_count == 7
 
 
 @pytest.mark.asyncio

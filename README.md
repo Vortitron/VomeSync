@@ -21,7 +21,7 @@ VomeSync consists of four main components:
 - **Installation**: Via HACS or manual installation
 
 ### 3. **Public Website** (`/website/`)
-- **Purpose**: Community switch directory (remoteswitch.vome.io)
+- **Purpose**: Community switch directory (sync.vome.io)
 - **Technology**: Vanilla HTML/CSS/JavaScript
 - **Features**: Browse public switches, search/filter, UID copying
 - **Deployment**: Static files served via Nginx
@@ -67,9 +67,12 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - Docker for deployment on a dedicated server.
   - TLS 1.3 (Let’s Encrypt) for secure connections.
 - **Endpoints**:
-  - `POST /generate-key`: Issues a personal key (UUID/JWT) for user authentication.
+  - `POST /generate-key`: Issues a personal key (UUID/JWT) for user authentication (not used by the Home Assistant integration).
   - `POST /create-switch`: Creates a virtual switch with UID, optional fields (description, geocode location, category), and public flag.
   - `POST /toggle/{UID}`: Toggles the virtual switch state (requires personal key).
+  - `POST /api/v2/switch`: Creates a deterministic switch (Ed25519 signed; UID derived from switch public key).
+  - `POST /api/v2/my-switches`: Lists switches owned by an Ed25519 owner key (signed).
+  - `POST /api/v2/switch/{UID}/state`: Sets state + optional params (signed; params forwarded via WebSocket).
   - `GET /status/{UID}`: Returns current switch state (publicly accessible).
   - `WSS /ws?uid={uid}`: WebSocket for real-time state updates to subscribed clients.
 - **Privacy**:
@@ -77,7 +80,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - Public mode uses differential privacy for aggregated analytics (e.g., trigger counts).
   - GDPR-compliant: Opt-in consent, data deletion via key.
 
-### 2. Website (remoteswitch.vome.io)
+### 2. Website (sync.vome.io)
 - **Purpose**: Public directory for discovering switches with the "publicize" flag.
 - **Tech Stack**:
   - WordPress (free theme) hosted on the dedicated server.
@@ -117,28 +120,33 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
 ## User Flow
 1. **Install Integration**:
    - User installs `VomeSync` via HACS or manually.
-   - Integration generates a personal key via `POST /generate-key` to sync.vome.io.
+   - Integration can run in:
+     - Generates/stores a signing key locally and uses v2 signed endpoints.
 
 2. **Create Switch**:
    - In HA UI, user configures a new switch with optional fields (description, city-level location, category).
-   - Check "Publicize on website" to list on remoteswitch.vome.io.
-   - Add-on sends `POST /create-switch` to server, receives UID.
+   - Check "Publicize on website" to list on sync.vome.io.
+   - Add-on sends `POST /api/v2/switch`, receives UID.
    - Local `switch` entity created (e.g., `switch.remote_public_1`).
 
 3. **Toggle Switch**:
    - User toggles local switch in HA.
-   - Add-on sends `POST /toggle/{UID}` with personal key.
+   - Add-on sends `POST /api/v2/switch/{UID}/state`.
    - Server updates virtual switch state and broadcasts via WebSocket to subscribers.
 
 4. **Subscribe to Switch**:
-   - User pastes UID in the integration UI (from remoteswitch.vome.io or shared directly).
+   - User pastes UID in the integration UI (from sync.vome.io or shared directly).
    - Integration imports the switch and connects to `WSS /ws?uid=<uid>` for real-time updates.
    - User can either:
      - Set automations (e.g., "If sensor.remote_public_1 is on, turn on switch.my_light"), OR
-     - Use **Entity Linking**: Link local entities directly to VomeSync switches via the integration options menu. Linked entities automatically toggle when the VomeSync switch state changes.
+     - Use **Entity Linking**: Link local entities directly to VomeSync switches via the integration options menu.
+       - When the VomeSync switch changes, linked entities are toggled.
+       - For **owned** switches, changes to linked entities can also update the VomeSync switch (bidirectional).
+       - If you link **multiple** entities, you can choose how they drive the switch: **Master**, **Any on (OR)**, or **All on (AND)**.
+       - You can set the link **Direction**: **Both**, **Switch → entities**, or **Entities → switch**.
 
 5. **Public Directory**:
-   - Users browse remoteswitch.vome.io for public switches (e.g., "Festival Light, Stockholm").
+   - Users browse sync.vome.io for public switches (e.g., "Festival Light, Stockholm").
    - Copy UID to subscribe in their add-on.
 
 ## Monetization
@@ -147,7 +155,9 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
 
 
 ## Privacy and Security
-- **Personal Key**: UUID/JWT for authentication, stored securely in HA `secrets.yaml`.
+- **Auth Modes**:
+  - **Keypair (v2)**: Ed25519 signing key stays local to Home Assistant; server only sees public keys and signatures.
+  - **Personal keys (v1)** still exist on the server for non-HA clients, but the HA integration uses keypair authentication.
 - **Public Mode**: Anonymized data (city-level location, no IPs). Differential privacy for analytics.
 - **Warnings**: Add-on UI clearly states: "Public mode is NOT private—use for non-sensitive events only."
 - **GDPR**: Consent via checkbox, data deletion via API (POST /delete-key).
@@ -178,7 +188,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
    - Enable "Publicize" to share with community
 
 4. **Subscribe to Public Switches:**
-   - Browse switches at [remoteswitch.vome.io](https://remoteswitch.vome.io)
+   - Browse switches at [sync.vome.io](https://sync.vome.io)
    - Copy UID and subscribe via integration settings
    - Use in automations to react to remote events
 
@@ -368,7 +378,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
 ## Contact
 - **Support**: Email [support@vome.io](mailto:support@vome.io) or paid tier (€20/hour).
 - **Community**: Join discussions on [r/homeassistant](https://reddit.com/r/homeassistant) or Home Assistant forums.
-- **Website**: [remoteswitch.vome.io](https://remoteswitch.vome.io)
+- **Website**: [sync.vome.io](https://sync.vome.io)
 
 ## License
 - Add-On: MIT License (open-source).

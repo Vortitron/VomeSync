@@ -1,5 +1,6 @@
 """Config flow for VomeSync integration."""
 import asyncio
+import inspect
 import logging
 from typing import Any, Dict, Optional
 
@@ -16,6 +17,9 @@ from .const import (
 	CONF_PERSONAL_KEY,
 	CONF_SERVER_URL,
 	CONF_WEBSOCKET_URL,
+	CONF_AUTH_MODE,
+	CONF_CRYPTO_SEED,
+	AUTH_MODE_CRYPTO,
 	DEFAULT_SERVER_URL,
 	DEFAULT_WEBSOCKET_URL,
 	CONF_SWITCH_UID,
@@ -26,6 +30,8 @@ from .const import (
 	CONF_SWITCH_PUBLICIZE,
 	SWITCH_CATEGORIES,
 )
+
+from .crypto import generate_master_seed_b64url, owner_pubkey_b64url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +44,8 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 	def __init__(self) -> None:
 		"""Initialize the config flow."""
 		self._personal_key: Optional[str] = None
+		self._auth_mode: str = AUTH_MODE_CRYPTO
+		self._crypto_seed: Optional[str] = None
 		self._server_url: str = DEFAULT_SERVER_URL
 		self._websocket_url: str = DEFAULT_WEBSOCKET_URL
 
@@ -71,20 +79,18 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 			else:
 				self._websocket_url = self._derive_websocket_url(self._server_url)
 			
-			# If a personal key is provided, accept it and proceed (validation happens later)
-			if user_input.get(CONF_PERSONAL_KEY):
-				self._personal_key = user_input[CONF_PERSONAL_KEY]
-				return await self._create_entry()
-			
-			# Generate new key when none provided
-			return await self.async_step_generate_key()
+			# Keypair mode is the only supported mode (the integration never launched with personal keys).
+			self._auth_mode = AUTH_MODE_CRYPTO
+			self._crypto_seed = user_input.get(CONF_CRYPTO_SEED) or generate_master_seed_b64url()
+			self._personal_key = ""
+			return await self._create_entry()
 		else:
 			# First load: keep websocket URL in sync with the server URL
 			self._websocket_url = self._derive_websocket_url(self._server_url)
 
 		data_schema = vol.Schema({
 			vol.Optional(CONF_SERVER_URL, default=self._server_url): str,
-			vol.Optional(CONF_PERSONAL_KEY): str,
+			vol.Optional(CONF_CRYPTO_SEED): str,
 		})
 
 		return self.async_show_form(
@@ -93,7 +99,7 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 			errors=errors,
 			description_placeholders={
 				"warning": "⚠️ Public mode is NOT private - anyone with UID can view/toggle switches. Use only for non-sensitive devices.",
-				"personal_key_hint": "Leave personal key empty to generate a new one on the next step.",
+				"keypair_hint": "Leave the signing key empty to generate one. Keep it safe if you want to migrate servers/instances later.",
 				"websocket_info": "WebSocket URL will be automatically set to: " + self._derive_websocket_url(self._server_url)
 			}
 		)
@@ -101,49 +107,26 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 	async def async_step_generate_key(
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:
-		"""Generate a new personal key."""
-		errors = {}
-
-		if user_input is not None:
-			if user_input.get("consent", False):
-				# Generate new personal key
-				api_client = VomeSyncAPIClient(self._server_url)
-				
-				try:
-					key_data = await api_client.generate_personal_key()
-					self._personal_key = key_data["personalKey"]
-					return await self._create_entry()
-				except Exception as ex:
-					_LOGGER.error("Failed to generate personal key: %s", ex)
-					errors["base"] = "generate_key_failed"
-				finally:
-					await api_client.close()
-			else:
-				errors["consent"] = "consent_required"
-
-		data_schema = vol.Schema({
-			vol.Required("consent", default=False): bool,
-		})
-
-		return self.async_show_form(
-			step_id="generate_key",
-			data_schema=data_schema,
-			errors=errors,
-			description_placeholders={
-				"privacy_notice": "By ticking consent you allow VomeSync to create and store a personal key for your account on the server. You can delete it later from the integration options (GDPR delete key)."
-			}
-		)
+		"""Deprecated: personal-key mode never launched and is no longer supported."""
+		return self.async_abort(reason="not_supported")
 
 	async def _create_entry(self) -> FlowResult:
 		"""Create the config entry."""
+		unique = None
+		title = "VomeSync"
+		if not self._crypto_seed:
+			raise ValueError("crypto_seed missing for keypair auth mode")
+		owner_pub = owner_pubkey_b64url(self._crypto_seed)
+		unique = owner_pub
+		title = f"VomeSync (keypair {owner_pub[:8]}...)"
+
 		# Check for existing entries (skip if context is immutable in tests)
 		try:
-			await self.async_set_unique_id(self._personal_key)
-			self._abort_if_unique_id_configured()
+			if unique:
+				await self.async_set_unique_id(unique)
+				self._abort_if_unique_id_configured()
 		except TypeError:
 			_LOGGER.debug("Skipping unique_id setup (context not mutable in test environment)")
-
-		title = f"VomeSync ({self._personal_key[:8]}...)"
 
 		# Ensure websocket URL stored matches server_url if user left it blank
 		websocket_url = self._websocket_url or self._derive_websocket_url(self._server_url)
@@ -151,9 +134,11 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 		return self.async_create_entry(
 			title=title,
 			data={
-				CONF_PERSONAL_KEY: self._personal_key,
+				CONF_PERSONAL_KEY: self._personal_key or "",
 				CONF_SERVER_URL: self._server_url,
 				CONF_WEBSOCKET_URL: websocket_url,
+				CONF_AUTH_MODE: self._auth_mode,
+				CONF_CRYPTO_SEED: self._crypto_seed or "",
 			}
 		)
 
@@ -173,14 +158,49 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 		self._config_entry = config_entry
 		self._step_data: Dict[str, Any] = {}
 
+	async def _async_update_entry_options(self, options: Dict[str, Any]) -> None:
+		"""Update config entry options, awaiting only if HA returns an awaitable."""
+		result = self.hass.config_entries.async_update_entry(self._config_entry, options=options)
+		if inspect.isawaitable(result):
+			await result
+
+	def _get_link_direction_labels(self) -> Dict[str, str]:
+		"""Get available link directions for the UI."""
+		return {
+			"both": "Both (switch ↔ entities)",
+			"switch_to_entities": "Switch → entities",
+			"entities_to_switch": "Entities → switch",
+		}
+
+	def _normalise_link_direction(self, raw: Any, default: str = "both") -> str:
+		"""Normalise a raw direction value into a supported internal value."""
+		directions = self._get_link_direction_labels()
+		if isinstance(raw, str) and raw in directions:
+			return raw
+		return default
+
 	async def async_step_init(
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:
 		"""Manage the options."""
+		# Keep the highest-frequency actions near the top; move the rest under "More…"
+		menu_options = ["create_switch", "subscribe_switch", "manage_switches", "more"]
 		return self.async_show_menu(
 			step_id="init",
-			menu_options=["import_switches", "create_switch", "subscribe_switch", "manage_switches", "manage_api_keys", "connect_website", "edit_connection"]
+			menu_options=menu_options
 		)
+
+	async def async_step_more(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Secondary menu to reduce clutter."""
+		menu_options = [
+			"import_switches",
+			"reannounce_owned_switches",
+			"cleanup_orphaned_devices",
+			"edit_connection",
+		]
+		return self.async_show_menu(step_id="more", menu_options=menu_options)
 
 	async def async_step_import_switches(
 		self, user_input: Optional[Dict[str, Any]] = None
@@ -209,7 +229,8 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 						imported_switches[uid] = {
 							"name": switch_data.get("name", switch_data.get("description", f"Switch {uid[:8]}")),
 							"is_owner": switch_data.get("is_owner", uid in coordinator.switches),
-							"cached_data": switch_data
+							"cached_data": switch_data,
+							**({"crypto_index": switch_data.get("index")} if isinstance(switch_data.get("index"), int) else {}),
 						}
 			
 			# Save to options
@@ -378,7 +399,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 			data_schema=data_schema,
 			errors=errors,
 			description_placeholders={
-				"uid_info": "Enter the UID of the switch you want to subscribe to. You can find public switches at remoteswitch.vome.io"
+				"uid_info": "Enter the UID of the switch you want to subscribe to. You can find public switches at sync.vome.io"
 			}
 		)
 
@@ -802,54 +823,108 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 		selected_name = self._step_data.get("selected_name", selected_uid)
 		
 		if user_input is not None:
-			# Get current options
-			options = dict(self._config_entry.options or {})
-			
-			# Ensure linked_entities exists in options
-			if "linked_entities" not in options:
-				options["linked_entities"] = {}
-			
-			# Get current linked entities dict
-			linked_entities = dict(options.get("linked_entities", {}))
-			
 			# Update links for this switch
 			selected_entities = user_input.get("entities", [])
+			if not isinstance(selected_entities, list):
+				selected_entities = list(selected_entities)
+			direction = self._normalise_link_direction(user_input.get("direction"), default="both")
 			
 			_LOGGER.info("Linking entities for switch %s: %s", selected_uid, selected_entities)
 			
-			if selected_entities:
-				# Convert to list if needed and save
-				linked_entities[selected_uid] = list(selected_entities) if not isinstance(selected_entities, list) else selected_entities
-			elif selected_uid in linked_entities:
-				# Remove if no entities selected
-				del linked_entities[selected_uid]
+			# No entities selected => remove linkage
+			if not selected_entities:
+				options = dict(self._config_entry.options or {})
+				linked_entities = dict(options.get("linked_entities", {}) or {})
+				if selected_uid in linked_entities:
+					del linked_entities[selected_uid]
+				options["linked_entities"] = linked_entities
+				await self._async_update_entry_options(options)
+				
+				# Rebuild listeners (best effort)
+				try:
+					coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+					await coordinator.async_setup_entity_links()
+				except Exception as err:  # noqa: BLE001
+					_LOGGER.error("Failed to set up entity links: %s", err)
+				
+				return self.async_create_entry(title="", data=options)
 			
-			# Update options
-			options["linked_entities"] = linked_entities
+			# One entity => no extra questions; just store as master mode
+			if len(selected_entities) == 1:
+				options = dict(self._config_entry.options or {})
+				linked_entities = dict(options.get("linked_entities", {}) or {})
+				linked_entities[selected_uid] = {
+					"entities": list(selected_entities),
+					"mode": "master",
+					"master": selected_entities[0],
+					"direction": direction,
+				}
+				options["linked_entities"] = linked_entities
+				await self._async_update_entry_options(options)
+				
+				try:
+					coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+					await coordinator.async_setup_entity_links()
+				except Exception as err:  # noqa: BLE001
+					_LOGGER.error("Failed to set up entity links: %s", err)
+				
+				return self.async_create_entry(title="", data=options)
 			
-			_LOGGER.debug("Saving options: %s", options)
+			# Multiple entities:
+			# - If direction is switch->entities only, no behaviour is needed (we just toggle them all).
+			# - Otherwise, ask how linked entities should drive the switch.
+			if direction == "switch_to_entities":
+				options = dict(self._config_entry.options or {})
+				linked_entities = dict(options.get("linked_entities", {}) or {})
+				linked_entities[selected_uid] = {
+					"entities": list(selected_entities),
+					"mode": "master",
+					"master": selected_entities[0],
+					"direction": direction,
+				}
+				options["linked_entities"] = linked_entities
+				await self._async_update_entry_options(options)
+				
+				try:
+					coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+					await coordinator.async_setup_entity_links()
+				except Exception as err:  # noqa: BLE001
+					_LOGGER.error("Failed to set up entity links: %s", err)
+				
+				return self.async_create_entry(title="", data=options)
 			
-			# Update config entry options
-			self.hass.config_entries.async_update_entry(
-				self._config_entry,
-				options=options
-			)
-			
-			# Trigger coordinator to set up listeners
-			try:
-				coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
-				await coordinator.async_setup_entity_links()
-			except Exception as err:
-				_LOGGER.error("Failed to set up entity links: %s", err)
-			
-			return self.async_create_entry(title="", data=options)
+			# Ask for behaviour (master / OR / AND)
+			self._step_data["pending_link_entities"] = list(selected_entities)
+			self._step_data["pending_link_direction"] = direction
+			return await self.async_step_link_entities_behaviour()
+		
+		# Get currently linked entities for this switch
+		options = self._config_entry.options or {}
+		linked_entities = options.get("linked_entities", {}) or {}
+		current_cfg = linked_entities.get(selected_uid)
+		current_links: list[str]
+		current_direction = "both"
+		if isinstance(current_cfg, dict):
+			raw = current_cfg.get("entities", [])
+			current_links = raw if isinstance(raw, list) else []
+			current_direction = self._normalise_link_direction(current_cfg.get("direction"), default="both")
+			if "direction" not in current_cfg and current_cfg.get("read_only") is True:
+				# Backwards compatibility for short-lived "read_only".
+				current_direction = "switch_to_entities"
+		elif isinstance(current_cfg, list):
+			current_links = current_cfg
+			# Backwards compatibility for legacy list format (switch -> entities only).
+			current_direction = "switch_to_entities"
+		else:
+			current_links = []
 		
 		# Get all switchable entities from HA
 		entity_reg = er.async_get(self.hass)
 		
 		# Get all entities that support turn_on/turn_off
 		switchable_domains = ["switch", "light", "fan", "input_boolean", "automation", "script"]
-		available_entities = {}
+		# Sort linked entities first, then by domain/name for a predictable UI.
+		candidates: list[tuple[int, str, str, str, str]] = []
 		
 		for entity in entity_reg.entities.values():
 			if entity.domain in switchable_domains:
@@ -860,28 +935,127 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 				# Get friendly name
 				state = self.hass.states.get(entity.entity_id)
 				name = (state.attributes.get("friendly_name") if state else None) or entity.original_name or entity.entity_id
-				available_entities[entity.entity_id] = f"{name} ({entity.entity_id})"
+				label = f"{name} ({entity.entity_id})"
+				linked_rank = 0 if entity.entity_id in current_links else 1
+				candidates.append((linked_rank, entity.domain, str(name).casefold(), entity.entity_id, label))
 		
-		if not available_entities:
+		if not candidates:
 			return self.async_abort(reason="no_linkable_entities")
 		
-		# Get currently linked entities for this switch
-		options = self._config_entry.options or {}
-		linked_entities = options.get("linked_entities", {})
-		current_links = linked_entities.get(selected_uid, [])
+		available_entities: Dict[str, str] = {}
+		for _linked_rank, _domain, _name_key, entity_id, label in sorted(candidates):
+			available_entities[entity_id] = label
 		
 		_LOGGER.debug("Current links for %s: %s", selected_uid, current_links)
 		_LOGGER.debug("Available entities: %s", list(available_entities.keys())[:5])
 		
+		# Keep available entity labels for the next step (behaviour/master selection)
+		self._step_data["link_available_entities"] = available_entities
+		self._step_data["link_direction_labels"] = self._get_link_direction_labels()
+		
+		direction_labels = self._get_link_direction_labels()
 		return self.async_show_form(
 			step_id="link_entities",
 			data_schema=vol.Schema({
-				vol.Optional("entities", default=current_links): cv.multi_select(available_entities)
+				vol.Optional("entities", default=current_links): cv.multi_select(available_entities),
+				vol.Optional("direction", default=current_direction): vol.In(direction_labels),
 			}),
 			description_placeholders={
 				"switch_name": selected_name,
-				"info": f"Select entities to automatically toggle when **{selected_name}** changes state.\n\nCurrently linked: {len(current_links)} entities"
+				"info": (
+					f"Link one or more entities to **{selected_name}**.\n\n"
+					f"Currently linked: {len(current_links)} entities"
+				),
 			}
+		)
+
+	async def async_step_link_entities_behaviour(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Choose how multiple linked entities should drive the switch."""
+		selected_uid = self._step_data.get("selected_uid")
+		selected_name = self._step_data.get("selected_name", selected_uid)
+		selected_entities = self._step_data.get("pending_link_entities") or []
+		direction_default = self._normalise_link_direction(self._step_data.get("pending_link_direction"), default="both")
+		available_entities = self._step_data.get("link_available_entities") or {}
+		
+		if not selected_uid or not isinstance(selected_entities, list) or len(selected_entities) <= 1:
+			return self.async_abort(reason="no_linkable_entities")
+		
+		# Default: master=first entity
+		master_default = selected_entities[0]
+		
+		# If existing config already has a mode/master, prefill
+		options = self._config_entry.options or {}
+		linked_entities = options.get("linked_entities", {}) or {}
+		existing = linked_entities.get(selected_uid)
+		mode_default = "master"
+		if isinstance(existing, dict):
+			mode_default = existing.get("mode") if isinstance(existing.get("mode"), str) else mode_default
+			existing_master = existing.get("master")
+			if isinstance(existing_master, str) and existing_master in selected_entities:
+				master_default = existing_master
+			direction_default = self._normalise_link_direction(existing.get("direction"), default=direction_default)
+			if "direction" not in existing and existing.get("read_only") is True:
+				direction_default = "switch_to_entities"
+		
+		if user_input is not None:
+			mode = user_input.get("mode") if isinstance(user_input.get("mode"), str) else "master"
+			master = user_input.get("master") if isinstance(user_input.get("master"), str) else master_default
+			if master not in selected_entities:
+				master = master_default
+			direction = self._normalise_link_direction(user_input.get("direction"), default=direction_default)
+			
+			# Persist the config
+			new_options = dict(self._config_entry.options or {})
+			new_linked = dict(new_options.get("linked_entities", {}) or {})
+			new_linked[selected_uid] = {
+				"entities": list(selected_entities),
+				"mode": mode,
+				"master": master,
+				"direction": direction,
+			}
+			new_options["linked_entities"] = new_linked
+			await self._async_update_entry_options(new_options)
+			
+			# Trigger coordinator to (re)configure listeners
+			try:
+				coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+				await coordinator.async_setup_entity_links()
+			except Exception as err:  # noqa: BLE001
+				_LOGGER.error("Failed to set up entity links: %s", err)
+			
+			# Clean up temporary step state
+			self._step_data.pop("pending_link_entities", None)
+			self._step_data.pop("pending_link_direction", None)
+			return self.async_create_entry(title="", data=new_options)
+		
+		master_labels = {
+			eid: (available_entities.get(eid) if isinstance(available_entities, dict) else None) or eid
+			for eid in selected_entities
+		}
+		
+		mode_labels = {
+			"master": "Master (only one linked entity drives the switch)",
+			"or": "Any on (OR) — switch turns on if any linked entity is on",
+			"and": "All on (AND) — switch turns on only if all linked entities are on",
+		}
+		direction_labels = self._get_link_direction_labels()
+		
+		return self.async_show_form(
+			step_id="link_entities_behaviour",
+			data_schema=vol.Schema({
+				vol.Required("mode", default=mode_default): vol.In(mode_labels),
+				vol.Optional("master", default=master_default): vol.In(master_labels),
+				vol.Required("direction", default=direction_default): vol.In(direction_labels),
+			}),
+			description_placeholders={
+				"info": (
+					f"Choose how multiple linked entities should update **{selected_name}**.\n\n"
+					"Tip: If you want the switch to follow one specific entity, use **Master**.\n"
+					"Note: The **Master** selection only applies when mode is **Master**."
+				)
+			},
 		)
 
 	async def async_step_delete_switch(
@@ -978,10 +1152,47 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 		errors = {}
 		
 		if user_input is not None:
+			run_test = bool(user_input.get("test_connection", False))
+			
 			# Update config entry with new URLs
 			new_data = dict(self._config_entry.data)
 			new_data[CONF_SERVER_URL] = user_input[CONF_SERVER_URL]
 			new_data[CONF_WEBSOCKET_URL] = user_input[CONF_WEBSOCKET_URL]
+
+			# Optional test before saving (requested UX)
+			if run_test:
+				api_client = VomeSyncAPIClient(
+					new_data[CONF_SERVER_URL],
+					new_data.get(CONF_PERSONAL_KEY),
+					auth_mode=new_data.get(CONF_AUTH_MODE),
+					crypto_seed=new_data.get(CONF_CRYPTO_SEED),
+				)
+				try:
+					test = await api_client.test_connection()
+					if not test.get("health_ok", False):
+						errors["base"] = "test_failed"
+						# Fall through to show form with test output
+					else:
+						# Only show failure inline; on success we proceed to save+reload.
+						pass
+				finally:
+					await api_client.close()
+				
+				if errors:
+					# Show form again with the attempted values and failure details
+					return self.async_show_form(
+						step_id="edit_connection",
+						data_schema=vol.Schema({
+							vol.Required(CONF_SERVER_URL, default=new_data[CONF_SERVER_URL]): str,
+							vol.Required(CONF_WEBSOCKET_URL, default=new_data[CONF_WEBSOCKET_URL]): str,
+							vol.Optional("test_connection", default=True): bool,
+						}),
+						errors=errors,
+						description_placeholders={
+							"info": f"Connection test failed.\n\nServer URL: `{new_data[CONF_SERVER_URL]}`\nWebSocket URL: `{new_data[CONF_WEBSOCKET_URL]}`\n\n"
+							f"Check the URLs and try again."
+						}
+					)
 			
 			self.hass.config_entries.async_update_entry(
 				self._config_entry,
@@ -995,13 +1206,33 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 		
 		current_server = self._config_entry.data.get(CONF_SERVER_URL, "")
 		current_ws = self._config_entry.data.get(CONF_WEBSOCKET_URL, "")
-		current_key = self._config_entry.data.get(CONF_PERSONAL_KEY, "")
+		current_seed = self._config_entry.data.get(CONF_CRYPTO_SEED, "")
+		owner_pub = ""
+		if current_seed:
+			try:
+				owner_pub = owner_pubkey_b64url(current_seed)
+			except Exception:  # noqa: BLE001
+				owner_pub = ""
 		
-		# Add personal key as a read-only field in the schema
+		# HA config forms don't support true read-only fields; show key info in the description instead.
+		if current_seed:
+			info = (
+				"Signing key (keep safe):\n"
+				f"`{current_seed}`\n\n"
+				"Owner public key:\n"
+				f"`{owner_pub}`\n\n"
+				"Edit server and WebSocket URLs below. Changes will reload the integration."
+			)
+		else:
+			info = (
+				"No signing key is stored for this entry.\n\n"
+				"Edit server and WebSocket URLs below. Changes will reload the integration."
+			)
+		
 		schema_fields = {
-			vol.Required("personal_key", default=current_key): str,
 			vol.Required(CONF_SERVER_URL, default=current_server): str,
 			vol.Required(CONF_WEBSOCKET_URL, default=current_ws): str,
+			vol.Optional("test_connection", default=False): bool,
 		}
 		
 		return self.async_show_form(
@@ -1009,6 +1240,163 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow):
 			data_schema=vol.Schema(schema_fields),
 			errors=errors,
 			description_placeholders={
-				"info": "Your Personal Key is shown above (read-only). Edit server and WebSocket URLs below. Changes will reload the integration."
+				"info": info
 			}
 		)
+
+	async def async_step_reannounce_owned_switches(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Re-announce owned v2 switches to the current server (recovery/migration)."""
+		# Determine eligibility from local cache (works even if server returns zero switches)
+		options = self._config_entry.options or {}
+		imported = options.get("imported_switches", {}) or {}
+
+		eligible = 0
+		owned_total = 0
+		for uid, info in imported.items():
+			if not isinstance(uid, str) or not isinstance(info, dict):
+				continue
+			if not info.get("is_owner", False):
+				continue
+			owned_total += 1
+			idx = info.get("crypto_index")
+			if not isinstance(idx, int):
+				cached = info.get("cached_data") if isinstance(info.get("cached_data"), dict) else {}
+				idx = cached.get("index") if isinstance(cached, dict) else None
+			if uid.startswith("vs_") and isinstance(idx, int):
+				eligible += 1
+
+		if user_input is None:
+			return self.async_show_form(
+				step_id="reannounce_owned_switches",
+				data_schema=vol.Schema({vol.Required("confirm", default=False): bool}),
+				description_placeholders={
+					"info": (
+						"This will re-announce your **keypair-owned** switches to the currently configured server.\n\n"
+						f"Owned switches in this installation: **{owned_total}**\n"
+						f"Eligible (v2, UID starts with `vs_`): **{eligible}**\n\n"
+						"Use this when switching servers or after a server data loss.\n"
+						"⚠️ UUID-based (v1) switches cannot be re-announced because their UIDs are not deterministic."
+					)
+				},
+			)
+
+		if not user_input.get("confirm", False):
+			return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+
+		coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+		res = await coordinator.reannounce_owned_switches()
+		self._step_data["reannounce_result"] = res
+
+		return self.async_show_form(
+			step_id="reannounce_owned_switches_result",
+			data_schema=vol.Schema({}),
+			description_placeholders={
+				"info": (
+					"Re-announce complete.\n\n"
+					f"Eligible: **{res.get('eligible')}**\n"
+					f"Attempted: **{res.get('attempted')}**\n"
+					f"Succeeded: **{res.get('succeeded')}**\n"
+					f"Skipped: **{res.get('skipped')}**\n"
+					f"Errors: **{len(res.get('errors', []))}**\n\n"
+					"Reload the integration (or wait for next refresh) and try importing again."
+				)
+			},
+		)
+
+	async def async_step_reannounce_owned_switches_result(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Final step for re-announce results."""
+		return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+
+	async def async_step_cleanup_orphaned_devices(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Remove orphaned VomeSync devices (devices with no entities)."""
+		from homeassistant.helpers import device_registry as dr
+		from homeassistant.helpers import entity_registry as er
+
+		device_reg = dr.async_get(self.hass)
+		entity_reg = er.async_get(self.hass)
+
+		# Devices belonging to this config entry
+		devices = dr.async_entries_for_config_entry(device_reg, self._config_entry.entry_id)
+
+		orphan_devices: Dict[str, str] = {}
+		device_id_to_uid: Dict[str, str] = {}
+
+		for dev in devices:
+			dev_id = getattr(dev, "id", None)
+			if not isinstance(dev_id, str) or not dev_id:
+				continue
+
+			entities = er.async_entries_for_device(entity_reg, dev_id)
+			if entities:
+				continue  # Not an orphan
+
+			uid = None
+			for ident in getattr(dev, "identifiers", set()) or set():
+				try:
+					ident_domain, ident_value = ident
+				except Exception:  # noqa: BLE001
+					continue
+				if ident_domain == DOMAIN and isinstance(ident_value, str):
+					uid = ident_value
+					break
+
+			# Prefer user name; fall back to uid suffix
+			name = getattr(dev, "name_by_user", None) or getattr(dev, "name", None) or "VomeSync device"
+			if uid:
+				label = f"{name} (…{uid[-6:]})"
+				device_id_to_uid[dev_id] = uid
+			else:
+				label = str(name)
+
+			orphan_devices[dev_id] = label
+
+		if not orphan_devices:
+			return self.async_abort(reason="no_orphaned_devices")
+
+		if user_input is None:
+			return self.async_show_form(
+				step_id="cleanup_orphaned_devices",
+				data_schema=vol.Schema({
+					vol.Required("devices"): cv.multi_select(orphan_devices)
+				}),
+				description_placeholders={
+					"info": (
+						"These devices have **no entities** and are safe to remove from Home Assistant.\n\n"
+						f"Orphaned devices found: **{len(orphan_devices)}**"
+					)
+				},
+			)
+
+		selected = user_input.get("devices", [])
+		if not selected:
+			return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+
+		# Also remove from imported cache to prevent re-creation
+		options = dict(self._config_entry.options or {})
+		imported_switches = options.get("imported_switches", {}) or {}
+		changed = False
+
+		for dev_id in selected:
+			if not isinstance(dev_id, str):
+				continue
+			uid = device_id_to_uid.get(dev_id)
+			if uid and uid in imported_switches:
+				del imported_switches[uid]
+				changed = True
+
+			try:
+				device_reg.async_remove_device(dev_id)
+			except Exception as ex:  # noqa: BLE001
+				_LOGGER.warning("Failed to remove device %s: %s", dev_id, ex)
+
+		if changed:
+			options["imported_switches"] = imported_switches
+			self.hass.config_entries.async_update_entry(self._config_entry, options=options)
+
+		return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))

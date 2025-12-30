@@ -101,14 +101,14 @@ async def test_switch_entity_unavailable_when_no_data(hass, config_entry):
 
 @pytest.mark.asyncio
 async def test_switch_turn_on_calls_coordinator(hass, config_entry):
-	"""Test turning on switch calls coordinator toggle."""
+	"""Test turning on switch calls coordinator set_switch_state."""
 	mock_coordinator = MagicMock()
 	mock_coordinator.switches = {
 		"test-uid": {"state": False}
 	}
 	mock_coordinator.subscriptions = {}
 	mock_coordinator.last_update_success = True
-	mock_coordinator.toggle_switch = AsyncMock(return_value=True)
+	mock_coordinator.set_switch_state = AsyncMock(return_value=True)
 
 	switch = VomeSyncSwitch(
 		coordinator=mock_coordinator,
@@ -120,19 +120,19 @@ async def test_switch_turn_on_calls_coordinator(hass, config_entry):
 
 	await switch.async_turn_on()
 
-	mock_coordinator.toggle_switch.assert_called_once_with("test-uid")
+	mock_coordinator.set_switch_state.assert_called_once_with("test-uid", True, params=None)
 
 
 @pytest.mark.asyncio
 async def test_switch_turn_off_calls_coordinator(hass, config_entry):
-	"""Test turning off switch calls coordinator toggle."""
+	"""Test turning off switch calls coordinator set_switch_state."""
 	mock_coordinator = MagicMock()
 	mock_coordinator.switches = {
 		"test-uid": {"state": True}
 	}
 	mock_coordinator.subscriptions = {}
 	mock_coordinator.last_update_success = True
-	mock_coordinator.toggle_switch = AsyncMock(return_value=True)
+	mock_coordinator.set_switch_state = AsyncMock(return_value=True)
 
 	switch = VomeSyncSwitch(
 		coordinator=mock_coordinator,
@@ -144,7 +144,7 @@ async def test_switch_turn_off_calls_coordinator(hass, config_entry):
 
 	await switch.async_turn_off()
 
-	mock_coordinator.toggle_switch.assert_called_once_with("test-uid")
+	mock_coordinator.set_switch_state.assert_called_once_with("test-uid", False, params=None)
 
 
 @pytest.mark.asyncio
@@ -227,10 +227,14 @@ async def test_switch_link_entities_service_call(hass, config_entry):
 	# Verify options were updated
 	hass.config_entries.async_update_entry.assert_called_once()
 	call_args = hass.config_entries.async_update_entry.call_args
-	updated_options = call_args[0][1]  # Second positional argument
+	updated_options = call_args[1]["options"]
 	
 	assert "linked_entities" in updated_options
-	assert updated_options["linked_entities"]["test-uid"] == ["light.new_light", "fan.ceiling_fan"]
+	cfg = updated_options["linked_entities"]["test-uid"]
+	assert cfg["entities"] == ["light.new_light", "fan.ceiling_fan"]
+	assert cfg["mode"] == "master"
+	assert cfg["master"] == "light.new_light"
+	assert cfg["direction"] == "both"
 	
 	# Verify coordinator was notified
 	mock_coordinator.async_setup_entity_links.assert_called_once()

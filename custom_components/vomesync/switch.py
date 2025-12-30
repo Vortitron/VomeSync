@@ -103,6 +103,17 @@ async def async_setup_entry(
 class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 	"""Representation of a VomeSync switch."""
 
+	def _extract_params_from_kwargs(self, kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+		"""Extract supported parameter fields from a HA service call."""
+		if not kwargs:
+			return None
+		
+		params: Dict[str, Any] = {}
+		for key in ("rgb_color", "hs_color", "xy_color", "color_temp", "brightness", "transition", "effect", "color_mode"):
+			if key in kwargs:
+				params[key] = kwargs[key]
+		return params or None
+
 	def _get_configuration_url(self) -> Optional[str]:
 		"""Return a valid absolute configuration URL for this device, if possible."""
 		# Device registry requires an absolute URL with scheme/host.
@@ -263,7 +274,8 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 			_LOGGER.warning("Cannot toggle switch %s - not owner", self._uid)
 			return
 
-		success = await self.coordinator.toggle_switch(self._uid)
+		params = self._extract_params_from_kwargs(kwargs)
+		success = await self.coordinator.set_switch_state(self._uid, True, params=params)
 		if not success:
 			_LOGGER.error("Failed to turn on switch %s", self._uid)
 
@@ -273,7 +285,7 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 			_LOGGER.warning("Cannot toggle switch %s - not owner", self._uid)
 			return
 
-		success = await self.coordinator.toggle_switch(self._uid)
+		success = await self.coordinator.set_switch_state(self._uid, False, params=None)
 		if not success:
 			_LOGGER.error("Failed to turn off switch %s", self._uid)
 	
@@ -285,10 +297,18 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 			options["linked_entities"] = {}
 		
 		linked_entities = dict(options["linked_entities"])
-		linked_entities[self._uid] = entities
+		if entities:
+			linked_entities[self._uid] = {
+				"entities": list(entities),
+				"mode": "master",
+				"master": entities[0],
+				"direction": "both",
+			}
+		else:
+			linked_entities.pop(self._uid, None)
 		options["linked_entities"] = linked_entities
 		
-		self.hass.config_entries.async_update_entry(self._config_entry, options)
+		self.hass.config_entries.async_update_entry(self._config_entry, options=options)
 		
 		_LOGGER.info("Linked %d entities to switch %s via service call", len(entities), self._uid)
 		
@@ -299,8 +319,12 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 	def async_get_linked_entities(self) -> list[str]:
 		"""Get linked entities for this switch."""
 		options = self._config_entry.options or {}
-		linked_entities = options.get("linked_entities", {})
-		return linked_entities.get(self._uid, [])
+		linked_entities = options.get("linked_entities", {}) or {}
+		raw = linked_entities.get(self._uid)
+		if isinstance(raw, dict):
+			entities = raw.get("entities", [])
+			return entities if isinstance(entities, list) else []
+		return raw if isinstance(raw, list) else []
 
 	async def async_toggle(self, **kwargs: Any) -> None:
 		"""Toggle the switch."""
@@ -308,6 +332,8 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 			_LOGGER.warning("Cannot toggle switch %s - not owner", self._uid)
 			raise PermissionError("Only owners can toggle this switch")
 
-		success = await self.coordinator.toggle_switch(self._uid)
+		target = not bool(self.is_on)
+		params = self._extract_params_from_kwargs(kwargs) if target else None
+		success = await self.coordinator.set_switch_state(self._uid, target, params=params)
 		if not success:
 			_LOGGER.error("Failed to toggle switch %s", self._uid)

@@ -8,6 +8,25 @@ Most endpoints require a personal key for authentication. Include it in:
 - Request body as `personalKey`
 - Header as `X-Personal-Key`
 
+### V2 keypair authentication (recommended)
+
+V2 endpoints use **Ed25519 signatures** instead of server-issued keys.
+
+- **Owner key**: a master private key stored locally (e.g. in the Home Assistant integration config entry).
+- **Switch subkeys**: deterministic per-switch keys derived from the owner key + an integer index.
+- **Switch UID**: deterministically derived from the switch public key and uses the prefix **`vs_`**.
+
+This enables:
+
+- Stable switch UIDs across servers (migrate without changing UIDs)
+- Recovery after catastrophic DB loss (owner can re-create/announce the same UIDs)
+
+V2 requests include:
+
+- `ts`: client timestamp (ms)
+- `nonce`: unique per request (replay protection)
+- Signatures over a canonical JSON payload (sorted keys, compact JSON)
+
 ## Rate Limiting
 
 - Most endpoints: 100 requests per 15 minutes
@@ -20,6 +39,83 @@ Rate limit headers are included in responses:
 - `X-RateLimit-Reset`: When limit resets (ISO 8601)
 
 ## Endpoints
+
+## V2 Endpoints (keypair identity)
+
+### Create Switch (v2)
+
+Create a deterministic switch (UID is derived by the server from `switchPubKey`).
+
+**POST** `/api/v2/switch`
+
+**Request Body:**
+```json
+{
+  "ownerPubKey": "base64url-raw-ed25519-pubkey",
+  "switchPubKey": "base64url-raw-ed25519-pubkey",
+  "index": 0,
+  "ts": 1712345678901,
+  "nonce": "random-string",
+  "sigOwner": "base64url-ed25519-signature",
+  "sigSwitch": "base64url-ed25519-signature",
+  "description": "",
+  "location": "",
+  "category": "Other",
+  "publicize": false,
+  "link": "",
+  "captchaToken": ""
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "uid": "vs_...",
+    "authVersion": 2,
+    "index": 0,
+    "state": false,
+    "publicize": false
+  }
+}
+```
+
+### Get My Switches (v2)
+
+List switches owned by the signing owner key.
+
+**POST** `/api/v2/my-switches`
+
+**Request Body:**
+```json
+{
+  "ownerPubKey": "base64url-raw-ed25519-pubkey",
+  "ts": 1712345678901,
+  "nonce": "random-string",
+  "sigOwner": "base64url-ed25519-signature"
+}
+```
+
+### Set Switch State (v2)
+
+Set a switch state and optionally pass parameters (e.g. light colour/brightness). Parameters are forwarded to WebSocket subscribers.
+
+**POST** `/api/v2/switch/{uid}/state`
+
+**Request Body:**
+```json
+{
+  "ts": 1712345678901,
+  "nonce": "random-string",
+  "sigSwitch": "base64url-ed25519-signature",
+  "state": true,
+  "params": {
+    "rgb_color": [10, 20, 30],
+    "brightness": 200
+  }
+}
+```
 
 ### Generate Personal Key
 
