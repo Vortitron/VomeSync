@@ -348,6 +348,25 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					_LOGGER.error("Cannot set state for %s: missing crypto index", uid)
 					return False
 				result = await self.api_client.set_switch_state_v2(uid, idx, state, params=params)
+				
+				# v2 set-state: return early so we don't also hit the legacy toggle endpoint.
+				timestamp = result.get("timestamp")
+				if timestamp is None:
+					timestamp = current_time
+				
+				new_state = result.get("state", bool(state))
+				if uid in self.switches:
+					self.switches[uid]["state"] = new_state
+					self.switches[uid]["lastToggled"] = timestamp
+				
+				if uid in self.subscriptions:
+					self.subscriptions[uid]["state"] = new_state
+					self.subscriptions[uid]["lastToggled"] = timestamp
+				
+				# Trigger entity updates
+				self.async_update_listeners()
+				
+				return True
 			else:
 				# Legacy path: only toggle when change is required (toggle endpoint flips)
 				current = bool(self.get_switch_data(uid) and self.get_switch_data(uid).get("state", False))

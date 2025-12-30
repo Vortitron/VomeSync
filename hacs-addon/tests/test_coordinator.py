@@ -202,6 +202,31 @@ async def test_coordinator_rate_limits_toggle(hass, config_entry):
 
 
 @pytest.mark.asyncio
+async def test_coordinator_set_switch_state_crypto_does_not_call_legacy_toggle(hass, config_entry):
+	"""Keypair/v2 set_switch_state must not call the legacy toggle endpoint."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+
+	mock_api = AsyncMock()
+	mock_api.set_switch_state_v2 = AsyncMock(return_value={"uid": "vs_test", "state": True, "timestamp": 123})
+	mock_api.toggle_switch = AsyncMock(return_value={"uid": "vs_test", "state": False, "timestamp": 124})
+
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.switches = {"vs_test": {"state": False, "is_owner": True, "index": 0}}
+		coordinator.subscriptions = {}
+
+		ok = await coordinator.set_switch_state("vs_test", True, params={"brightness": 200})
+
+	assert ok is True
+	mock_api.set_switch_state_v2.assert_called_once_with("vs_test", 0, True, params={"brightness": 200})
+	mock_api.toggle_switch.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_coordinator_triggers_linked_entities(hass, config_entry):
 	"""Test coordinator triggers linked entities on state change."""
 	config_entry.options = {
