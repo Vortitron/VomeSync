@@ -5,3 +5,4 @@ docker/.env
 .redisdata/
 custom_components/vomesync/__pycache__/
 hacs-addon/tests/__pycache__/
+.pytest_cache

@@ -3,7 +3,6 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.const import CONF_NAME
 
 from custom_components.vomesync.config_flow import (
 	VomeSyncConfigFlow,
@@ -12,7 +11,6 @@ from custom_components.vomesync.config_flow import (
 from custom_components.vomesync.const import (
 	CONF_SERVER_URL,
 	CONF_WEBSOCKET_URL,
-	CONF_PERSONAL_KEY,
 	CONF_SWITCH_NAME,
 	CONF_SWITCH_DESCRIPTION,
 	CONF_SWITCH_LOCATION,
@@ -217,8 +215,6 @@ async def test_options_flow_manage_switch_action_shows_entity_id(hass, config_en
 @pytest.mark.asyncio
 async def test_options_flow_link_entities(hass, config_entry):
 	"""Test linking local entities to a VomeSync switch."""
-	from homeassistant.helpers import entity_registry as er
-
 	# Mock entity registry
 	mock_entity_reg = MagicMock()
 	mock_entity_reg.entities.values.return_value = [

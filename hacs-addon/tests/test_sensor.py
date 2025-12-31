@@ -1,6 +1,6 @@
 """Tests for VomeSync sensor platform."""
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from custom_components.vomesync.const import DOMAIN
 from custom_components.vomesync.sensor import async_setup_entry

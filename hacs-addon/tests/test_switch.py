@@ -2,8 +2,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from homeassistant.const import STATE_ON, STATE_OFF
-
 from custom_components.vomesync.switch import VomeSyncSwitch, async_setup_entry
 
 

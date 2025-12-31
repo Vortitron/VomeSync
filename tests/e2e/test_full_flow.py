@@ -11,13 +11,12 @@ from typing import Dict, List
 import aiohttp
 import pytest
 import websockets
-from websockets.exceptions import ConnectionClosed
 
 
 class VomeSyncE2ETest:
     """End-to-end test suite for VomeSync."""
     
-    def __init__(self, api_base_url: str = "http://localhost:3000", 
+    def __init__(self, api_base_url: str = "http://localhost:3090", 
                  ws_base_url: str = "ws://localhost:3001"):
         self.api_base_url = api_base_url
         self.ws_base_url = ws_base_url
@@ -398,6 +397,7 @@ async def test_rate_limiting(e2e_test):
     # Note: This assertion might be too strict depending on rate limit settings
     # In a real test environment, you might want to make this configurable
     # assert rate_limited, "Rate limiting should have been triggered"
+    assert isinstance(rate_limited, bool)
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 import pytest
 
-from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 
 # Ensure custom_components is importable when running tests directly
