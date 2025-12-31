@@ -11,7 +11,9 @@ services:
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # If a password is set, `redis-cli ping` will fail with NOAUTH. Try AUTH ping first,
+      # and fall back to unauthenticated ping for dev/empty-password cases.
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG || redis-cli ping | grep -q PONG"]
       interval: 30s
       timeout: 10s
       retries: 3
