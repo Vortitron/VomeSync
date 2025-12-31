@@ -35,6 +35,9 @@ class VomeSyncServer {
 			// Initialize WebSocket manager
 			await webSocketManager.initialize(this.wsServer || this.server);
 
+			// Start listening (only after WS is initialised, so readiness checks don't race)
+			await this.startListening();
+
 			// Start heartbeat for WebSocket connections
 			webSocketManager.startHeartbeat();
 
@@ -154,7 +157,9 @@ class VomeSyncServer {
 		} else {
 			this.wsServer = this.server;
 		}
+	}
 
+	async startListening() {
 		// Start listening (API + WS)
 		await Promise.all([
 			new Promise((resolve, reject) => {
