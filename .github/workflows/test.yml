@@ -159,7 +159,8 @@ jobs:
           # Set test configuration
           sed -i 's/your-super-secret-jwt-key-change-this-in-production/test-jwt-secret-ci/' .env
           sed -i 's/your-redis-password-change-this/test-redis-password/' .env
-          docker compose up -d
+          # Start only the services required for API + WebSocket E2E tests.
+          docker compose up -d --build vomesync-redis vomesync-webserver
 
       - name: Wait for services to be ready
         run: |
@@ -268,7 +269,8 @@ jobs:
           sed -i 's/your-super-secret-jwt-key-change-this-in-production/test-jwt-secret/' .env
           sed -i 's/your-redis-password-change-this/test-redis-password/' .env
           docker compose config
-          docker compose up -d --build
+          # Start only the services required for the health check.
+          docker compose up -d --build vomesync-redis vomesync-webserver
           set -a
           . ./.env
           set +a
