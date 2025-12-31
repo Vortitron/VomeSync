@@ -3,6 +3,8 @@ const dotenv = require('dotenv');
 // Load environment variables
 dotenv.config();
 
+const sslEnabled = process.env.ENABLE_SSL === 'true';
+
 const config = {
 	server: {
 		port: parseInt(process.env.PORT, 10) || 3000,
@@ -24,9 +26,9 @@ const config = {
 		rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS, 10) || 100
 	},
 	ssl: {
-		certPath: process.env.SSL_CERT_PATH,
-		keyPath: process.env.SSL_KEY_PATH,
-		enabled: !!(process.env.SSL_CERT_PATH && process.env.SSL_KEY_PATH)
+		certPath: process.env.SSL_CERT_PATH || '',
+		keyPath: process.env.SSL_KEY_PATH || '',
+		enabled: sslEnabled && !!(process.env.SSL_CERT_PATH && process.env.SSL_KEY_PATH)
 	},
 	analytics: {
 		enabled: process.env.ENABLE_ANALYTICS === 'true',
@@ -46,6 +48,10 @@ const config = {
 // Validation
 if (config.server.env === 'production' && config.security.jwtSecret === 'dev-secret-change-in-production') {
 	throw new Error('JWT_SECRET must be set in production environment');
+}
+
+if (sslEnabled && (!config.ssl.certPath || !config.ssl.keyPath)) {
+	throw new Error('ENABLE_SSL is true but SSL_CERT_PATH / SSL_KEY_PATH are not set');
 }
 
 module.exports = config;
