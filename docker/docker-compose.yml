@@ -3,7 +3,12 @@ services:
     image: redis:7-alpine
     container_name: vomesync-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    command: >
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
+        exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD";
+      else
+        exec redis-server --appendonly yes;
+      fi'
     volumes:
       - redis_data:/data
     networks:
