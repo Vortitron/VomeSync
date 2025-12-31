@@ -3,6 +3,14 @@ const config = require('../config/config');
 const logger = require('./logger');
 let testRedisServer = null;
 
+const DEFAULT_REDIS_CONNECT_MAX_ATTEMPTS = 30;
+const DEFAULT_REDIS_CONNECT_RETRY_BASE_MS = 1000;
+const MAX_REDIS_CONNECT_RETRY_MS = 5000;
+
+function _sleep(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 class RedisClient {
 	constructor() {
 		this.client = null;
@@ -12,102 +20,126 @@ class RedisClient {
 	}
 
 	async connect() {
-		try {
-			if (this.isConnected) {
-				return;
-			}
-
-			// Resolve connection settings (supports in-memory Redis for tests)
-			let host = config.redis.host;
-			let port = config.redis.port;
-			let password = config.redis.password;
-			let database = config.redis.db;
-
-			const isTestEnv = process.env.NODE_ENV === 'test';
-
-			// Prefer global test redis (if provided by test harness)
-			if (isTestEnv && global.__REDIS_HOST__ && global.__REDIS_PORT__) {
-				host = global.__REDIS_HOST__;
-				port = global.__REDIS_PORT__;
-				password = undefined;
-				database = 0;
-			} else if (isTestEnv) {
-				// Start an in-memory Redis for tests
-				// Lazy require to avoid adding prod dep
-				// eslint-disable-next-line global-require
-				const { RedisMemoryServer } = require('redis-memory-server');
-				testRedisServer = await RedisMemoryServer.create({
-					instance: { port: 0 }
-				});
-				host = await testRedisServer.getHost();
-				port = await testRedisServer.getPort();
-				password = undefined;
-				database = 0;
-
-				global.__REDIS_HOST__ = host;
-				global.__REDIS_PORT__ = port;
-				global.__REDIS_SERVER__ = testRedisServer;
-
-				logger.info(`Started in-memory Redis for tests at ${host}:${port}`);
-			}
-
-			// Main Redis client for data operations
-			this.client = redis.createClient({
-				socket: {
-					host,
-					port
-				},
-				password: password || undefined,
-				database
-			});
-
-			// Pub/Sub clients (Redis requires separate clients for pub/sub)
-			this.pubClient = redis.createClient({
-				socket: {
-					host,
-					port
-				},
-				password: password || undefined,
-				database
-			});
-
-			this.subClient = redis.createClient({
-				socket: {
-					host,
-					port
-				},
-				password: password || undefined,
-				database
-			});
-
-			// Connect all clients
-			await Promise.all([
-				this.client.connect(),
-				this.pubClient.connect(),
-				this.subClient.connect()
-			]);
-
-			// Set up error handlers
-			this.client.on('error', (err) => {
-				logger.error('Redis client error:', err);
-				this.isConnected = false;
-			});
-
-			this.pubClient.on('error', (err) => {
-				logger.error('Redis pub client error:', err);
-			});
-
-			this.subClient.on('error', (err) => {
-				logger.error('Redis sub client error:', err);
-			});
-
-			this.isConnected = true;
-			logger.info('Redis clients connected successfully');
-
-		} catch (error) {
-			logger.error('Failed to connect to Redis:', error);
-			throw error;
+		if (this.isConnected) {
+			return;
 		}
+
+		// Resolve connection settings (supports in-memory Redis for tests)
+		let host = config.redis.host;
+		let port = config.redis.port;
+		let password = config.redis.password;
+		let database = config.redis.db;
+
+		const isTestEnv = process.env.NODE_ENV === 'test';
+
+		// Prefer global test redis (if provided by test harness)
+		if (isTestEnv && global.__REDIS_HOST__ && global.__REDIS_PORT__) {
+			host = global.__REDIS_HOST__;
+			port = global.__REDIS_PORT__;
+			password = undefined;
+			database = 0;
+		} else if (isTestEnv) {
+			// Start an in-memory Redis for tests
+			// Lazy require to avoid adding prod dep
+			// eslint-disable-next-line global-require
+			const { RedisMemoryServer } = require('redis-memory-server');
+			testRedisServer = await RedisMemoryServer.create({
+				instance: { port: 0 }
+			});
+			host = await testRedisServer.getHost();
+			port = await testRedisServer.getPort();
+			password = undefined;
+			database = 0;
+
+			global.__REDIS_HOST__ = host;
+			global.__REDIS_PORT__ = port;
+			global.__REDIS_SERVER__ = testRedisServer;
+
+			logger.info(`Started in-memory Redis for tests at ${host}:${port}`);
+		}
+
+		const maxAttempts = isTestEnv
+			? 1
+			: (Number.parseInt(process.env.REDIS_CONNECT_MAX_ATTEMPTS || '', 10) || DEFAULT_REDIS_CONNECT_MAX_ATTEMPTS);
+
+		let lastError = null;
+
+		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+			try {
+				// Main Redis client for data operations
+				this.client = redis.createClient({
+					socket: { host, port },
+					password: password || undefined,
+					database
+				});
+
+				// Pub/Sub clients (Redis requires separate clients for pub/sub)
+				this.pubClient = redis.createClient({
+					socket: { host, port },
+					password: password || undefined,
+					database
+				});
+
+				this.subClient = redis.createClient({
+					socket: { host, port },
+					password: password || undefined,
+					database
+				});
+
+				// Connect all clients
+				await Promise.all([
+					this.client.connect(),
+					this.pubClient.connect(),
+					this.subClient.connect()
+				]);
+
+				// Set up error handlers
+				this.client.on('error', (err) => {
+					logger.error('Redis client error:', err);
+					this.isConnected = false;
+				});
+
+				this.pubClient.on('error', (err) => {
+					logger.error('Redis pub client error:', err);
+				});
+
+				this.subClient.on('error', (err) => {
+					logger.error('Redis sub client error:', err);
+				});
+
+				this.isConnected = true;
+				logger.info('Redis clients connected successfully');
+				return;
+
+			} catch (error) {
+				lastError = error;
+				this.isConnected = false;
+
+				try { this.client?.disconnect(); } catch (_err) { /* ignore */ }
+				try { this.pubClient?.disconnect(); } catch (_err) { /* ignore */ }
+				try { this.subClient?.disconnect(); } catch (_err) { /* ignore */ }
+				this.client = null;
+				this.pubClient = null;
+				this.subClient = null;
+
+				if (attempt >= maxAttempts) {
+					break;
+				}
+
+				const retryMs = Math.min(DEFAULT_REDIS_CONNECT_RETRY_BASE_MS * attempt, MAX_REDIS_CONNECT_RETRY_MS);
+				logger.warn(
+					'Failed to connect to Redis (attempt %d/%d). Retrying in %dms. Error: %s',
+					attempt,
+					maxAttempts,
+					retryMs,
+					error && error.message ? error.message : String(error)
+				);
+				await _sleep(retryMs);
+			}
+		}
+
+		logger.error('Failed to connect to Redis:', lastError);
+		throw lastError;
 	}
 
 	async disconnect() {

@@ -168,7 +168,7 @@ jobs:
           set -a
           . ./.env
           set +a
-          timeout 60s bash -c 'until curl -f "http://localhost:${VOMESYNC_API_HOST_PORT:-3090}/api/health"; do sleep 2; done'
+          timeout 180s bash -c 'until curl -f "http://localhost:${VOMESYNC_API_HOST_PORT:-3090}/api/health"; do sleep 2; done'
 
       - name: Run E2E tests
         run: |
@@ -274,7 +274,7 @@ jobs:
           set -a
           . ./.env
           set +a
-          timeout 60s bash -c 'until curl -f "http://localhost:${VOMESYNC_API_HOST_PORT:-3090}/api/health"; do sleep 2; done'
+          timeout 180s bash -c 'until curl -f "http://localhost:${VOMESYNC_API_HOST_PORT:-3090}/api/health"; do sleep 2; done'
           docker compose down -v
 
   security-scan:
