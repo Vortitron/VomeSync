@@ -14,6 +14,7 @@ class VomeSyncServer {
 	constructor() {
 		this.app = express();
 		this.server = null;
+		this.wsServer = null;
 		this.isShuttingDown = false;
 	}
 
@@ -32,7 +33,7 @@ class VomeSyncServer {
 			await this.createServer();
 
 			// Initialize WebSocket manager
-			await webSocketManager.initialize(this.server);
+			await webSocketManager.initialize(this.wsServer || this.server);
 
 			// Start heartbeat for WebSocket connections
 			webSocketManager.startHeartbeat();
@@ -146,19 +147,45 @@ class VomeSyncServer {
 			logger.info('Created HTTP server');
 		}
 
-		// Start listening
-		await new Promise((resolve, reject) => {
-			this.server.listen(config.server.port, (error) => {
-				if (error) {
-					reject(error);
-				} else {
+		// WebSocket server: split onto WS_PORT (used by nginx proxy upstream), unless it matches API port.
+		if (config.server.wsPort && config.server.wsPort !== config.server.port) {
+			this.wsServer = http.createServer();
+			logger.info('Created WebSocket HTTP server');
+		} else {
+			this.wsServer = this.server;
+		}
+
+		// Start listening (API + WS)
+		await Promise.all([
+			new Promise((resolve, reject) => {
+				this.server.listen(config.server.port, (error) => {
+					if (error) {
+						reject(error);
+					} else {
+						resolve();
+					}
+				});
+			}),
+			new Promise((resolve, reject) => {
+				if (!this.wsServer || this.wsServer === this.server) {
 					resolve();
+					return;
 				}
-			});
-		});
+				this.wsServer.listen(config.server.wsPort, (error) => {
+					if (error) {
+						reject(error);
+					} else {
+						resolve();
+					}
+				});
+			})
+		]);
 
 		const protocol = config.ssl.enabled ? 'https' : 'http';
-		logger.info(`Server listening on ${protocol}://localhost:${config.server.port}`);
+		logger.info(`API listening on ${protocol}://localhost:${config.server.port}`);
+		if (this.wsServer && this.wsServer !== this.server) {
+			logger.info(`WebSocket listening on ws://localhost:${config.server.wsPort}`);
+		}
 	}
 
 	setupGracefulShutdown() {
@@ -178,30 +205,35 @@ class VomeSyncServer {
 			}, 30000); // 30 second timeout
 
 			try {
-				// Stop accepting new connections
-				this.server.close(async () => {
-					logger.info('HTTP server closed');
+				// Close WebSocket connections
+				if (webSocketManager.wss) {
+					webSocketManager.wss.close();
+					logger.info('WebSocket server closed');
+				}
 
-					try {
-						// Close WebSocket connections
-						if (webSocketManager.wss) {
-							webSocketManager.wss.close();
-							logger.info('WebSocket server closed');
-						}
-
-						// Disconnect from Redis
-						await redisClient.disconnect();
-						logger.info('Redis disconnected');
-
-						clearTimeout(shutdownTimeout);
-						logger.info('Graceful shutdown completed');
-						process.exit(0);
-					} catch (error) {
-						logger.error('Error during shutdown cleanup:', error);
-						clearTimeout(shutdownTimeout);
-						process.exit(1);
+				const closeServer = (srv, label) => new Promise((resolve) => {
+					if (!srv) {
+						resolve();
+						return;
 					}
+					srv.close(() => {
+						logger.info('%s server closed', label);
+						resolve();
+					});
 				});
+
+				await closeServer(this.server, 'HTTP');
+				if (this.wsServer && this.wsServer !== this.server) {
+					await closeServer(this.wsServer, 'WebSocket HTTP');
+				}
+
+				// Disconnect from Redis
+				await redisClient.disconnect();
+				logger.info('Redis disconnected');
+
+				clearTimeout(shutdownTimeout);
+				logger.info('Graceful shutdown completed');
+				process.exit(0);
 			} catch (error) {
 				logger.error('Error during shutdown:', error);
 				clearTimeout(shutdownTimeout);
