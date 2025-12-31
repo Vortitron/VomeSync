@@ -211,8 +211,7 @@ Visit [sync.vome.io](https://sync.vome.io) to browse community switches. The dir
 
 - **Documentation**: [GitHub Repository](https://github.com/Vortitron/VomeSync)
 - **Issues**: [GitHub Issues](https://github.com/Vortitron/VomeSync/issues)
-- **Community**: [r/homeassistant](https://reddit.com/r/homeassistant)
-- **Email**: [support@vome.io](mailto:support@vome.io)
+- **Updates**: [@VomeHome on X](https://x.com/VomeHome)
 
 ## License
 

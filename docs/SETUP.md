@@ -512,5 +512,3 @@ vomesync_key: "your-personal-key-uuid"
 
 1. **Check logs first** - most issues can be diagnosed from logs
 2. **GitHub Issues** - https://github.com/Vortitron/VomeSync/issues
-3. **Community** - r/homeassistant on Reddit
-4. **Email Support** - support@vome.io (paid tiers)

@@ -376,8 +376,8 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
 - ⚠ **HA UI**: Requires manual testing through options flow
 
 ## Contact
-- **Support**: Email [support@vome.io](mailto:support@vome.io) or paid tier (€20/hour).
-- **Community**: Join discussions on [r/homeassistant](https://reddit.com/r/homeassistant) or Home Assistant forums.
+- **Support**: Please use [GitHub Issues](https://github.com/Vortitron/VomeSync/issues).
+- **Updates**: [@VomeHome on X](https://x.com/VomeHome)
 - **Website**: [sync.vome.io](https://sync.vome.io)
 
 ## License
