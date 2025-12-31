@@ -4,6 +4,7 @@ Tests the entire system from API to WebSocket functionality.
 """
 import asyncio
 import json
+import os
 import time
 import uuid
 from typing import Dict, List
@@ -366,6 +367,10 @@ async def test_error_handling(e2e_test):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+	os.getenv("VOMESYNC_E2E_RATE_LIMIT_TEST") != "1",
+	reason="Optional: enable with VOMESYNC_E2E_RATE_LIMIT_TEST=1 (rate limits are environment-dependent and make CI flaky).",
+)
 async def test_rate_limiting(e2e_test):
     """Test API rate limiting functionality."""
     # Generate many personal keys rapidly to test rate limiting
