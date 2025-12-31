@@ -31,10 +31,7 @@ describe('API V2 Integration Tests', () => {
 
 	beforeEach(async () => {
 		if (redisClient.isConnected) {
-			const keys = await redisClient.client.keys('*');
-			if (keys.length > 0) {
-				await redisClient.client.del(...keys);
-			}
+			await redisClient.client.flushDb();
 		}
 	});
 

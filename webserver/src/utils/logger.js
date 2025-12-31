@@ -1,4 +1,6 @@
 const winston = require('winston');
+const fs = require('fs');
+const path = require('path');
 const config = require('../config/config');
 
 const logger = winston.createLogger({
@@ -19,13 +21,30 @@ const logger = winston.createLogger({
 	]
 });
 
+function _canWriteLogFile(filePath) {
+	try {
+		const dir = path.dirname(filePath);
+		fs.mkdirSync(dir, { recursive: true });
+		fs.accessSync(dir, fs.constants.W_OK);
+		const fd = fs.openSync(filePath, 'a');
+		fs.closeSync(fd);
+		return true;
+	} catch (_err) {
+		return false;
+	}
+}
+
 // Add file transport in production
 if (config.server.env === 'production') {
-	logger.add(new winston.transports.File({
-		filename: config.logging.file,
-		maxsize: 5242880, // 5MB
-		maxFiles: 5
-	}));
+	if (_canWriteLogFile(config.logging.file)) {
+		logger.add(new winston.transports.File({
+			filename: config.logging.file,
+			maxsize: 5242880, // 5MB
+			maxFiles: 5
+		}));
+	} else {
+		logger.warn('File logging disabled (log path not writable): %s', config.logging.file);
+	}
 }
 
 module.exports = logger;

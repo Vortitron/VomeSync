@@ -52,10 +52,7 @@ describe('WebSocket Integration Tests', () => {
 	beforeEach(async () => {
 		// Clean up test data
 		if (redisClient.isConnected) {
-			const testKeys = await redisClient.client.keys('*');
-			if (testKeys.length > 0) {
-				await redisClient.client.del(...testKeys);
-			}
+			await redisClient.client.flushDb();
 		}
 	});
 
