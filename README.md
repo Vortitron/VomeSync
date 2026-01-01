@@ -73,6 +73,10 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - `POST /api/v2/switch`: Creates a deterministic switch (Ed25519 signed; UID derived from switch public key).
   - `POST /api/v2/my-switches`: Lists switches owned by an Ed25519 owner key (signed).
   - `POST /api/v2/switch/{UID}/state`: Sets state + optional params (signed; params forwarded via WebSocket).
+  - `POST /api/v2/switch/{UID}`: Updates v2 switch metadata (signed by owner; includes `iconUrl` + `bannerUrl`).
+  - `POST /api/v2/switch/{UID}/access-keys`: Creates a delegated access key for a switch (signed by owner).
+  - `POST /api/v2/switch/{UID}/toggle`: Toggles a switch using a delegated access key (no signatures).
+  - `POST /api/v2/switch/{UID}/comment`: Posts a comment using a delegated access key (no signatures).
   - `GET /status/{UID}`: Returns current switch state (publicly accessible).
   - `WSS /ws?uid={uid}`: WebSocket for real-time state updates to subscribed clients.
 - **Privacy**:
@@ -87,6 +91,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - Optional Redis caching for performance.
 - **Features**:
   - Lists switches (UID, description, city-level location, category) for users to browse/copy UIDs.
+  - Optional theming: per-switch `iconUrl` + `bannerUrl` shown on switch pages (and `https://sync.vome.io/switch/<uid>` deep links).
   - Simple table view (e.g., "Porch Light Event, Stockholm, Community").
   - No user accounts—public read-only access.
 - **Privacy**: Anonymized data only (no personal identifiers). Links to privacy policy.

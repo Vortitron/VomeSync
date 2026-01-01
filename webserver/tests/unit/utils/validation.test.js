@@ -278,6 +278,8 @@ describe('Validation Utilities', () => {
 				toggleCount: 5,
 				userCount: 0,
 				link: '',
+				iconUrl: '',
+				bannerUrl: '',
 				ownerProfileUrl: ''
 			});
 
@@ -333,7 +335,9 @@ describe('Validation Utilities', () => {
 				createdAt: 1234567890,
 				toggleCount: 5,
 				publicize: true,
-				link: ''
+				link: '',
+				iconUrl: '',
+				bannerUrl: ''
 			});
 
 			// Personal key should still be excluded

@@ -12,6 +12,100 @@ const cors = require('cors');
 const helmet = require('helmet');
 const apiRoutes = require('../../src/routes/api');
 const redisClient = require('../../src/utils/redis');
+const {
+	deriveOwnerIdFromOwnerPubKeyB64Url,
+	deriveSwitchUidFromSwitchPubKeyB64Url,
+	stableJsonStringify
+} = require('../../src/utils/crypto_v2');
+
+async function createV2PublicSwitch(app, metaOverrides = {}, index = 0) {
+	const owner = global.testUtils.createEd25519Keypair();
+	const sw = global.testUtils.createEd25519Keypair();
+	const ownerPubKeyB64 = Buffer.from(owner.rawPublicKey).toString('base64url');
+	const switchPubKeyB64 = Buffer.from(sw.rawPublicKey).toString('base64url');
+	const uid = deriveSwitchUidFromSwitchPubKeyB64Url(switchPubKeyB64);
+
+	const ts = Date.now();
+	const nonce = `n-${Date.now()}-${Math.random().toString(16).slice(2)}-create`;
+	const meta = {
+		description: 'Public Switch',
+		location: 'Test City',
+		category: 'Community',
+		publicize: true,
+		link: '',
+		...metaOverrides
+	};
+
+	const canonical = stableJsonStringify({
+		v: 2,
+		action: 'create_switch',
+		ownerPubKey: ownerPubKeyB64,
+		switchPubKey: switchPubKeyB64,
+		uid,
+		index,
+		ts,
+		nonce,
+		payload: meta
+	});
+	const sigOwner = global.testUtils.ed25519SignBase64Url(owner.privateKey, canonical);
+	const sigSwitch = global.testUtils.ed25519SignBase64Url(sw.privateKey, canonical);
+
+	const response = await request(app)
+		.post('/api/v2/switch')
+		.send({
+			ownerPubKey: ownerPubKeyB64,
+			switchPubKey: switchPubKeyB64,
+			index,
+			ts,
+			nonce,
+			sigOwner,
+			sigSwitch,
+			...meta,
+			captchaToken: process.env.HCAPTCHA_BYPASS_TOKEN
+		})
+		.expect(200);
+
+	return {
+		uid: response.body.data.uid,
+		owner,
+		sw,
+		ownerPubKeyB64,
+		switchPubKeyB64,
+		ownerId: deriveOwnerIdFromOwnerPubKeyB64Url(ownerPubKeyB64)
+	};
+}
+
+async function createV2AccessKey(app, uid, owner, ownerPubKeyB64, permissions, name = '') {
+	const ts = Date.now();
+	const nonce = `n-${Date.now()}-${Math.random().toString(16).slice(2)}-ak`;
+	const canonical = stableJsonStringify({
+		v: 2,
+		action: 'create_access_key',
+		uid,
+		ownerPubKey: ownerPubKeyB64,
+		ts,
+		nonce,
+		payload: {
+			name,
+			permissions
+		}
+	});
+	const sigOwner = global.testUtils.ed25519SignBase64Url(owner.privateKey, canonical);
+
+	const response = await request(app)
+		.post(`/api/v2/switch/${uid}/access-keys`)
+		.send({
+			ownerPubKey: ownerPubKeyB64,
+			ts,
+			nonce,
+			sigOwner,
+			name,
+			permissions
+		})
+		.expect(200);
+
+	return response.body.data.apiKey;
+}
 
 describe('API Integration Tests', () => {
 	let app;
@@ -336,30 +430,14 @@ describe('API Integration Tests', () => {
 		});
 
 		test('should return only public switches', async () => {
-			// Create personal key
-			const keyResponse = await request(app)
-				.post('/api/generate-key')
-				.send({ consent: true });
-			const personalKey = keyResponse.body.data.personalKey;
-
-			// Create public switch
-			const publicSwitchResponse = await request(app)
-				.post('/api/create-switch')
-				.set('X-Personal-Key', personalKey)
-				.send({
-					description: 'Public Switch',
-					publicize: true,
-					captchaToken: process.env.HCAPTCHA_BYPASS_TOKEN
-				});
-
-			// Create private switch
-			await request(app)
-				.post('/api/create-switch')
-				.set('X-Personal-Key', personalKey)
-				.send({
-					description: 'Private Switch',
-					publicize: false
-				});
+			// Public directory is v2-only
+			const createdPublic = await createV2PublicSwitch(app, {
+				description: 'Public Switch',
+				publicize: true,
+				category: 'Community',
+				link: 'https://example.com'
+			}, 0);
+			await createV2PublicSwitch(app, { description: 'Private Switch', publicize: false }, 1);
 
 			const response = await request(app)
 				.get('/api/public-switches')
@@ -367,41 +445,29 @@ describe('API Integration Tests', () => {
 
 			expect(response.body.success).toBe(true);
 			expect(response.body.data.switches).toHaveLength(1);
-			expect(response.body.data.switches[0].uid).toBe(publicSwitchResponse.body.data.uid);
+			expect(response.body.data.switches[0].uid).toBe(createdPublic.uid);
 			expect(response.body.data.switches[0].description).toBe('Public Switch');
 			expect(response.body.data.count).toBe(1);
 		});
 	});
 
 	describe('Switch detail, comments, and categories', () => {
-		let personalKey;
 		let publicUid;
-		let apiKey;
+		let owner;
+		let ownerPubKeyB64;
+		let accessKey;
 
 		beforeEach(async () => {
-			const keyResponse = await request(app)
-				.post('/api/generate-key')
-				.send({ consent: true });
-			personalKey = keyResponse.body.data.personalKey;
-
-			const switchResponse = await request(app)
-				.post('/api/create-switch')
-				.set('X-Personal-Key', personalKey)
-				.send({
-					description: 'Public Switch',
-					publicize: true,
-					category: 'Community',
-					link: 'https://example.com',
-					captchaToken: process.env.HCAPTCHA_BYPASS_TOKEN
-				});
-			publicUid = switchResponse.body.data.uid;
-
-			// Create API key for testing alternate auth path
-			const apiKeyRes = await request(app)
-				.post('/api/api-keys')
-				.set('X-Personal-Key', personalKey)
-				.send({ name: 'test-api' });
-			apiKey = apiKeyRes.body.data.apiKey;
+			const created = await createV2PublicSwitch(app, {
+				description: 'Public Switch',
+				publicize: true,
+				category: 'Community',
+				link: 'https://example.com'
+			}, 0);
+			publicUid = created.uid;
+			owner = created.owner;
+			ownerPubKeyB64 = created.ownerPubKeyB64;
+			accessKey = await createV2AccessKey(app, publicUid, owner, ownerPubKeyB64, ['toggle', 'comment'], 'test-key');
 		});
 
 		test('should return detail for public switch', async () => {
@@ -414,16 +480,14 @@ describe('API Integration Tests', () => {
 			expect(response.body.data.description).toBe('Public Switch');
 			expect(Array.isArray(response.body.data.events)).toBe(true);
 			expect(response.body.data.link).toBe('https://example.com');
+			expect(response.body.data.ownerProfileUrl).toBe('');
 		});
 
 		test('should reject detail for private switch', async () => {
-			const privateResp = await request(app)
-				.post('/api/create-switch')
-				.set('X-Personal-Key', personalKey)
-				.send({ description: 'Private Switch', publicize: false });
+			const createdPrivate = await createV2PublicSwitch(app, { description: 'Private Switch', publicize: false }, 1);
 
 			const detailResponse = await request(app)
-				.get(`/api/switch/${privateResp.body.data.uid}`)
+				.get(`/api/switch/${createdPrivate.uid}`)
 				.expect(404);
 
 			expect(detailResponse.body.success).toBe(false);
@@ -431,12 +495,13 @@ describe('API Integration Tests', () => {
 
 		test('should accept comments from owner', async () => {
 			const commentResponse = await request(app)
-				.post(`/api/switch/${publicUid}/comment`)
-				.set('X-Personal-Key', personalKey)
+				.post(`/api/v2/switch/${publicUid}/comment`)
+				.set('X-Api-Key', accessKey)
 				.send({ comment: 'Test note' })
 				.expect(200);
 
 			expect(commentResponse.body.success).toBe(true);
+			expect(commentResponse.body.data.viaApiKey).toBe(true);
 
 			const detailResponse = await request(app)
 				.get(`/api/switch/${publicUid}`)
@@ -445,11 +510,12 @@ describe('API Integration Tests', () => {
 			const comments = (detailResponse.body.data.events || []).filter(e => e.type === 'comment');
 			expect(comments.length).toBe(1);
 			expect(comments[0].comment).toBe('Test note');
+			expect(comments[0].viaApiKey).toBe(true);
 		});
 
 		test('should require authentication for comments', async () => {
 			const commentResponse = await request(app)
-				.post(`/api/switch/${publicUid}/comment`)
+				.post(`/api/v2/switch/${publicUid}/comment`)
 				.send({ comment: 'No key' })
 				.expect(401);
 
@@ -458,8 +524,8 @@ describe('API Integration Tests', () => {
 
 		test('toggle should record user count and timeline', async () => {
 			const toggleResponse = await request(app)
-				.post(`/api/toggle/${publicUid}`)
-				.set('X-Personal-Key', personalKey)
+				.post(`/api/v2/switch/${publicUid}/toggle`)
+				.set('X-Api-Key', accessKey)
 				.send({})
 				.expect(200);
 
@@ -475,40 +541,6 @@ describe('API Integration Tests', () => {
 			expect(stateEvents.length).toBeGreaterThanOrEqual(1);
 		});
 
-		test('profile link should be stored and exposed', async () => {
-			const profileUrl = 'https://owner.example.com';
-			await request(app)
-				.post('/api/profile/link')
-				.set('X-Personal-Key', personalKey)
-				.send({ profileUrl })
-				.expect(200);
-
-			const detailResponse = await request(app)
-				.get(`/api/switch/${publicUid}`)
-				.expect(200);
-
-			expect(detailResponse.body.data.ownerProfileUrl).toBe(profileUrl);
-		});
-
-		test('API key comment should be accepted and marked', async () => {
-			const commentResponse = await request(app)
-				.post(`/api/switch/${publicUid}/comment`)
-				.set('X-Api-Key', apiKey)
-				.send({ comment: 'API note' })
-				.expect(200);
-
-			expect(commentResponse.body.success).toBe(true);
-
-			const detailResponse = await request(app)
-				.get(`/api/switch/${publicUid}`)
-				.expect(200);
-
-			const comments = (detailResponse.body.data.events || []).filter(e => e.type === 'comment');
-			const apiComment = comments.find(e => e.comment === 'API note');
-			expect(apiComment).toBeDefined();
-			expect(apiComment.viaApiKey).toBe(true);
-		});
-
 		test('should list categories with counts', async () => {
 			const response = await request(app)
 				.get('/api/categories')
@@ -519,15 +551,41 @@ describe('API Integration Tests', () => {
 		});
 
 		test('should update switch metadata', async () => {
+			const ts = Date.now();
+			const nonce = `n-${Date.now()}-${Math.random().toString(16).slice(2)}-meta`;
+			const updates = {
+				link: 'https://updated.example.com',
+				description: 'Updated',
+				iconUrl: 'https://example.com/icon.png',
+				bannerUrl: 'https://example.com/banner.jpg'
+			};
+			const canonical = stableJsonStringify({
+				v: 2,
+				action: 'update_switch',
+				uid: publicUid,
+				ownerPubKey: ownerPubKeyB64,
+				ts,
+				nonce,
+				payload: updates
+			});
+			const sigOwner = global.testUtils.ed25519SignBase64Url(owner.privateKey, canonical);
+
 			const response = await request(app)
-				.patch(`/api/switch/${publicUid}`)
-				.set('X-Personal-Key', personalKey)
-				.send({ link: 'https://updated.example.com', description: 'Updated' })
+				.post(`/api/v2/switch/${publicUid}`)
+				.send({
+					ownerPubKey: ownerPubKeyB64,
+					ts,
+					nonce,
+					sigOwner,
+					...updates
+				})
 				.expect(200);
 
 			expect(response.body.success).toBe(true);
 			expect(response.body.data.link).toBe('https://updated.example.com');
 			expect(response.body.data.description).toBe('Updated');
+			expect(response.body.data.iconUrl).toBe('https://example.com/icon.png');
+			expect(response.body.data.bannerUrl).toBe('https://example.com/banner.jpg');
 		});
 	});
 

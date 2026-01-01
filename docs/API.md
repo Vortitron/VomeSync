@@ -63,6 +63,8 @@ Create a deterministic switch (UID is derived by the server from `switchPubKey`)
   "category": "Other",
   "publicize": false,
   "link": "",
+  "iconUrl": "https://example.com/icon.png",
+  "bannerUrl": "https://example.com/banner.jpg",
   "captchaToken": ""
 }
 ```
@@ -76,9 +78,100 @@ Create a deterministic switch (UID is derived by the server from `switchPubKey`)
     "authVersion": 2,
     "index": 0,
     "state": false,
-    "publicize": false
+    "publicize": false,
+    "iconUrl": "",
+    "bannerUrl": ""
   }
 }
+```
+
+### Update Switch Metadata (v2)
+
+Update a v2 switch's metadata (signed by the owner key).
+
+**POST** `/api/v2/switch/{uid}`
+
+**Request Body (example):**
+```json
+{
+  "ownerPubKey": "base64url-raw-ed25519-pubkey",
+  "ts": 1712345678901,
+  "nonce": "random-string",
+  "sigOwner": "base64url-ed25519-signature",
+  "description": "My Switch",
+  "link": "https://example.com",
+  "iconUrl": "https://example.com/icon.png",
+  "bannerUrl": "https://example.com/banner.jpg"
+}
+```
+
+Notes:
+- You must include **at least one** metadata field to update.
+- To clear `iconUrl`/`bannerUrl`, send an empty string.
+- When setting `"publicize": true`, the server may require `captchaToken` if CAPTCHA is configured.
+
+### Access Keys (v2 delegation)
+
+Access keys are **server-generated API keys** scoped to a single v2 switch. Owners can create them via an owner-signed request and share them with other people.
+
+#### Create access key (v2)
+
+**POST** `/api/v2/switch/{uid}/access-keys`
+
+**Request Body (example):**
+```json
+{
+  "ownerPubKey": "base64url-raw-ed25519-pubkey",
+  "ts": 1712345678901,
+  "nonce": "random-string",
+  "sigOwner": "base64url-ed25519-signature",
+  "name": "Friend",
+  "permissions": ["toggle", "comment"]
+}
+```
+
+**Response (example):**
+```json
+{
+  "success": true,
+  "data": {
+    "apiKey": "uuid-v4-string",
+    "name": "Friend",
+    "permissions": ["toggle", "comment"],
+    "createdAt": 1712345678901
+  }
+}
+```
+
+#### List access keys (v2)
+
+**POST** `/api/v2/switch/{uid}/access-keys/list`
+
+#### Revoke access key (v2)
+
+**POST** `/api/v2/switch/{uid}/access-keys/revoke`
+
+#### Toggle using access key (v2)
+
+**POST** `/api/v2/switch/{uid}/toggle`
+
+Header:
+```
+X-Api-Key: uuid-v4-string
+```
+
+#### Comment using access key (v2)
+
+**POST** `/api/v2/switch/{uid}/comment`
+
+Header:
+```
+X-Api-Key: uuid-v4-string
+```
+
+Body:
+```json
+{ "comment": "Reason for change" }
 ```
 
 ### Get My Switches (v2)
@@ -237,7 +330,7 @@ Get current switch state (public endpoint).
 
 ### Get Public Switches
 
-List all public switches.
+List all public switches (**v2 only**). Legacy v1 UUID switches are not listed.
 
 **GET** `/api/public-switches`
 
@@ -248,12 +341,14 @@ List all public switches.
   "data": {
     "switches": [
       {
-        "uid": "switch-uuid",
+        "uid": "vs_...",
         "description": "Festival Light Event",
         "location": "Stockholm",
         "category": "Community",
         "state": true,
-        "lastToggled": 1640995200000
+        "lastToggled": 1640995200000,
+        "iconUrl": "",
+        "bannerUrl": ""
       }
     ],
     "count": 1,

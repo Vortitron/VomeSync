@@ -197,6 +197,8 @@ class RedisClient {
 			createdAt: Number(data.createdAt) || 0,
 			lastToggled: Number(data.lastToggled) || 0,
 			link: data.link || '',
+			iconUrl: data.iconUrl || '',
+			bannerUrl: data.bannerUrl || '',
 			params: (data.params && typeof data.params === 'object') ? data.params : undefined
 		};
 	}
@@ -250,6 +252,8 @@ class RedisClient {
 			category: switchConfig.category || '',
 			publicize: switchConfig.publicize || false,
 			link: switchConfig.link || '',
+			iconUrl: switchConfig.iconUrl || '',
+			bannerUrl: switchConfig.bannerUrl || '',
 			toggleCount: 0,
 			params: {}
 		};
@@ -369,8 +373,12 @@ class RedisClient {
 			if (!switchData || !switchData.publicize) {
 				continue;
 			}
+			// Ignore legacy v1 switches (UUID + personalKey auth). Public directory should be v2-only.
+			if (switchData.authVersion !== 2) {
+				continue;
+			}
 			const userCount = await this.getUserCount(uid);
-			const ownerProfileUrl = await this.getProfileUrl(switchData.personalKey);
+			const ownerProfileUrl = '';
 			switches.push({
 				uid: switchData.uid,
 				description: switchData.description,
@@ -381,6 +389,8 @@ class RedisClient {
 				toggleCount: switchData.toggleCount || 0,
 				userCount,
 				link: switchData.link || '',
+				iconUrl: switchData.iconUrl || '',
+				bannerUrl: switchData.bannerUrl || '',
 				ownerProfileUrl
 			});
 		}
@@ -564,6 +574,90 @@ class RedisClient {
 		return data.personalKey;
 	}
 
+	// V2 access keys (delegation): per-switch keys created by owner signature, stored server-side
+	async createV2AccessKey(ownerId, uid, name = '', permissions = ['toggle']) {
+		if (!ownerId || !uid) {
+			return null;
+		}
+		const { v4: uuidv4 } = require('uuid');
+		const apiKey = uuidv4();
+
+		const keyData = {
+			apiKey,
+			ownerId,
+			uid,
+			authVersion: 2,
+			type: 'v2_access_key',
+			name,
+			permissions: Array.isArray(permissions) ? permissions : ['toggle'],
+			createdAt: Date.now(),
+			lastUsed: 0,
+			revoked: false
+		};
+
+		await this.client.hSet(`apikey:${apiKey}`, this._serializeHash(keyData));
+		await this.client.sAdd(`switch:${uid}:access_keys`, apiKey);
+		await this.client.sAdd(`owner:${ownerId}:access_keys`, apiKey);
+		return keyData;
+	}
+
+	async listV2AccessKeys(ownerId, uid) {
+		if (!ownerId || !uid) {
+			return [];
+		}
+		const apiKeys = await this.client.sMembers(`switch:${uid}:access_keys`);
+		const result = [];
+		for (const key of apiKeys) {
+			const data = await this.client.hGetAll(`apikey:${key}`);
+			if (data && Object.keys(data).length > 0) {
+				const parsed = this._deserializeHash(data);
+				// Only list keys for this switch + owner (defence in depth)
+				if (parsed && parsed.uid === uid && parsed.ownerId === ownerId && parsed.type === 'v2_access_key') {
+					result.push(parsed);
+				}
+			}
+		}
+		return result;
+	}
+
+	async revokeV2AccessKey(ownerId, uid, apiKey) {
+		if (!ownerId || !uid || !apiKey) {
+			return false;
+		}
+		const data = await this.client.hGetAll(`apikey:${apiKey}`);
+		if (!data || Object.keys(data).length === 0) {
+			return false;
+		}
+		const parsed = this._deserializeHash(data);
+		if (!parsed || parsed.type !== 'v2_access_key' || parsed.ownerId !== ownerId || parsed.uid !== uid) {
+			return false;
+		}
+
+		await this.client.hSet(`apikey:${apiKey}`, this._serializeHash({ revoked: true, lastUsed: Date.now() }));
+		await this.client.sRem(`switch:${uid}:access_keys`, apiKey);
+		await this.client.sRem(`owner:${ownerId}:access_keys`, apiKey);
+		return true;
+	}
+
+	async resolveV2AccessKey(apiKey) {
+		if (!apiKey) {
+			return null;
+		}
+		const data = await this.client.hGetAll(`apikey:${apiKey}`);
+		if (!data || Object.keys(data).length === 0) {
+			return null;
+		}
+		if (data.revoked === 'true') {
+			return null;
+		}
+		const parsed = this._deserializeHash(data);
+		if (!parsed || parsed.type !== 'v2_access_key' || parsed.authVersion !== 2) {
+			return null;
+		}
+		await this.client.hSet(`apikey:${apiKey}`, 'lastUsed', Date.now());
+		return parsed;
+	}
+
 	// Session token management (one-time tokens for web login)
 	async createSessionToken(personalKey, ttlSeconds = 300) {
 		const { v4: uuidv4 } = require('uuid');
@@ -613,10 +707,14 @@ class RedisClient {
 		if (!switchData || !switchData.publicize) {
 			return null;
 		}
+		// Ignore legacy v1 switches (UUID + personalKey auth). Public pages should be v2-only.
+		if (switchData.authVersion !== 2) {
+			return null;
+		}
 
 		const userCount = await this.getUserCount(uid);
 		const events = await this.getEvents(uid, 50);
-		const ownerProfileUrl = await this.getProfileUrl(switchData.personalKey);
+		const ownerProfileUrl = '';
 
 		return {
 			uid: switchData.uid,
@@ -628,6 +726,8 @@ class RedisClient {
 			toggleCount: switchData.toggleCount || 0,
 			userCount,
 			link: switchData.link || '',
+			iconUrl: switchData.iconUrl || '',
+			bannerUrl: switchData.bannerUrl || '',
 			ownerProfileUrl,
 			events
 		};

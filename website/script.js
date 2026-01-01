@@ -1,5 +1,7 @@
 // VomeSync Website JavaScript (static SPA)
 
+const SWITCH_UID_V2_REGEX = /^vs_[0-9a-hjkmnpqrstvwxyz]{26}$/i;
+
 function normaliseApiBaseUrl(url) {
 	if (!url) return '';
 	return String(url).trim().replace(/\/+$/, '');
@@ -57,6 +59,7 @@ let categories = {};
 let currentSwitchId = null;
 
 // DOM elements
+const heroSection = document.querySelector('.hero');
 const loadingMessage = document.getElementById('loadingMessage');
 const errorMessage = document.getElementById('errorMessage');
 const emptySwitches = document.getElementById('emptySwitches');
@@ -71,6 +74,7 @@ const lastUpdate = document.getElementById('lastUpdate');
 const categoryList = document.getElementById('categoryList');
 const detailSection = document.getElementById('switchDetail');
 const detailTitle = document.getElementById('detailTitle');
+const detailIcon = document.getElementById('detailIcon');
 const detailLocation = document.getElementById('detailLocation');
 const detailCategory = document.getElementById('detailCategory');
 const detailUsers = document.getElementById('detailUsers');
@@ -90,6 +94,47 @@ const commentStatus = document.getElementById('commentStatus');
 document.addEventListener('DOMContentLoaded', () => {
 	init();
 });
+
+function isValidSwitchUid(uid) {
+	if (typeof uid !== 'string') return false;
+	const trimmed = uid.trim();
+	return Boolean(trimmed && SWITCH_UID_V2_REGEX.test(trimmed));
+}
+
+function extractSwitchUidFromPathname(pathname) {
+	const raw = String(pathname || '');
+	const match = raw.match(/^\/(switch|s)\/([^/]+)\/?$/i);
+	if (!match) {
+		return null;
+	}
+	try {
+		const candidate = decodeURIComponent(match[2]);
+		return isValidSwitchUid(candidate) ? candidate : null;
+	} catch {
+		return null;
+	}
+}
+
+function cssEscapeUrl(url) {
+	return String(url).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function setHeroBanner(bannerUrl) {
+	if (!heroSection) return;
+	const url = String(bannerUrl || '').trim();
+	if (!url) {
+		clearHeroBanner();
+		return;
+	}
+	heroSection.classList.add('hero-banner-active');
+	heroSection.style.setProperty('--hero-banner-image', `url("${cssEscapeUrl(url)}")`);
+}
+
+function clearHeroBanner() {
+	if (!heroSection) return;
+	heroSection.classList.remove('hero-banner-active');
+	heroSection.style.removeProperty('--hero-banner-image');
+}
 
 function init() {
 	applyEnvBadge();
@@ -135,7 +180,7 @@ function setupEventListeners() {
 
 	copySwitchLinkBtn.addEventListener('click', () => {
 		if (!currentSwitchId) return;
-		const link = `${window.location.origin}${window.location.pathname}?switch=${currentSwitchId}`;
+		const link = `${window.location.origin}${buildSwitchPath(currentSwitchId)}`;
 		copyText(link, copySwitchLinkBtn, '🔗 Copy link');
 	});
 
@@ -291,7 +336,8 @@ function createSwitchCard(switchData) {
 		lastToggled,
 		userCount,
 		toggleCount,
-		link
+		link,
+		iconUrl
 	} = switchData;
 
 	const stateClass = state ? 'state-on' : 'state-off';
@@ -302,11 +348,15 @@ function createSwitchCard(switchData) {
 	const usersLabel = typeof userCount === 'number' ? `${userCount} user${userCount === 1 ? '' : 's'}` : '0 users';
 	const togglesLabel = typeof toggleCount === 'number' ? `${toggleCount} toggles` : '0 toggles';
 	const webLink = link ? `<a class="inline-link" href="${escapeAttr(link)}" target="_blank" rel="noopener">🌐 Link</a>` : '';
+	const iconHtml = iconUrl ? `<img class="switch-icon" src="${escapeAttr(iconUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '';
 
 	return `
 		<div class="switch-card ${stateClass}">
 			<div class="switch-header">
-				<div class="switch-description">${escapeHtml(description || 'Untitled Switch')}</div>
+				<div class="switch-title">
+					${iconHtml}
+					<div class="switch-description">${escapeHtml(description || 'Untitled Switch')}</div>
+				</div>
 				<div class="switch-state ${stateText}">${stateLabel}</div>
 			</div>
 
@@ -403,6 +453,12 @@ function copyText(value, button, defaultLabel) {
 
 async function openSwitchDetails(uid, fromPopState = false) {
 	try {
+		// Apply banner ASAP (from list data) to make expansion feel instant
+		const preview = allSwitches.find(sw => sw.uid === uid);
+		if (preview && preview.bannerUrl) {
+			setHeroBanner(preview.bannerUrl);
+		}
+
 		currentSwitchId = uid;
 		const response = await fetch(`${API_BASE_URL}/switch/${uid}`);
 		if (!response.ok) {
@@ -427,6 +483,17 @@ async function openSwitchDetails(uid, fromPopState = false) {
 
 function renderSwitchDetail(detail) {
 	detailTitle.textContent = detail.description || 'Untitled switch';
+	if (detailIcon) {
+		const icon = String(detail.iconUrl || '').trim();
+		if (icon) {
+			detailIcon.src = icon;
+			detailIcon.classList.remove('hidden');
+		} else {
+			detailIcon.removeAttribute('src');
+			detailIcon.classList.add('hidden');
+		}
+	}
+	setHeroBanner(detail.bannerUrl);
 	detailLocation.textContent = detail.location ? `📍 ${detail.location}` : '📍 Not specified';
 	detailCategory.textContent = detail.category || 'Other';
 	detailUsers.textContent = `${detail.userCount || 0} user${(detail.userCount || 0) === 1 ? '' : 's'}`;
@@ -509,11 +576,11 @@ async function submitComment() {
 
 	commentStatus.textContent = 'Posting...';
 	try {
-		const response = await fetch(`${API_BASE_URL}/switch/${currentSwitchId}/comment`, {
+		const response = await fetch(`${API_BASE_URL}/v2/switch/${currentSwitchId}/comment`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				'X-Personal-Key': key
+				'X-Api-Key': key
 			},
 			body: JSON.stringify({ comment })
 		});
@@ -535,6 +602,7 @@ async function submitComment() {
 function closeDetail() {
 	detailSection.classList.add('hidden');
 	currentSwitchId = null;
+	clearHeroBanner();
 	clearSwitchQuery();
 }
 
@@ -545,8 +613,10 @@ function filterByCategory(encodedCategory) {
 }
 
 function restoreSwitchFromQuery() {
+	const pathSwitchId = extractSwitchUidFromPathname(window.location.pathname);
 	const params = new URLSearchParams(window.location.search);
-	const switchId = params.get('switch');
+	const querySwitchId = params.get('switch');
+	const switchId = pathSwitchId || (querySwitchId && isValidSwitchUid(querySwitchId) ? querySwitchId : null);
 	if (switchId) {
 		openSwitchDetails(switchId, true);
 	} else {
@@ -554,20 +624,34 @@ function restoreSwitchFromQuery() {
 	}
 }
 
-function pushSwitchQuery(uid) {
+function buildSwitchPath(uid) {
 	const params = new URLSearchParams(window.location.search);
-	params.set('switch', uid);
-	const newUrl = `${window.location.pathname}?${params.toString()}`;
+	params.delete('switch');
+	const suffix = params.toString();
+	return `/switch/${encodeURIComponent(uid)}${suffix ? `?${suffix}` : ''}`;
+}
+
+function buildHomePath() {
+	const params = new URLSearchParams(window.location.search);
+	params.delete('switch');
+	const suffix = params.toString();
+	return `/${suffix ? `?${suffix}` : ''}`;
+}
+
+function pushSwitchQuery(uid) {
+	const newUrl = buildSwitchPath(uid);
 	window.history.pushState({}, '', newUrl);
 }
 
 function clearSwitchQuery() {
+	const currentPathSwitchId = extractSwitchUidFromPathname(window.location.pathname);
 	const params = new URLSearchParams(window.location.search);
-	if (params.has('switch')) {
-		params.delete('switch');
-		const newUrl = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
-		window.history.pushState({}, '', newUrl);
+	const hasQuerySwitch = params.has('switch');
+	if (!currentPathSwitchId && !hasQuerySwitch) {
+		return;
 	}
+	const newUrl = buildHomePath();
+	window.history.pushState({}, '', newUrl);
 }
 
 function scrollToSwitches() {

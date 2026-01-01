@@ -1,5 +1,12 @@
 const Joi = require('joi');
 
+const MAX_DESCRIPTION_LENGTH = 200;
+const MAX_LOCATION_LENGTH = 100;
+const MAX_URL_LENGTH = 500;
+const MAX_CAPTCHA_TOKEN_LENGTH = 2000;
+const MAX_ACCESS_KEY_NAME_LENGTH = 100;
+const V2_ACCESS_KEY_PERMISSIONS = ['toggle', 'comment'];
+
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const V2_UID_REGEX = /^vs_[0-9a-hjkmnpqrstvwxyz]{26}$/i;
 
@@ -19,21 +26,21 @@ const switchUidSchema = Joi.string().required().custom((value, helpers) => {
 
 const schemas = {
 	createSwitch: Joi.object({
-		description: Joi.string().max(200).allow('').default(''),
-		location: Joi.string().max(100).allow('').default(''),
+		description: Joi.string().max(MAX_DESCRIPTION_LENGTH).allow('').default(''),
+		location: Joi.string().max(MAX_LOCATION_LENGTH).allow('').default(''),
 		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other').default('Other'),
 		publicize: Joi.boolean().default(false),
-		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(500).allow('').default(''),
-		captchaToken: Joi.string().max(2000).allow('')
+		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow('').default(''),
+		captchaToken: Joi.string().max(MAX_CAPTCHA_TOKEN_LENGTH).allow('')
 	}),
 
 	updateSwitch: Joi.object({
-		description: Joi.string().max(200).allow(''),
-		location: Joi.string().max(100).allow(''),
+		description: Joi.string().max(MAX_DESCRIPTION_LENGTH).allow(''),
+		location: Joi.string().max(MAX_LOCATION_LENGTH).allow(''),
 		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other'),
 		publicize: Joi.boolean(),
-		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(500).allow(''),
-		captchaToken: Joi.string().max(2000).allow('')
+		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
+		captchaToken: Joi.string().max(MAX_CAPTCHA_TOKEN_LENGTH).allow('')
 	}).min(1),
 
 	toggleSwitch: Joi.object({
@@ -45,7 +52,7 @@ const schemas = {
 	}),
 
 	updateProfile: Joi.object({
-		profileUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(500).allow('').default('')
+		profileUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow('').default('')
 	}),
 
 	subscribeSwitch: Joi.object({
@@ -70,12 +77,16 @@ const schemas = {
 		nonce: Joi.string().min(8).max(128).required(),
 		sigOwner: Joi.string().max(200).required(),
 		sigSwitch: Joi.string().max(200).required(),
-		description: Joi.string().max(200).allow('').default(''),
-		location: Joi.string().max(100).allow('').default(''),
+		description: Joi.string().max(MAX_DESCRIPTION_LENGTH).allow('').default(''),
+		location: Joi.string().max(MAX_LOCATION_LENGTH).allow('').default(''),
 		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other').default('Other'),
 		publicize: Joi.boolean().default(false),
-		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(500).allow('').default(''),
-		captchaToken: Joi.string().max(2000).allow('')
+		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow('').default(''),
+		// IMPORTANT: do NOT default these, otherwise older v2 clients will fail signature checks
+		// because the server would introduce new fields into the signed canonical payload.
+		iconUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).min(1),
+		bannerUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).min(1),
+		captchaToken: Joi.string().max(MAX_CAPTCHA_TOKEN_LENGTH).allow('')
 	}),
 
 	v2MySwitches: Joi.object({
@@ -83,6 +94,55 @@ const schemas = {
 		ts: Joi.number().integer().min(0).required(),
 		nonce: Joi.string().min(8).max(128).required(),
 		sigOwner: Joi.string().max(200).required()
+	}),
+
+	v2UpdateSwitch: Joi.object({
+		ownerPubKey: Joi.string().max(120).required(),
+		ts: Joi.number().integer().min(0).required(),
+		nonce: Joi.string().min(8).max(128).required(),
+		sigOwner: Joi.string().max(200).required(),
+		description: Joi.string().max(MAX_DESCRIPTION_LENGTH).allow(''),
+		location: Joi.string().max(MAX_LOCATION_LENGTH).allow(''),
+		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other'),
+		publicize: Joi.boolean(),
+		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
+		iconUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
+		bannerUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
+		captchaToken: Joi.string().max(MAX_CAPTCHA_TOKEN_LENGTH).allow('')
+	}).custom((value, helpers) => {
+		const updatableFields = ['description', 'location', 'category', 'publicize', 'link', 'iconUrl', 'bannerUrl'];
+		const hasUpdate = updatableFields.some((field) => Object.prototype.hasOwnProperty.call(value, field));
+		if (!hasUpdate) {
+			return helpers.message('At least one metadata field is required');
+		}
+		return value;
+	}, 'V2 update switch validation'),
+
+	v2CreateAccessKey: Joi.object({
+		ownerPubKey: Joi.string().max(120).required(),
+		ts: Joi.number().integer().min(0).required(),
+		nonce: Joi.string().min(8).max(128).required(),
+		sigOwner: Joi.string().max(200).required(),
+		name: Joi.string().max(MAX_ACCESS_KEY_NAME_LENGTH).allow(''),
+		permissions: Joi.array()
+			.items(Joi.string().valid(...V2_ACCESS_KEY_PERMISSIONS))
+			.min(1)
+			.max(V2_ACCESS_KEY_PERMISSIONS.length)
+	}),
+
+	v2ListAccessKeys: Joi.object({
+		ownerPubKey: Joi.string().max(120).required(),
+		ts: Joi.number().integer().min(0).required(),
+		nonce: Joi.string().min(8).max(128).required(),
+		sigOwner: Joi.string().max(200).required()
+	}),
+
+	v2RevokeAccessKey: Joi.object({
+		ownerPubKey: Joi.string().max(120).required(),
+		ts: Joi.number().integer().min(0).required(),
+		nonce: Joi.string().min(8).max(128).required(),
+		sigOwner: Joi.string().max(200).required(),
+		apiKey: Joi.string().uuid().required()
 	}),
 
 	v2SetState: Joi.object({
@@ -145,6 +205,8 @@ const sanitizePublicSwitchData = (switchData) => {
 		toggleCount: switchData.toggleCount || 0,
 		userCount: switchData.userCount || 0,
 		link: switchData.link || '',
+		iconUrl: switchData.iconUrl || '',
+		bannerUrl: switchData.bannerUrl || '',
 		ownerProfileUrl: switchData.ownerProfileUrl || ''
 	};
 };
@@ -163,6 +225,8 @@ const sanitizePrivateSwitchData = (switchData) => {
 		toggleCount: switchData.toggleCount || 0,
 		publicize: switchData.publicize || false,
 		link: switchData.link || '',
+		iconUrl: switchData.iconUrl || '',
+		bannerUrl: switchData.bannerUrl || '',
 		...(typeof switchData.index === 'number' ? { index: switchData.index } : {}),
 		...(switchData.authVersion ? { authVersion: switchData.authVersion } : {})
 	};

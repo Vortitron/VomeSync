@@ -5,14 +5,14 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>VomeSync - Public Remote Switches</title>
 	<meta name="description" content="Discover and monitor public remote switches from the VomeSync community. Connect your Home Assistant to global IoT devices.">
-	<link rel="stylesheet" href="styles.css">
-	<link rel="apple-touch-icon" sizes="180x180" href="favicon/apple-icon-180x180.png">
-	<link rel="icon" type="image/png" sizes="32x32" href="favicon/favicon-32x32.png">
-	<link rel="icon" type="image/png" sizes="16x16" href="favicon/favicon-16x16.png">
-	<link rel="icon" type="image/x-icon" href="favicon/favicon.ico">
-	<link rel="manifest" href="favicon/manifest.json">
+	<link rel="stylesheet" href="/styles.css">
+	<link rel="apple-touch-icon" sizes="180x180" href="/favicon/apple-icon-180x180.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="/favicon/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-16x16.png">
+	<link rel="icon" type="image/x-icon" href="/favicon/favicon.ico">
+	<link rel="manifest" href="/favicon/manifest.json">
 	<meta name="msapplication-TileColor" content="#071122">
-	<meta name="msapplication-TileImage" content="favicon/ms-icon-144x144.png">
+	<meta name="msapplication-TileImage" content="/favicon/ms-icon-144x144.png">
 	<meta name="theme-color" content="#071122">
 </head>
 <body>
@@ -137,7 +137,10 @@
 				<div class="detail-header">
 					<div>
 						<p class="detail-breadcrumb"><button id="backToList" class="link-button">← Back to switches</button></p>
-						<h2 id="detailTitle">Switch details</h2>
+						<div class="detail-title-row">
+							<img id="detailIcon" class="detail-icon hidden" alt="">
+							<h2 id="detailTitle" class="detail-title">Switch details</h2>
+						</div>
 						<p id="detailLocation" class="detail-subtitle"></p>
 					</div>
 					<div class="detail-actions">
@@ -178,7 +181,7 @@
 					<div>
 						<h3>Comments (owner/API key)</h3>
 						<form id="commentForm" class="comment-form">
-							<label for="commentKey">Personal/API key (not stored):</label>
+							<label for="commentKey">API/access key (not stored):</label>
 							<input id="commentKey" type="password" autocomplete="off" placeholder="Enter key to comment">
 							<label for="commentText">Comment:</label>
 							<textarea id="commentText" rows="3" maxlength="500" placeholder="Why the switch changed, notes, etc."></textarea>
@@ -246,7 +249,7 @@
 		</div>
 	</footer>
 
-	<script src="network-bg.js"></script>
-	<script src="script.js"></script>
+	<script src="/network-bg.js"></script>
+	<script src="/script.js"></script>
 </body>
 </html>

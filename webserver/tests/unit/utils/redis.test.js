@@ -3,10 +3,14 @@
  */
 
 const redisClient = require('../../../src/utils/redis');
+const { deriveOwnerIdFromOwnerPubKeyB64Url, deriveSwitchUidFromSwitchPubKeyB64Url } = require('../../../src/utils/crypto_v2');
 
 describe('Redis Client', () => {
 	beforeEach(async () => {
 		await redisClient.connect();
+		if (redisClient.isConnected) {
+			await redisClient.client.flushDb();
+		}
 	});
 
 	afterEach(async () => {
@@ -69,8 +73,7 @@ describe('Redis Client', () => {
 
 				await redisClient.createSwitch(uid, personalKey, switchConfig);
 
-				const publicSwitches = await redisClient.getPublicSwitches();
-				const publicUIDs = publicSwitches.map(s => s.uid);
+				const publicUIDs = await redisClient.client.sMembers('public_switches');
 				expect(publicUIDs).toContain(uid);
 			});
 		});
@@ -170,11 +173,42 @@ describe('Redis Client', () => {
 					global.testUtils.createTestSwitchData({ publicize: false })
 				);
 
+				// V1 switches are ignored in the public directory (v2-only)
+				const publicSwitchesEmpty = await redisClient.getPublicSwitches();
+				expect(publicSwitchesEmpty).toEqual([]);
+
+				// Create v2 public + private switches
+				const owner = global.testUtils.createEd25519Keypair();
+				const ownerPubKeyB64 = Buffer.from(owner.rawPublicKey).toString('base64url');
+				const ownerId = deriveOwnerIdFromOwnerPubKeyB64Url(ownerPubKeyB64);
+
+				const sw1 = global.testUtils.createEd25519Keypair();
+				const sw2 = global.testUtils.createEd25519Keypair();
+				const switchPubKey1 = Buffer.from(sw1.rawPublicKey).toString('base64url');
+				const switchPubKey2 = Buffer.from(sw2.rawPublicKey).toString('base64url');
+				const v2uid1 = deriveSwitchUidFromSwitchPubKeyB64Url(switchPubKey1);
+				const v2uid2 = deriveSwitchUidFromSwitchPubKeyB64Url(switchPubKey2);
+
+				await redisClient.createSwitchV2(v2uid1, ownerId, ownerPubKeyB64, switchPubKey1, 0, {
+					description: 'Public v2',
+					location: 'Test City',
+					category: 'Test',
+					publicize: true,
+					link: ''
+				});
+				await redisClient.createSwitchV2(v2uid2, ownerId, ownerPubKeyB64, switchPubKey2, 1, {
+					description: 'Private v2',
+					location: 'Test City',
+					category: 'Test',
+					publicize: false,
+					link: ''
+				});
+
 				const publicSwitches = await redisClient.getPublicSwitches();
 				const uids = publicSwitches.map(s => s.uid);
 
-				expect(uids).toContain(uid1);
-				expect(uids).not.toContain(uid2);
+				expect(uids).toContain(v2uid1);
+				expect(uids).not.toContain(v2uid2);
 			});
 
 			test('should return switches with only public fields', async () => {
@@ -185,14 +219,36 @@ describe('Redis Client', () => {
 					global.testUtils.createTestSwitchData({ publicize: true })
 				);
 
+				// V1 switches are ignored by getPublicSwitches()
+				expect(await redisClient.getPublicSwitches()).toEqual([]);
+
+				const owner = global.testUtils.createEd25519Keypair();
+				const ownerPubKeyB64 = Buffer.from(owner.rawPublicKey).toString('base64url');
+				const ownerId = deriveOwnerIdFromOwnerPubKeyB64Url(ownerPubKeyB64);
+				const sw = global.testUtils.createEd25519Keypair();
+				const switchPubKeyB64 = Buffer.from(sw.rawPublicKey).toString('base64url');
+				const v2uid = deriveSwitchUidFromSwitchPubKeyB64Url(switchPubKeyB64);
+
+				await redisClient.createSwitchV2(v2uid, ownerId, ownerPubKeyB64, switchPubKeyB64, 0, {
+					description: 'Public v2',
+					location: 'Test City',
+					category: 'Test',
+					publicize: true,
+					link: '',
+					iconUrl: 'https://example.com/icon.png',
+					bannerUrl: 'https://example.com/banner.jpg'
+				});
+
 				const publicSwitches = await redisClient.getPublicSwitches();
-				const publicSwitch = publicSwitches.find(s => s.uid === uid);
+				const publicSwitch = publicSwitches.find(s => s.uid === v2uid);
 
 				expect(publicSwitch).toBeDefined();
 				expect(publicSwitch.personalKey).toBeUndefined();
 				expect(publicSwitch.uid).toBeDefined();
-				expect(publicSwitch.description).toBeDefined();
+				expect(publicSwitch.description).toBe('Public v2');
 				expect(publicSwitch.state).toBeDefined();
+				expect(publicSwitch.iconUrl).toBe('https://example.com/icon.png');
+				expect(publicSwitch.bannerUrl).toBe('https://example.com/banner.jpg');
 			});
 		});
 

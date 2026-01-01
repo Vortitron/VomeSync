@@ -167,6 +167,56 @@ class AuthManager {
 		};
 	}
 
+	// Middleware for v2 delegated access keys (server-issued keys scoped to a v2 switch)
+	requireV2AccessKey(requiredPermission = null) {
+		return async (req, res, next) => {
+			const { uid } = req.params;
+			const apiKey = req.body.apiKey || req.headers['x-api-key'] || req.query.apiKey;
+			if (!apiKey) {
+				return res.status(401).json({
+					success: false,
+					error: 'API key required'
+				});
+			}
+
+			try {
+				const keyData = await redisClient.resolveV2AccessKey(apiKey);
+				if (!keyData) {
+					return res.status(401).json({ success: false, error: 'Invalid or revoked API key' });
+				}
+				if (keyData.uid !== uid) {
+					return res.status(401).json({ success: false, error: 'Unauthorized: API key is not valid for this switch' });
+				}
+
+				if (requiredPermission) {
+					const perms = Array.isArray(keyData.permissions) ? keyData.permissions : [];
+					if (!perms.includes(requiredPermission)) {
+						return res.status(403).json({ success: false, error: 'Insufficient permissions' });
+					}
+				}
+
+				const switchData = await redisClient.getSwitchState(uid);
+				if (!switchData) {
+					return res.status(404).json({ success: false, error: 'Switch not found' });
+				}
+				if (switchData.authVersion !== 2) {
+					return res.status(400).json({ success: false, error: 'Switch is not v2 (crypto) enabled' });
+				}
+				if (switchData.ownerId && keyData.ownerId && switchData.ownerId !== keyData.ownerId) {
+					return res.status(401).json({ success: false, error: 'Unauthorized: API key is not valid for this switch' });
+				}
+
+				req.apiKeyUsed = apiKey;
+				req.v2AccessKey = keyData;
+				req.switchData = switchData;
+				next();
+			} catch (error) {
+				logger.error('Error validating v2 access key:', error);
+				return res.status(500).json({ success: false, error: 'Authentication failed' });
+			}
+		};
+	}
+
 	// Rate limiting helper
 	createRateLimitKey(identifier, action) {
 		return `rate_limit:${action}:${identifier}`;
