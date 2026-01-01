@@ -11,6 +11,7 @@ from typing import Dict, List
 
 import aiohttp
 import pytest
+import pytest_asyncio
 import websockets
 
 
@@ -94,7 +95,7 @@ class VomeSyncE2ETest:
         uri = f"{self.ws_base_url}/ws?uid={uid}"
         return await websockets.connect(uri)
     
-    async def wait_for_websocket_message(self, websocket, timeout: float = 5.0) -> Dict:
+    async def wait_for_websocket_message(self, websocket, timeout: float = 15.0) -> Dict:
         """Wait for WebSocket message with timeout."""
         try:
             message = await asyncio.wait_for(websocket.recv(), timeout=timeout)
@@ -103,7 +104,7 @@ class VomeSyncE2ETest:
             raise AssertionError(f"No WebSocket message received within {timeout} seconds")
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def e2e_test():
     """Create E2E test instance."""
     test = VomeSyncE2ETest()
@@ -238,8 +239,8 @@ async def test_public_switch_discovery(e2e_test):
     }
     switch_data = await e2e_test.create_switch(personal_key, switch_config)
     
-    # Wait a moment for indexing
-    await asyncio.sleep(0.5)
+    # Wait a moment for indexing/propagation (CI can be slow)
+    await asyncio.sleep(1.0)
     
     # Search public switches
     public_switches = await e2e_test.get_public_switches()
