@@ -3,16 +3,70 @@ End-to-end tests for VomeSync complete flow.
 Tests the entire system from API to WebSocket functionality.
 """
 import asyncio
+import base64
+import hashlib
 import json
 import os
 import time
 import uuid
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import aiohttp
 import pytest
 import pytest_asyncio
 import websockets
+
+
+try:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+except ImportError:  # pragma: no cover
+    Ed25519PrivateKey = None  # type: ignore[assignment]
+    Encoding = None  # type: ignore[assignment]
+    PublicFormat = None  # type: ignore[assignment]
+
+
+_CROCKFORD_BASE32_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
+_SWITCH_UID_PREFIX = "vs_"
+_SWITCH_UID_HASH_PREFIX = b"vomesync:switch_uid:v1:"
+
+
+def _b64url_no_pad(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _base32_crockford_encode(data: bytes) -> str:
+    bits = 0
+    bits_length = 0
+    output = []
+
+    for b in data:
+        bits = (bits << 8) | b
+        bits_length += 8
+
+        while bits_length >= 5:
+            bits_length -= 5
+            index = (bits >> bits_length) & 31
+            output.append(_CROCKFORD_BASE32_ALPHABET[index])
+
+    if bits_length > 0:
+        index = (bits << (5 - bits_length)) & 31
+        output.append(_CROCKFORD_BASE32_ALPHABET[index])
+
+    return "".join(output)
+
+
+def _stable_json_stringify(obj: Any) -> str:
+    # Matches webserver/src/utils/crypto_v2.js stableJsonStringify(): JSON.stringify(stableJsonSort(obj))
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _derive_switch_uid_from_switch_pub_raw(switch_pub_raw: bytes) -> str:
+    if len(switch_pub_raw) != 32:
+        raise ValueError("switch_pub_raw must be 32 bytes (Ed25519 raw public key)")
+    digest = hashlib.sha256(_SWITCH_UID_HASH_PREFIX + switch_pub_raw).digest()
+    short = digest[:16]
+    return f"{_SWITCH_UID_PREFIX}{_base32_crockford_encode(short)}"
 
 
 class VomeSyncE2ETest:
@@ -51,6 +105,86 @@ class VomeSyncE2ETest:
             f"{self.api_base_url}/api/create-switch",
             json=switch_config,
             headers=headers
+        ) as response:
+            assert response.status == 200
+            data = await response.json()
+            assert data["success"] is True
+            return data["data"]
+
+    async def create_switch_v2(self, switch_config: Dict[str, Any], index: int = 0) -> Dict[str, Any]:
+        """Create a v2 switch via API (Ed25519 signed request)."""
+        if Ed25519PrivateKey is None:
+            pytest.skip("cryptography is required for v2 E2E tests (pip install -r tests/e2e/requirements.txt)")
+
+        # Generate keypairs
+        owner_priv = Ed25519PrivateKey.generate()
+        switch_priv = Ed25519PrivateKey.generate()
+
+        owner_pub_raw = owner_priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        switch_pub_raw = switch_priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+        owner_pub_b64 = _b64url_no_pad(owner_pub_raw)
+        switch_pub_b64 = _b64url_no_pad(switch_pub_raw)
+        uid = _derive_switch_uid_from_switch_pub_raw(switch_pub_raw)
+
+        ts = int(time.time() * 1000)
+        nonce = f"n-{ts}-{uuid.uuid4().hex}"
+
+        meta: Dict[str, Any] = {
+            "description": "",
+            "location": "",
+            "category": "Other",
+            "publicize": False,
+            "link": "",
+            **(switch_config or {}),
+        }
+
+        payload_meta: Dict[str, Any] = {
+            "description": meta.get("description", "") or "",
+            "location": meta.get("location", "") or "",
+            "category": meta.get("category", "Other") or "Other",
+            "publicize": bool(meta.get("publicize", False)),
+            "link": meta.get("link", "") or "",
+        }
+        # Optional v2 metadata fields (only include when provided; empty strings are rejected by the API schema)
+        for opt_key in ("iconUrl", "bannerUrl"):
+            opt_val = meta.get(opt_key)
+            if isinstance(opt_val, str) and opt_val:
+                payload_meta[opt_key] = opt_val
+
+        canonical = _stable_json_stringify({
+            "v": 2,
+            "action": "create_switch",
+            "ownerPubKey": owner_pub_b64,
+            "switchPubKey": switch_pub_b64,
+            "uid": uid,
+            "index": int(index),
+            "ts": ts,
+            "nonce": nonce,
+            "payload": payload_meta,
+        })
+
+        sig_owner = _b64url_no_pad(owner_priv.sign(canonical.encode("utf-8")))
+        sig_switch = _b64url_no_pad(switch_priv.sign(canonical.encode("utf-8")))
+
+        request_body: Dict[str, Any] = {
+            "ownerPubKey": owner_pub_b64,
+            "switchPubKey": switch_pub_b64,
+            "index": int(index),
+            "ts": ts,
+            "nonce": nonce,
+            "sigOwner": sig_owner,
+            "sigSwitch": sig_switch,
+            **payload_meta,
+        }
+        # captchaToken is optional when CAPTCHA is disabled; include only when explicitly provided
+        captcha_token = meta.get("captchaToken")
+        if isinstance(captcha_token, str) and captcha_token:
+            request_body["captchaToken"] = captcha_token
+
+        async with self.session.post(
+            f"{self.api_base_url}/api/v2/switch",
+            json=request_body,
         ) as response:
             assert response.status == 200
             data = await response.json()
@@ -227,17 +361,14 @@ async def test_multiple_websocket_subscribers(e2e_test):
 @pytest.mark.asyncio
 async def test_public_switch_discovery(e2e_test):
     """Test public switch creation and discovery."""
-    # Generate personal key
-    personal_key = await e2e_test.generate_personal_key()
-    
-    # Create public switch
+    # Public switch directory is v2-only; create a v2 public switch
     switch_config = {
         "description": "Public Test Switch",
         "location": "Test City",
         "category": "Community",
         "publicize": True
     }
-    switch_data = await e2e_test.create_switch(personal_key, switch_config)
+    switch_data = await e2e_test.create_switch_v2(switch_config, index=0)
     
     # Wait a moment for indexing/propagation (CI can be slow)
     await asyncio.sleep(1.0)
