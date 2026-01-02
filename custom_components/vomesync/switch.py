@@ -19,6 +19,9 @@ from .const import (
 	ATTR_LOCATION,
 	ATTR_CATEGORY,
 	ATTR_PUBLICIZE,
+	ATTR_LINK,
+	ATTR_ICON_URL,
+	ATTR_BANNER_URL,
 	ATTR_TOGGLE_COUNT,
 	ATTR_LAST_TOGGLED,
 	ATTR_CREATED_AT,
@@ -126,7 +129,7 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 		
 		if server_url and (server_url.startswith("http://") or server_url.startswith("https://")):
 			uid_q = quote(self._uid, safe="")
-			return f"{server_url.rstrip('/')}/?switch={uid_q}"
+			return f"{server_url.rstrip('/')}/switch/{uid_q}"
 		
 		# Fallback to HA base URL for integration-level navigation if configured
 		try:
@@ -246,6 +249,9 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 			(ATTR_DESCRIPTION, "description"),
 			(ATTR_LOCATION, "location"),
 			(ATTR_CATEGORY, "category"),
+			(ATTR_LINK, "link"),
+			(ATTR_ICON_URL, "iconUrl"),
+			(ATTR_BANNER_URL, "bannerUrl"),
 			(ATTR_PUBLICIZE, "publicize"),
 			(ATTR_TOGGLE_COUNT, "toggleCount"),
 			(ATTR_LAST_TOGGLED, "lastToggled"),

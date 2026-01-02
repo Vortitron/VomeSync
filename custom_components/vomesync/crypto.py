@@ -137,6 +137,8 @@ class V2CreateSwitchRequest:
 	category: str
 	publicize: bool
 	link: str
+	iconUrl: Optional[str] = None
+	bannerUrl: Optional[str] = None
 	captchaToken: str = ""
 
 
@@ -148,6 +150,8 @@ def build_v2_create_switch_request(
 	category: str = "Other",
 	publicize: bool = False,
 	link: str = "",
+	icon_url: Optional[str] = None,
+	banner_url: Optional[str] = None,
 	captcha_token: str = "",
 	ts: Optional[int] = None,
 	nonce: Optional[str] = None,
@@ -180,6 +184,16 @@ def build_v2_create_switch_request(
 			"link": link or "",
 		},
 	}
+
+	# IMPORTANT: these must only be included when explicitly set, otherwise older
+	# clients (and signatures) will not match server canonicalisation.
+	icon_clean = str(icon_url).strip() if isinstance(icon_url, str) else ""
+	if icon_clean:
+		payload["payload"]["iconUrl"] = icon_clean
+	banner_clean = str(banner_url).strip() if isinstance(banner_url, str) else ""
+	if banner_clean:
+		payload["payload"]["bannerUrl"] = banner_clean
+
 	canon = canonical_json(payload)
 
 	owner_sig = sign_b64url(owner_private_key(master_seed_b64url), canon)
@@ -198,8 +212,186 @@ def build_v2_create_switch_request(
 		category=category or "Other",
 		publicize=bool(publicize),
 		link=link or "",
+		iconUrl=payload["payload"].get("iconUrl"),
+		bannerUrl=payload["payload"].get("bannerUrl"),
 		captchaToken=captcha_token or "",
 	)
+
+
+def build_v2_update_switch_request(
+	master_seed_b64url: str,
+	uid: str,
+	updates: Dict[str, Any],
+	captcha_token: str = "",
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	"""Build a signed v2 update_switch request (signed by owner key)."""
+	if not isinstance(uid, str) or not uid:
+		raise ValueError("uid must be a non-empty string")
+	if not isinstance(updates, dict) or not updates:
+		raise ValueError("updates must be a non-empty dict")
+
+	owner_pub = owner_pubkey_b64url(master_seed_b64url)
+	if ts is None:
+		import time
+		ts_i = int(time.time() * 1000)
+	else:
+		ts_i = int(ts)
+	nonce_s = nonce or new_nonce()
+
+	payload = {
+		"v": 2,
+		"action": "update_switch",
+		"uid": uid,
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"payload": updates,
+	}
+	canon = canonical_json(payload)
+	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
+
+	req: Dict[str, Any] = {
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"sigOwner": sig_owner,
+		**updates,
+	}
+	if captcha_token is not None:
+		req["captchaToken"] = captcha_token or ""
+	return req
+
+
+def build_v2_create_access_key_request(
+	master_seed_b64url: str,
+	uid: str,
+	name: Optional[str] = None,
+	permissions: Optional[list[str]] = None,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	"""Build a signed v2 create_access_key request (signed by owner key)."""
+	if not isinstance(uid, str) or not uid:
+		raise ValueError("uid must be a non-empty string")
+
+	owner_pub = owner_pubkey_b64url(master_seed_b64url)
+	if ts is None:
+		import time
+		ts_i = int(time.time() * 1000)
+	else:
+		ts_i = int(ts)
+	nonce_s = nonce or new_nonce()
+
+	payload_obj: Dict[str, Any] = {}
+	if name is not None:
+		payload_obj["name"] = str(name)
+	if permissions is not None:
+		payload_obj["permissions"] = list(permissions)
+
+	payload = {
+		"v": 2,
+		"action": "create_access_key",
+		"uid": uid,
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"payload": payload_obj,
+	}
+	canon = canonical_json(payload)
+	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
+
+	req: Dict[str, Any] = {
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"sigOwner": sig_owner,
+	}
+	if name is not None:
+		req["name"] = str(name)
+	if permissions is not None:
+		req["permissions"] = list(permissions)
+	return req
+
+
+def build_v2_list_access_keys_request(
+	master_seed_b64url: str,
+	uid: str,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	"""Build a signed v2 list_access_keys request (signed by owner key)."""
+	if not isinstance(uid, str) or not uid:
+		raise ValueError("uid must be a non-empty string")
+
+	owner_pub = owner_pubkey_b64url(master_seed_b64url)
+	if ts is None:
+		import time
+		ts_i = int(time.time() * 1000)
+	else:
+		ts_i = int(ts)
+	nonce_s = nonce or new_nonce()
+
+	payload = {
+		"v": 2,
+		"action": "list_access_keys",
+		"uid": uid,
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+	}
+	canon = canonical_json(payload)
+	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
+
+	return {
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"sigOwner": sig_owner,
+	}
+
+
+def build_v2_revoke_access_key_request(
+	master_seed_b64url: str,
+	uid: str,
+	api_key: str,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	"""Build a signed v2 revoke_access_key request (signed by owner key)."""
+	if not isinstance(uid, str) or not uid:
+		raise ValueError("uid must be a non-empty string")
+	if not isinstance(api_key, str) or not api_key:
+		raise ValueError("api_key must be a non-empty string")
+
+	owner_pub = owner_pubkey_b64url(master_seed_b64url)
+	if ts is None:
+		import time
+		ts_i = int(time.time() * 1000)
+	else:
+		ts_i = int(ts)
+	nonce_s = nonce or new_nonce()
+
+	payload = {
+		"v": 2,
+		"action": "revoke_access_key",
+		"uid": uid,
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"apiKey": api_key,
+	}
+	canon = canonical_json(payload)
+	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
+
+	return {
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"sigOwner": sig_owner,
+		"apiKey": api_key,
+	}
 
 
 def build_v2_my_switches_request(master_seed_b64url: str, ts: Optional[int] = None, nonce: Optional[str] = None) -> Dict[str, Any]:
@@ -263,5 +455,3 @@ def build_v2_set_state_request(
 		"state": bool(state),
 		"params": params_obj,
 	}
-
-

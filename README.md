@@ -103,6 +103,8 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - Fast startup from locally cached imported switches
   - Real-time updates via WebSocket (`/ws?uid=<uid>`)
   - Optional entity linking (turn local entities on/off when VomeSync changes)
+  - v2 switch management: edit metadata including `iconUrl`/`bannerUrl` for nicer public pages
+  - v2 delegation: create/list/revoke per-switch access keys (scoped permissions like toggle/comment)
 
 ## Installation
 

@@ -82,6 +82,10 @@ def _register_services(hass: HomeAssistant) -> None:
 			location=call.data.get("location", ""),
 			category=call.data.get("category", "Other"),
 			publicize=call.data.get("publicize", False),
+			link=call.data.get("link", ""),
+			icon_url=call.data.get("icon_url") or None,
+			banner_url=call.data.get("banner_url") or None,
+			captcha_token=call.data.get("captcha_token", ""),
 		)
 		if not uid:
 			raise ValueError("Failed to create switch")
@@ -114,6 +118,10 @@ def _register_services(hass: HomeAssistant) -> None:
 			vol.Optional("location", default=""): cv.string,
 			vol.Optional("category", default="Other"): cv.string,
 			vol.Optional("publicize", default=False): cv.boolean,
+			vol.Optional("link", default=""): cv.string,
+			vol.Optional("icon_url", default=""): cv.string,
+			vol.Optional("banner_url", default=""): cv.string,
+			vol.Optional("captcha_token", default=""): cv.string,
 		}),
 	)
 	

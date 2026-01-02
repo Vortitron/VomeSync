@@ -15,6 +15,10 @@ from .const import (
 	API_V2_CREATE_SWITCH,
 	API_V2_MY_SWITCHES,
 	API_V2_SET_STATE,
+	API_V2_UPDATE_SWITCH,
+	API_V2_ACCESS_KEYS_CREATE,
+	API_V2_ACCESS_KEYS_LIST,
+	API_V2_ACCESS_KEYS_REVOKE,
 	AUTH_MODE_CRYPTO,
 )
 
@@ -22,6 +26,10 @@ from .crypto import (
 	build_v2_create_switch_request,
 	build_v2_my_switches_request,
 	build_v2_set_state_request,
+	build_v2_update_switch_request,
+	build_v2_create_access_key_request,
+	build_v2_list_access_keys_request,
+	build_v2_revoke_access_key_request,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -149,6 +157,8 @@ class VomeSyncAPIClient:
 		location: str = "",
 		category: str = "Other",
 		publicize: bool = False,
+		link: str = "",
+		captcha_token: str = "",
 	) -> Dict[str, Any]:
 		"""Create a new switch."""
 		if self.crypto_enabled:
@@ -159,8 +169,19 @@ class VomeSyncAPIClient:
 			"location": location,
 			"category": category,
 			"publicize": publicize,
+			"link": link,
+			"captchaToken": captcha_token,
 		}
 		return await self._make_request("POST", API_CREATE_SWITCH, data, require_auth=True)
+
+	async def update_switch(self, uid: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+		"""Update a legacy (v1) switch metadata (PATCH /api/switch/:uid)."""
+		if not isinstance(uid, str) or not uid:
+			raise VomeSyncAPIError("UID required")
+		if not isinstance(updates, dict) or not updates:
+			raise VomeSyncAPIError("At least one update field is required")
+		endpoint = f"/api/switch/{uid}"
+		return await self._make_request("PATCH", endpoint, updates, require_auth=True)
 
 	async def create_switch_v2(
 		self,
@@ -170,6 +191,8 @@ class VomeSyncAPIClient:
 		category: str = "Other",
 		publicize: bool = False,
 		link: str = "",
+		icon_url: Optional[str] = None,
+		banner_url: Optional[str] = None,
 		captcha_token: str = "",
 	) -> Dict[str, Any]:
 		"""Create a new switch using v2 crypto auth."""
@@ -184,6 +207,8 @@ class VomeSyncAPIClient:
 			category=category,
 			publicize=publicize,
 			link=link,
+			icon_url=icon_url,
+			banner_url=banner_url,
 			captcha_token=captcha_token,
 		)
 		data = {
@@ -199,9 +224,80 @@ class VomeSyncAPIClient:
 			"category": req.category,
 			"publicize": req.publicize,
 			"link": req.link,
+			**({"iconUrl": req.iconUrl} if isinstance(req.iconUrl, str) and req.iconUrl else {}),
+			**({"bannerUrl": req.bannerUrl} if isinstance(req.bannerUrl, str) and req.bannerUrl else {}),
 			"captchaToken": req.captchaToken,
 		}
 		return await self._make_request("POST", API_V2_CREATE_SWITCH, data, require_auth=False)
+
+	async def update_switch_v2_metadata(
+		self,
+		uid: str,
+		updates: Dict[str, Any],
+		captcha_token: str = "",
+	) -> Dict[str, Any]:
+		"""Update v2 switch metadata (signed by owner key)."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode is not enabled for this client")
+		if not isinstance(uid, str) or not uid:
+			raise VomeSyncAPIError("UID required")
+		if not isinstance(updates, dict) or not updates:
+			raise VomeSyncAPIError("At least one update field is required")
+		
+		payload = build_v2_update_switch_request(
+			self.crypto_seed,
+			uid=uid,
+			updates=updates,
+			captcha_token=captcha_token,
+		)
+		endpoint = API_V2_UPDATE_SWITCH.format(uid=uid)
+		return await self._make_request("POST", endpoint, payload, require_auth=False)
+
+	async def create_v2_access_key(
+		self,
+		uid: str,
+		name: str = "",
+		permissions: Optional[list[str]] = None,
+	) -> Dict[str, Any]:
+		"""Create a delegated v2 access key (signed by owner key)."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode is not enabled for this client")
+		if not isinstance(uid, str) or not uid:
+			raise VomeSyncAPIError("UID required")
+		
+		req = build_v2_create_access_key_request(
+			self.crypto_seed,
+			uid=uid,
+			name=name,
+			permissions=permissions,
+		)
+		endpoint = API_V2_ACCESS_KEYS_CREATE.format(uid=uid)
+		return await self._make_request("POST", endpoint, req, require_auth=False)
+
+	async def list_v2_access_keys(self, uid: str) -> Dict[str, Any]:
+		"""List delegated v2 access keys for a switch (signed by owner key)."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode is not enabled for this client")
+		if not isinstance(uid, str) or not uid:
+			raise VomeSyncAPIError("UID required")
+		
+		req = build_v2_list_access_keys_request(self.crypto_seed, uid=uid)
+		endpoint = API_V2_ACCESS_KEYS_LIST.format(uid=uid)
+		return await self._make_request("POST", endpoint, req, require_auth=False)
+
+	async def revoke_v2_access_key(self, uid: str, api_key: str) -> bool:
+		"""Revoke a delegated v2 access key (signed by owner key)."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode is not enabled for this client")
+		if not isinstance(uid, str) or not uid:
+			raise VomeSyncAPIError("UID required")
+		if not isinstance(api_key, str) or not api_key:
+			raise VomeSyncAPIError("API key required")
+		
+		req = build_v2_revoke_access_key_request(self.crypto_seed, uid=uid, api_key=api_key)
+		endpoint = API_V2_ACCESS_KEYS_REVOKE.format(uid=uid)
+		await self._make_request("POST", endpoint, req, require_auth=False)
+		return True
 
 	async def toggle_switch(self, uid: str) -> Dict[str, Any]:
 		"""Toggle a switch."""
@@ -270,6 +366,10 @@ class VomeSyncAPIClient:
 	# API key management
 	async def list_api_keys(self) -> list[Dict[str, Any]]:
 		return await self._make_request("GET", "/api/api-keys", require_auth=True)
+
+	async def get_api_keys(self) -> list[Dict[str, Any]]:
+		"""Alias for list_api_keys (kept for backwards compatibility)."""
+		return await self.list_api_keys()
 
 	async def create_api_key(self, name: str = "") -> Dict[str, Any]:
 		return await self._make_request("POST", "/api/api-keys", {"name": name}, require_auth=True)

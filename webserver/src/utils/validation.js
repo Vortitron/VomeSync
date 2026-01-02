@@ -5,7 +5,7 @@ const MAX_LOCATION_LENGTH = 100;
 const MAX_URL_LENGTH = 500;
 const MAX_CAPTCHA_TOKEN_LENGTH = 2000;
 const MAX_ACCESS_KEY_NAME_LENGTH = 100;
-const V2_ACCESS_KEY_PERMISSIONS = ['toggle', 'comment'];
+const V2_ACCESS_KEY_PERMISSIONS = ['toggle', 'comment', 'metadata'];
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const V2_UID_REGEX = /^vs_[0-9a-hjkmnpqrstvwxyz]{26}$/i;
@@ -144,6 +144,17 @@ const schemas = {
 		sigOwner: Joi.string().max(200).required(),
 		apiKey: Joi.string().uuid().required()
 	}),
+
+	// V2: Update switch metadata via delegated access key (no signatures)
+	// Intentionally excludes "publicize" to avoid bypassing CAPTCHA requirements.
+	v2UpdateSwitchViaAccessKey: Joi.object({
+		description: Joi.string().max(MAX_DESCRIPTION_LENGTH).allow(''),
+		location: Joi.string().max(MAX_LOCATION_LENGTH).allow(''),
+		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other'),
+		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
+		iconUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
+		bannerUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow('')
+	}).min(1),
 
 	v2SetState: Joi.object({
 		ts: Joi.number().integer().min(0).required(),

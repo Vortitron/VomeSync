@@ -671,6 +671,37 @@ router.post('/v2/switch/:uid/toggle',
 	}
 );
 
+// V2: Update switch metadata using a delegated access key (no signatures required)
+// Note: This is intentionally limited (no "publicize") to avoid bypassing CAPTCHA requirements.
+router.post('/v2/switch/:uid/metadata',
+	validateUID,
+	authManager.rateLimit('v2_metadata_access_key', 200, 900000),
+	authManager.requireV2AccessKey('metadata'),
+	validateRequest(schemas.v2UpdateSwitchViaAccessKey),
+	async (req, res) => {
+		try {
+			const { uid } = req.params;
+			const updates = pickSwitchMetadataUpdatesV2(req.validatedData);
+			if (!updates || Object.keys(updates).length === 0) {
+				return res.status(400).json({ success: false, error: 'No metadata updates provided' });
+			}
+
+			const updated = await redisClient.updateSwitch(uid, updates);
+			if (!updated) {
+				return res.status(404).json({ success: false, error: 'Switch not found' });
+			}
+
+			return res.json({
+				success: true,
+				data: sanitizePrivateSwitchData(updated)
+			});
+		} catch (error) {
+			logger.error(`Error updating v2 switch metadata via access key for ${req.params.uid}:`, error);
+			return res.status(500).json({ success: false, error: 'Failed to update switch' });
+		}
+	}
+);
+
 // V2: Comment using a delegated access key (no signatures required)
 router.post('/v2/switch/:uid/comment',
 	validateUID,

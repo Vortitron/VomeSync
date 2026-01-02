@@ -190,6 +190,26 @@
 								<span id="commentStatus" class="comment-status"></span>
 							</div>
 						</form>
+
+						<div id="managePanel" class="manage-panel hidden">
+							<h3>Owner tools (appearance)</h3>
+							<p class="muted small">Use a delegated access key with <span class="mono">metadata</span> permission (created in Home Assistant) to update icon/banner/link.</p>
+							<form id="manageForm" class="comment-form">
+								<label for="manageKey">Management access key (not stored):</label>
+								<input id="manageKey" type="text" autocomplete="off" placeholder="Paste access key">
+								<label for="manageLink">Link (optional):</label>
+								<input id="manageLink" type="url" autocomplete="off" placeholder="https://example.com">
+								<label for="manageIconUrl">Icon URL (optional):</label>
+								<input id="manageIconUrl" type="url" autocomplete="off" placeholder="https://example.com/icon.png">
+								<label for="manageBannerUrl">Banner URL (optional):</label>
+								<input id="manageBannerUrl" type="url" autocomplete="off" placeholder="https://example.com/banner.jpg">
+								<div class="comment-actions">
+									<button type="submit" class="refresh-btn">💾 Save appearance</button>
+									<button id="manageForgetBtn" type="button" class="ghost-btn">Forget key</button>
+									<span id="manageStatus" class="comment-status"></span>
+								</div>
+							</form>
+						</div>
 					</div>
 				</div>
 			</div>

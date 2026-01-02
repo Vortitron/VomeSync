@@ -30,3 +30,11 @@ async def test_services_call_coordinator_methods(hass, config_entry):
 	assert "uid" in schema.schema
 	assert "name" not in schema.schema
 
+	# Create switch should support optional theming fields
+	create = [c for c in calls if c[0][1] == "create_switch"][0]
+	create_schema = create[1]["schema"]
+	assert "link" in create_schema.schema
+	assert "icon_url" in create_schema.schema
+	assert "banner_url" in create_schema.schema
+	assert "captcha_token" in create_schema.schema
+

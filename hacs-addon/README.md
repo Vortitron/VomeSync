@@ -64,7 +64,11 @@ Your personal key will be stored securely and used to authenticate your switches
    - **Description**: Public description (e.g., "Festival Event Light")
    - **Location**: City-level location (e.g., "Stockholm")
    - **Category**: Type of switch (Community, Personal, Event, Test, Other)
-   - **Publicize**: Whether to list publicly for discovery
+   - **Publicise**: Whether to list publicly for discovery
+   - **Link** (optional): External link shown on the switch page
+   - **Icon URL** (optional): Icon image shown on the switch page
+   - **Banner URL** (optional): Banner image shown on the switch page
+   - **CAPTCHA token** (optional): Only needed if your server enforces CAPTCHA for public switches
 
 **Via Service Call:**
 ```yaml
@@ -75,7 +79,35 @@ data:
   location: "London"
   category: "Community"
   publicize: true
+  link: "https://example.com"
+  icon_url: "https://example.com/icon.png"
+  banner_url: "https://example.com/banner.jpg"
+  # captcha_token: "..."  # only if required by your server
 ```
+
+### Editing Switch Metadata (including icon/banner)
+
+For switches you own:
+
+1. Go to **Settings** → **Devices & Services**
+2. Open **VomeSync** → **Configure**
+3. **Manage switches** → select your switch → **Edit settings**
+4. Set **Icon URL** / **Banner URL** (and other metadata). Changes are pushed to the server.
+
+Notes:
+- Leaving the URL blank will clear the icon/banner.
+- If you turn on **Publicise** and your server enforces CAPTCHA, you must provide a token (or a configured bypass token).
+- Home Assistant does not provide an "upload image" flow inside config/options screens; use publicly reachable image URLs.
+
+### Manage switch page appearance on the website (v2)
+
+For v2/crypto switches, you can generate a **website management link** from Home Assistant:
+
+1. **Settings** → **Devices & Services** → **VomeSync** → **Configure**
+2. **Manage switches** → select your v2 switch → **Manage on website**
+3. Open the generated URL in your browser (it includes an access key in the `#…` fragment)
+
+You can revoke that key afterwards via **Access keys (delegation)**.
 
 ### Subscribing to a Switch
 
@@ -161,6 +193,17 @@ Subscribe to monitor an existing switch by UID.
 
 ### `vomesync.delete_switch`
 Delete a switch you own (removes from server).
+
+## Delegation (v2 access keys)
+
+If you are using **v2/crypto** switches, owners can create **delegated access keys** for a switch and share them with other people (no personal key sharing).
+
+In Home Assistant:
+1. **Settings** → **Devices & Services** → **VomeSync** → **Configure**
+2. **Manage switches** → select your v2 switch → **Access keys (delegation)**
+3. Create/list/revoke keys, then share the key with the person you want to delegate to.
+
+What delegated keys can do depends on permissions (e.g. `toggle`, `comment`). The website uses these keys for v2 comments.
 
 ## Finding Public Switches
 

@@ -40,6 +40,31 @@ create_switch:
       default: false
       selector:
         boolean:
+    link:
+      name: Link (optional)
+      description: Optional external link shown on the switch page
+      required: false
+      selector:
+        text:
+    icon_url:
+      name: Icon URL (optional)
+      description: Optional icon image URL for the switch page
+      required: false
+      selector:
+        text:
+    banner_url:
+      name: Banner URL (optional)
+      description: Optional banner image URL for the switch page
+      required: false
+      selector:
+        text:
+    captcha_token:
+      name: CAPTCHA token (optional)
+      description: If the server requires CAPTCHA for public switches, provide a token (or bypass token if configured)
+      required: false
+      selector:
+        text:
+          type: text
 
 subscribe_switch:
   name: Subscribe to Switch

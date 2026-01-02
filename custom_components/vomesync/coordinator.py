@@ -447,6 +447,8 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				category = cached.get("category", "Other") if isinstance(cached, dict) else "Other"
 				publicize = bool(cached.get("publicize", False)) if isinstance(cached, dict) else False
 				link = cached.get("link", "") if isinstance(cached, dict) else ""
+				icon_url = cached.get("iconUrl", "") if isinstance(cached, dict) else ""
+				banner_url = cached.get("bannerUrl", "") if isinstance(cached, dict) else ""
 
 				resp = await self.api_client.create_switch_v2(
 					index=idx,
@@ -455,6 +457,8 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					category=category,
 					publicize=publicize,
 					link=link,
+					icon_url=icon_url or None,
+					banner_url=banner_url or None,
 					captcha_token="",
 				)
 				created_uid = resp.get("uid")
@@ -482,6 +486,10 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		location: str = "",
 		category: str = "Other",
 		publicize: bool = False,
+		link: str = "",
+		icon_url: Optional[str] = None,
+		banner_url: Optional[str] = None,
+		captcha_token: str = "",
 	) -> Optional[str]:
 		"""Create a new switch."""
 		try:
@@ -521,6 +529,10 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					location=location,
 					category=category,
 					publicize=publicize,
+					link=link,
+					icon_url=icon_url,
+					banner_url=banner_url,
+					captcha_token=captcha_token,
 				)
 				uid = result["uid"]
 				# Ensure index is stored locally even if server omits it for any reason
@@ -531,7 +543,9 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					description=description,
 					location=location,
 					category=category,
-					publicize=publicize
+					publicize=publicize,
+					link=link,
+					captcha_token=captcha_token,
 				)
 				uid = result["uid"]
 			
@@ -577,6 +591,99 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		except VomeSyncAPIError as ex:
 			_LOGGER.error("Failed to create switch: %s", ex)
 			return None
+
+	async def update_switch_metadata(self, uid: str, updates: Dict[str, Any], captcha_token: str = "") -> Optional[Dict[str, Any]]:
+		"""Update switch metadata on the server (v2 signed when crypto is enabled)."""
+		if not isinstance(uid, str) or not uid:
+			return None
+		if not isinstance(updates, dict) or not updates:
+			return None
+		if not self.is_switch_owner(uid):
+			_LOGGER.warning("Refusing metadata update for non-owner switch uid=%s", uid)
+			return None
+
+		try:
+			switch_data = self.switches.get(uid) or {}
+			is_v2 = bool(uid.startswith("vs_") or switch_data.get("authVersion") == 2)
+			updated: Dict[str, Any]
+
+			if self.crypto_enabled and is_v2:
+				updated = await self.api_client.update_switch_v2_metadata(uid, updates, captcha_token=captcha_token)
+			else:
+				# Legacy v1 update (personal key auth) - best effort
+				endpoint_updates = dict(updates)
+				if captcha_token:
+					endpoint_updates["captchaToken"] = captcha_token
+				updated = await self.api_client.update_switch(uid, endpoint_updates)
+
+			# Merge back into local cache, preserving local-only fields
+			local_name = (switch_data or {}).get("name", uid)
+			merged = {
+				**(switch_data if isinstance(switch_data, dict) else {}),
+				**(updated if isinstance(updated, dict) else {}),
+				"name": local_name,
+				"is_owner": True
+			}
+			self.switches[uid] = merged
+
+			# Persist to imported cache if present
+			options = dict(self.config_entry.options or {})
+			imported_switches = options.get(_OPT_IMPORTED_SWITCHES, {}) or {}
+			if uid in imported_switches:
+				imported_switches[uid]["cached_data"] = merged
+				options[_OPT_IMPORTED_SWITCHES] = imported_switches
+				await self._async_update_entry_options(options)
+
+			self.async_update_listeners()
+			return merged
+		except VomeSyncAPIError as ex:
+			_LOGGER.error("Failed to update switch metadata uid=%s: %s", uid, ex)
+			return None
+		except Exception as ex:  # noqa: BLE001
+			_LOGGER.error("Failed to update switch metadata uid=%s (unexpected): %s", uid, ex)
+			return None
+
+	async def create_v2_access_key(self, uid: str, name: str = "", permissions: Optional[list[str]] = None) -> Optional[Dict[str, Any]]:
+		"""Create a delegated v2 access key for a switch (owner-only)."""
+		if not self.crypto_enabled:
+			_LOGGER.warning("Cannot create v2 access key: crypto mode not enabled")
+			return None
+		if not self.is_switch_owner(uid):
+			_LOGGER.warning("Cannot create v2 access key: not owner (uid=%s)", uid)
+			return None
+		try:
+			return await self.api_client.create_v2_access_key(uid, name=name, permissions=permissions)
+		except VomeSyncAPIError as ex:
+			_LOGGER.error("Failed to create v2 access key uid=%s: %s", uid, ex)
+			return None
+
+	async def list_v2_access_keys(self, uid: str) -> Optional[Dict[str, Any]]:
+		"""List delegated v2 access keys for a switch (owner-only)."""
+		if not self.crypto_enabled:
+			_LOGGER.warning("Cannot list v2 access keys: crypto mode not enabled")
+			return None
+		if not self.is_switch_owner(uid):
+			_LOGGER.warning("Cannot list v2 access keys: not owner (uid=%s)", uid)
+			return None
+		try:
+			return await self.api_client.list_v2_access_keys(uid)
+		except VomeSyncAPIError as ex:
+			_LOGGER.error("Failed to list v2 access keys uid=%s: %s", uid, ex)
+			return None
+
+	async def revoke_v2_access_key(self, uid: str, api_key: str) -> bool:
+		"""Revoke a delegated v2 access key for a switch (owner-only)."""
+		if not self.crypto_enabled:
+			_LOGGER.warning("Cannot revoke v2 access key: crypto mode not enabled")
+			return False
+		if not self.is_switch_owner(uid):
+			_LOGGER.warning("Cannot revoke v2 access key: not owner (uid=%s)", uid)
+			return False
+		try:
+			return await self.api_client.revoke_v2_access_key(uid, api_key)
+		except VomeSyncAPIError as ex:
+			_LOGGER.error("Failed to revoke v2 access key uid=%s: %s", uid, ex)
+			return False
 
 	async def subscribe_to_switch(self, uid: str) -> bool:
 		"""Subscribe to an existing switch."""

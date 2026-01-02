@@ -39,6 +39,8 @@
 				"title": "More",
 				"menu_options": {
 					"import_switches": "⬇️ Import switches from API",
+					"manage_api_keys": "🔑 Manage API keys (legacy)",
+					"connect_website": "🌐 Connect to website (legacy)",
 					"reannounce_owned_switches": "📣 Re-announce owned switches",
 					"cleanup_orphaned_devices": "🧹 Clean up orphaned devices",
 					"edit_connection": "⚙️ Edit connection URLs"
@@ -59,7 +61,11 @@
 					"description": "Description",
 					"location": "Location",
 					"category": "Category",
-					"publicize": "Publicise (list publicly)"
+					"publicize": "Publicise (list publicly)",
+					"link": "Link (optional)",
+					"icon_url": "Icon URL (optional)",
+					"banner_url": "Banner URL (optional)",
+					"captcha_token": "CAPTCHA token (optional)"
 				}
 			},
 			"subscribe_switch": {
@@ -82,10 +88,59 @@
 				"menu_options": {
 					"view_switch": "View details",
 					"edit_switch": "Edit settings",
+					"access_keys": "Access keys (delegation)",
+					"manage_on_website": "Manage on website",
 					"link_entities": "Link local entities",
 					"delete_switch": "Delete switch",
 					"remove_from_installation": "Remove from this installation"
 				}
+			},
+			"manage_on_website": {
+				"title": "Manage on website",
+				"description": "{info}",
+				"data": {
+					"website_management_url": "Website management URL",
+					"access_key": "Access key (copy and save)"
+				}
+			},
+			"access_keys": {
+				"title": "Access keys",
+				"description": "Create and manage delegated access keys for this v2 switch.",
+				"menu_options": {
+					"create_access_key_v2": "➕ Create access key",
+					"list_access_keys_v2": "📋 List access keys",
+					"revoke_access_key_v2": "🗑️ Revoke access key"
+				}
+			},
+			"create_access_key_v2": {
+				"title": "Create access key",
+				"description": "Create an access key you can share with someone else. Permissions control what they can do.",
+				"data": {
+					"name": "Name (optional)",
+					"permissions": "Permissions"
+				}
+			},
+			"create_access_key_v2_success": {
+				"title": "Access key created",
+				"description": "{info}",
+				"data": {
+					"api_key": "Access key (copy and save)"
+				}
+			},
+			"list_access_keys_v2": {
+				"title": "Access keys",
+				"description": "{info}"
+			},
+			"revoke_access_key_v2": {
+				"title": "Revoke access key",
+				"description": "Select an access key to revoke. This cannot be undone.",
+				"data": {
+					"api_key": "Access key"
+				}
+			},
+			"revoke_access_key_v2_success": {
+				"title": "Access key revoked",
+				"description": "{info}"
 			},
 			"connect_website": {
 				"title": "Connect to VomeSync website",
@@ -97,6 +152,7 @@
 				"data": {
 					"uid": "UID",
 					"entity_id": "Entity ID",
+					"website_url": "Website URL",
 					"websocket_url": "WebSocket URL",
 					"webhook_url": "Webhook URL",
 					"curl_command": "curl command"
@@ -109,7 +165,11 @@
 					"description": "Description",
 					"location": "Location",
 					"category": "Category",
-					"publicize": "Publicise (list publicly)"
+					"publicize": "Publicise (list publicly)",
+					"link": "Link (optional)",
+					"icon_url": "Icon URL (optional)",
+					"banner_url": "Banner URL (optional)",
+					"captcha_token": "CAPTCHA token (optional)"
 				}
 			},
 			"link_entities": {
@@ -202,6 +262,10 @@
 		},
 		"error": {
 			"create_failed": "Failed to create switch. Check server URL, key, and connectivity.",
+			"update_failed": "Failed to update switch. Check server URL, key, and connectivity.",
+			"captcha_required": "CAPTCHA token required to publicise this switch on this server.",
+			"access_key_create_failed": "Failed to create access key. Check connectivity and try again.",
+			"access_key_revoke_failed": "Failed to revoke access key. Check connectivity and try again.",
 			"subscribe_failed": "Failed to subscribe to switch.",
 			"connect_failed": "Failed to create session token. Check server URL/key and try again.",
 			"fetch_failed": "Failed to fetch API keys from server.",
@@ -211,6 +275,9 @@
 		"abort": {
 			"no_switches": "No switches to manage. Create or subscribe to switches first.",
 			"not_owner": "Only switch owners can edit settings.",
+			"not_v2_switch": "This action is only available for v2 (crypto) switches.",
+			"crypto_required": "This action requires crypto mode to be enabled for this integration.",
+			"no_access_keys": "No access keys exist for this switch.",
 			"no_linkable_entities": "No linkable entities found. Add switches, lights, or other controllable entities first.",
 			"no_switches_selected": "No switches were selected to import.",
 			"api_error": "Failed to fetch switches from API. Check your connection and try again.",

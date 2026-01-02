@@ -126,7 +126,7 @@ Access keys are **server-generated API keys** scoped to a single v2 switch. Owne
   "nonce": "random-string",
   "sigOwner": "base64url-ed25519-signature",
   "name": "Friend",
-  "permissions": ["toggle", "comment"]
+  "permissions": ["toggle", "comment", "metadata"]
 }
 ```
 
@@ -137,11 +137,17 @@ Access keys are **server-generated API keys** scoped to a single v2 switch. Owne
   "data": {
     "apiKey": "uuid-v4-string",
     "name": "Friend",
-    "permissions": ["toggle", "comment"],
+    "permissions": ["toggle", "comment", "metadata"],
     "createdAt": 1712345678901
   }
 }
 ```
+
+Notes:
+- `permissions` can include:
+  - `toggle`: toggle via access key
+  - `comment`: comment via access key
+  - `metadata`: update non-publicising metadata via access key (icon/banner/link/etc)
 
 #### List access keys (v2)
 
@@ -172,6 +178,26 @@ X-Api-Key: uuid-v4-string
 Body:
 ```json
 { "comment": "Reason for change" }
+```
+
+#### Update metadata using access key (v2)
+
+Update a switch using a delegated access key (no signatures). This endpoint is intentionally limited and does **not** allow setting `publicize`.
+
+**POST** `/api/v2/switch/{uid}/metadata`
+
+Header:
+```
+X-Api-Key: uuid-v4-string
+```
+
+Body (example):
+```json
+{
+  "iconUrl": "https://example.com/icon.png",
+  "bannerUrl": "https://example.com/banner.jpg",
+  "link": "https://example.com"
+}
 ```
 
 ### Get My Switches (v2)

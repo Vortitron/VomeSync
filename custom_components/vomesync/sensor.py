@@ -14,6 +14,9 @@ from .const import (
 	ATTR_DESCRIPTION,
 	ATTR_LOCATION,
 	ATTR_CATEGORY,
+	ATTR_LINK,
+	ATTR_ICON_URL,
+	ATTR_BANNER_URL,
 	ATTR_LAST_TOGGLED,
 	ATTR_IS_OWNER,
 	DEVICE_MANUFACTURER,
@@ -128,6 +131,9 @@ class VomeSyncSensor(CoordinatorEntity[VomeSyncCoordinator], SensorEntity):
 			(ATTR_DESCRIPTION, "description"),
 			(ATTR_LOCATION, "location"),
 			(ATTR_CATEGORY, "category"),
+			(ATTR_LINK, "link"),
+			(ATTR_ICON_URL, "iconUrl"),
+			(ATTR_BANNER_URL, "bannerUrl"),
 			(ATTR_LAST_TOGGLED, "lastToggled"),
 		]:
 			if key in data:

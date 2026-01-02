@@ -867,6 +867,10 @@ select {
 	border: 1px solid var(--border);
 }
 
+.manage-panel {
+	margin-top: 1rem;
+}
+
 .comment-form h3 {
 	font-size: 1.125rem;
 	font-weight: 600;

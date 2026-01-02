@@ -57,6 +57,7 @@ let allSwitches = [];
 let filteredSwitches = [];
 let categories = {};
 let currentSwitchId = null;
+let currentSwitchDetail = null;
 
 // DOM elements
 const heroSection = document.querySelector('.hero');
@@ -90,6 +91,16 @@ const commentForm = document.getElementById('commentForm');
 const commentKeyInput = document.getElementById('commentKey');
 const commentTextInput = document.getElementById('commentText');
 const commentStatus = document.getElementById('commentStatus');
+
+// Owner tools (appearance)
+const managePanel = document.getElementById('managePanel');
+const manageForm = document.getElementById('manageForm');
+const manageKeyInput = document.getElementById('manageKey');
+const manageLinkInput = document.getElementById('manageLink');
+const manageIconUrlInput = document.getElementById('manageIconUrl');
+const manageBannerUrlInput = document.getElementById('manageBannerUrl');
+const manageStatus = document.getElementById('manageStatus');
+const manageForgetBtn = document.getElementById('manageForgetBtn');
 
 document.addEventListener('DOMContentLoaded', () => {
 	init();
@@ -140,8 +151,53 @@ function init() {
 	applyEnvBadge();
 	applyDynamicLinks();
 	setupEventListeners();
+	importManagementKeyFromHash();
 	loadAllData();
 	restoreSwitchFromQuery();
+}
+
+const MANAGEMENT_KEY_STORAGE_PREFIX = 'vomesync_manage_key:';
+
+function getStoredManagementKey(uid) {
+	if (!uid) return '';
+	try {
+		return sessionStorage.getItem(`${MANAGEMENT_KEY_STORAGE_PREFIX}${uid}`) || '';
+	} catch {
+		return '';
+	}
+}
+
+function setStoredManagementKey(uid, apiKey) {
+	if (!uid) return;
+	try {
+		if (!apiKey) {
+			sessionStorage.removeItem(`${MANAGEMENT_KEY_STORAGE_PREFIX}${uid}`);
+		} else {
+			sessionStorage.setItem(`${MANAGEMENT_KEY_STORAGE_PREFIX}${uid}`, apiKey);
+		}
+	} catch {
+		// ignore (private mode, etc)
+	}
+}
+
+function importManagementKeyFromHash() {
+	const hash = String(window.location.hash || '');
+	if (!hash || hash.length < 2) return;
+	const params = new URLSearchParams(hash.slice(1));
+	const apiKey = String(params.get('accessKey') || '').trim();
+	if (!apiKey) return;
+
+	const uid = extractSwitchUidFromPathname(window.location.pathname);
+	if (!uid) return;
+
+	setStoredManagementKey(uid, apiKey);
+
+	// Clear the fragment to avoid leaving the key in the address bar/history.
+	try {
+		window.history.replaceState({}, '', window.location.pathname + window.location.search);
+	} catch {
+		// ignore
+	}
 }
 
 function applyEnvBadge() {
@@ -188,6 +244,28 @@ function setupEventListeners() {
 		e.preventDefault();
 		await submitComment();
 	});
+
+	if (manageForm) {
+		manageForm.addEventListener('submit', async (e) => {
+			e.preventDefault();
+			await submitManageAppearance();
+		});
+	}
+
+	if (manageForgetBtn) {
+		manageForgetBtn.addEventListener('click', () => {
+			if (currentSwitchId) {
+				setStoredManagementKey(currentSwitchId, '');
+			}
+			if (manageKeyInput) {
+				manageKeyInput.value = '';
+			}
+			if (manageStatus) {
+				manageStatus.textContent = 'Key cleared (this browser session).';
+				manageStatus.className = 'comment-status';
+			}
+		});
+	}
 
 	window.addEventListener('popstate', () => {
 		restoreSwitchFromQuery();
@@ -482,6 +560,7 @@ async function openSwitchDetails(uid, fromPopState = false) {
 }
 
 function renderSwitchDetail(detail) {
+	currentSwitchDetail = detail;
 	detailTitle.textContent = detail.description || 'Untitled switch';
 	if (detailIcon) {
 		const icon = String(detail.iconUrl || '').trim();
@@ -501,6 +580,8 @@ function renderSwitchDetail(detail) {
 	detailLastChange.textContent = detail.lastToggled ? formatTimeAgo(new Date(detail.lastToggled)) : 'Never';
 	detailUid.textContent = detail.uid;
 
+	updateManagePanel(detail);
+
 	if (detail.link) {
 		switchWebLink.href = detail.link;
 		switchWebLink.classList.remove('hidden');
@@ -518,6 +599,89 @@ function renderSwitchDetail(detail) {
 	}
 
 	renderEvents(detail.events || []);
+}
+
+function updateManagePanel(detail) {
+	if (!managePanel) return;
+	// Directory is v2-only; owner tools are optional (access key required).
+	managePanel.classList.remove('hidden');
+
+	if (manageLinkInput) manageLinkInput.value = detail.link || '';
+	if (manageIconUrlInput) manageIconUrlInput.value = detail.iconUrl || '';
+	if (manageBannerUrlInput) manageBannerUrlInput.value = detail.bannerUrl || '';
+
+	const storedKey = getStoredManagementKey(detail.uid);
+	if (storedKey && manageKeyInput && !manageKeyInput.value) {
+		manageKeyInput.value = storedKey;
+	}
+}
+
+async function submitManageAppearance() {
+	if (!currentSwitchId) return;
+	if (!manageStatus) return;
+
+	const apiKey = String(manageKeyInput?.value || '').trim() || getStoredManagementKey(currentSwitchId);
+	if (!apiKey) {
+		manageStatus.textContent = 'Access key required.';
+		manageStatus.className = 'comment-status error';
+		return;
+	}
+
+	const updates = {};
+	const detail = currentSwitchDetail || {};
+
+	const link = String(manageLinkInput?.value || '').trim();
+	if (link !== String(detail.link || '')) {
+		updates.link = link;
+	}
+
+	const iconUrl = String(manageIconUrlInput?.value || '').trim();
+	if (iconUrl !== String(detail.iconUrl || '')) {
+		updates.iconUrl = iconUrl;
+	}
+
+	const bannerUrl = String(manageBannerUrlInput?.value || '').trim();
+	if (bannerUrl !== String(detail.bannerUrl || '')) {
+		updates.bannerUrl = bannerUrl;
+	}
+
+	if (Object.keys(updates).length === 0) {
+		manageStatus.textContent = 'No changes to save.';
+		manageStatus.className = 'comment-status';
+		return;
+	}
+
+	manageStatus.textContent = 'Saving...';
+	manageStatus.className = 'comment-status';
+
+	try {
+		const response = await fetch(`${API_BASE_URL}/v2/switch/${currentSwitchId}/metadata`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'X-Api-Key': apiKey
+			},
+			body: JSON.stringify(updates)
+		});
+
+		const data = await response.json();
+		if (!response.ok || !data.success) {
+			throw new Error((data && data.error) ? data.error : `HTTP ${response.status}`);
+		}
+
+		setStoredManagementKey(currentSwitchId, apiKey);
+
+		if (data.data) {
+			renderSwitchDetail(data.data);
+		}
+
+		manageStatus.textContent = 'Saved.';
+		manageStatus.className = 'comment-status success';
+	} catch (error) {
+		console.error('Error saving appearance:', error);
+		manageStatus.textContent = `Failed: ${error.message || 'Unknown error'}`;
+		manageStatus.className = 'comment-status error';
+	}
 }
 
 function renderEvents(events) {
@@ -602,6 +766,7 @@ async function submitComment() {
 function closeDetail() {
 	detailSection.classList.add('hidden');
 	currentSwitchId = null;
+	currentSwitchDetail = null;
 	clearHeroBanner();
 	clearSwitchQuery();
 }

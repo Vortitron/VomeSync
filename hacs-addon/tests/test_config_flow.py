@@ -16,6 +16,10 @@ from custom_components.vomesync.const import (
 	CONF_SWITCH_LOCATION,
 	CONF_SWITCH_CATEGORY,
 	CONF_SWITCH_PUBLICIZE,
+	CONF_SWITCH_LINK,
+	CONF_SWITCH_ICON_URL,
+	CONF_SWITCH_BANNER_URL,
+	CONF_CAPTCHA_TOKEN,
 	CONF_SWITCH_UID,
 	DOMAIN,
 )
@@ -124,6 +128,21 @@ async def test_options_flow_create_switch_auto_imports(hass, config_entry):
 
 
 @pytest.mark.asyncio
+async def test_options_flow_create_switch_schema_includes_theming_fields(hass, config_entry):
+	"""Create-switch form should expose link/icon/banner fields."""
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_create_switch(None)
+	assert result["type"] == FlowResultType.FORM
+	schema = result["data_schema"].schema
+	assert CONF_SWITCH_LINK in schema
+	assert CONF_SWITCH_ICON_URL in schema
+	assert CONF_SWITCH_BANNER_URL in schema
+	assert CONF_CAPTCHA_TOKEN in schema
+
+
+@pytest.mark.asyncio
 async def test_options_flow_subscribe_switch_auto_imports(hass, config_entry):
 	"""Test subscribing to a switch automatically imports it."""
 	mock_coordinator = MagicMock()
@@ -210,6 +229,179 @@ async def test_options_flow_manage_switch_action_shows_entity_id(hass, config_en
 	assert result["step_id"] == "manage_switch_action"
 	assert result["description_placeholders"]["name"] == "My Switch"
 	assert result["description_placeholders"]["entity_id"] == "switch.vomesync_my_switch"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_manage_switch_action_includes_v2_access_keys(hass, config_entry):
+	"""Owned v2 switches in crypto mode should show the access-keys menu option."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+	config_entry.options = {
+		"imported_switches": {
+			"vs_test_uid": {
+				"name": "My v2 Switch",
+				"is_owner": True,
+				"cached_data": {}
+			}
+		}
+	}
+
+	mock_entity_reg = MagicMock()
+	mock_entity_reg.async_get_entity_id.return_value = "switch.vomesync_my_switch"
+
+	hass.data = {DOMAIN: {config_entry.entry_id: MagicMock()}}
+	hass.config_entries = MagicMock()
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	with patch("custom_components.vomesync.config_flow.er.async_get", return_value=mock_entity_reg):
+		result = await flow.async_step_manage_switches({"switch": "vs_test_uid"})
+
+	assert result["type"] == FlowResultType.MENU
+	assert "access_keys" in result["menu_options"]
+	assert "manage_on_website" in result["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_access_keys_menu(hass, config_entry):
+	"""Access-keys menu should be available for owned v2 switches in crypto mode."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+	mock_coordinator = MagicMock()
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "vs_test_uid",
+		"is_owner": True,
+	}
+
+	result = await flow.async_step_access_keys(None)
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "access_keys"
+	assert "create_access_key_v2" in result["menu_options"]
+	assert "list_access_keys_v2" in result["menu_options"]
+	assert "revoke_access_key_v2" in result["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_manage_on_website_creates_link(hass, config_entry):
+	"""Manage-on-website should create a metadata key and return a fragment-based URL."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+		"server_url": "https://test-server.com",
+	}
+
+	mock_coordinator = MagicMock()
+	mock_coordinator.create_v2_access_key = AsyncMock(return_value={"apiKey": "key-123"})
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "vs_test_uid",
+		"selected_name": "My v2 Switch",
+		"is_owner": True,
+	}
+
+	result = await flow.async_step_manage_on_website(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "manage_on_website"
+	schema = result["data_schema"].schema
+	assert "website_management_url" in schema
+	assert "access_key" in schema
+
+
+@pytest.mark.asyncio
+async def test_options_flow_create_access_key_v2(hass, config_entry):
+	"""Creating a v2 access key should call the coordinator and show the created key."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+	mock_coordinator = MagicMock()
+	mock_coordinator.create_v2_access_key = AsyncMock(return_value={"apiKey": "key-123", "permissions": ["toggle"]})
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "vs_test_uid",
+		"is_owner": True,
+	}
+
+	result = await flow.async_step_create_access_key_v2({"name": "Friend", "permissions": ["toggle", "comment"]})
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "create_access_key_v2_success"
+	mock_coordinator.create_v2_access_key.assert_called_once_with("vs_test_uid", name="Friend", permissions=["toggle", "comment"])
+
+
+@pytest.mark.asyncio
+async def test_options_flow_list_access_keys_v2(hass, config_entry):
+	"""Listing v2 access keys should show the keys in the description."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+	mock_coordinator = MagicMock()
+	mock_coordinator.list_v2_access_keys = AsyncMock(return_value={
+		"keys": [{"apiKey": "key-123", "name": "Friend", "permissions": ["toggle"]}],
+		"count": 1
+	})
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "vs_test_uid",
+		"is_owner": True,
+	}
+
+	result = await flow.async_step_list_access_keys_v2(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "list_access_keys_v2"
+	assert "key-123" in result["description_placeholders"]["info"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_revoke_access_key_v2(hass, config_entry):
+	"""Revoking a v2 access key should call the coordinator and show success."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+	mock_coordinator = MagicMock()
+	mock_coordinator.list_v2_access_keys = AsyncMock(return_value={
+		"keys": [{"apiKey": "key-123", "name": "Friend", "permissions": ["toggle"]}],
+		"count": 1
+	})
+	mock_coordinator.revoke_v2_access_key = AsyncMock(return_value=True)
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "vs_test_uid",
+		"is_owner": True,
+	}
+
+	result = await flow.async_step_revoke_access_key_v2({"api_key": "key-123"})
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "revoke_access_key_v2_success"
+	mock_coordinator.revoke_v2_access_key.assert_called_once_with("vs_test_uid", "key-123")
 
 
 @pytest.mark.asyncio

@@ -107,6 +107,58 @@ async function createV2AccessKey(app, uid, owner, ownerPubKeyB64, permissions, n
 	return response.body.data.apiKey;
 }
 
+async function listV2AccessKeys(app, uid, owner, ownerPubKeyB64) {
+	const ts = Date.now();
+	const nonce = `n-${Date.now()}-${Math.random().toString(16).slice(2)}-ak-list`;
+	const canonical = stableJsonStringify({
+		v: 2,
+		action: 'list_access_keys',
+		uid,
+		ownerPubKey: ownerPubKeyB64,
+		ts,
+		nonce
+	});
+	const sigOwner = global.testUtils.ed25519SignBase64Url(owner.privateKey, canonical);
+
+	const response = await request(app)
+		.post(`/api/v2/switch/${uid}/access-keys/list`)
+		.send({
+			ownerPubKey: ownerPubKeyB64,
+			ts,
+			nonce,
+			sigOwner
+		})
+		.expect(200);
+
+	return response.body.data.keys || [];
+}
+
+async function revokeV2AccessKey(app, uid, owner, ownerPubKeyB64, apiKey) {
+	const ts = Date.now();
+	const nonce = `n-${Date.now()}-${Math.random().toString(16).slice(2)}-ak-revoke`;
+	const canonical = stableJsonStringify({
+		v: 2,
+		action: 'revoke_access_key',
+		uid,
+		ownerPubKey: ownerPubKeyB64,
+		ts,
+		nonce,
+		apiKey
+	});
+	const sigOwner = global.testUtils.ed25519SignBase64Url(owner.privateKey, canonical);
+
+	await request(app)
+		.post(`/api/v2/switch/${uid}/access-keys/revoke`)
+		.send({
+			ownerPubKey: ownerPubKeyB64,
+			ts,
+			nonce,
+			sigOwner,
+			apiKey
+		})
+		.expect(200);
+}
+
 describe('API Integration Tests', () => {
 	let app;
 
@@ -522,6 +574,46 @@ describe('API Integration Tests', () => {
 			expect(commentResponse.body.success).toBe(false);
 		});
 
+		test('should enforce access key permissions (toggle-only key cannot comment)', async () => {
+			const toggleOnlyKey = await createV2AccessKey(app, publicUid, owner, ownerPubKeyB64, ['toggle'], 'toggle-only');
+
+			const commentResponse = await request(app)
+				.post(`/api/v2/switch/${publicUid}/comment`)
+				.set('X-Api-Key', toggleOnlyKey)
+				.send({ comment: 'Should fail' })
+				.expect(403);
+
+			expect(commentResponse.body.success).toBe(false);
+		});
+
+		test('should allow metadata updates only with metadata permission', async () => {
+			const toggleOnlyKey = await createV2AccessKey(app, publicUid, owner, ownerPubKeyB64, ['toggle'], 'toggle-only');
+			const metadataKey = await createV2AccessKey(app, publicUid, owner, ownerPubKeyB64, ['metadata'], 'metadata-only');
+
+			// Non-metadata key must be rejected
+			await request(app)
+				.post(`/api/v2/switch/${publicUid}/metadata`)
+				.set('X-Api-Key', toggleOnlyKey)
+				.send({ iconUrl: 'https://example.com/icon.png' })
+				.expect(403);
+
+			// Metadata key can update theming
+			const response = await request(app)
+				.post(`/api/v2/switch/${publicUid}/metadata`)
+				.set('X-Api-Key', metadataKey)
+				.send({
+					iconUrl: 'https://example.com/icon.png',
+					bannerUrl: 'https://example.com/banner.jpg',
+					link: 'https://example.com'
+				})
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.data.iconUrl).toBe('https://example.com/icon.png');
+			expect(response.body.data.bannerUrl).toBe('https://example.com/banner.jpg');
+			expect(response.body.data.link).toBe('https://example.com');
+		});
+
 		test('toggle should record user count and timeline', async () => {
 			const toggleResponse = await request(app)
 				.post(`/api/v2/switch/${publicUid}/toggle`)
@@ -539,6 +631,22 @@ describe('API Integration Tests', () => {
 			const events = detailResponse.body.data.events || [];
 			const stateEvents = events.filter(e => e.type === 'state');
 			expect(stateEvents.length).toBeGreaterThanOrEqual(1);
+		});
+
+		test('should list and revoke v2 access keys', async () => {
+			const keysBefore = await listV2AccessKeys(app, publicUid, owner, ownerPubKeyB64);
+			const apiKeysBefore = keysBefore.map((k) => k.apiKey);
+			expect(apiKeysBefore).toContain(accessKey);
+
+			await revokeV2AccessKey(app, publicUid, owner, ownerPubKeyB64, accessKey);
+
+			const toggleResponse = await request(app)
+				.post(`/api/v2/switch/${publicUid}/toggle`)
+				.set('X-Api-Key', accessKey)
+				.send({})
+				.expect(401);
+
+			expect(toggleResponse.body.success).toBe(false);
 		});
 
 		test('should list categories with counts', async () => {
