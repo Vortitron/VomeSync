@@ -33,6 +33,7 @@ This document is a practical checklist/runbook for operating VomeSync safely, es
 	- Keep `VOMESYNC_REDIS_VOLUME_NAME` stable. Changing it will look like “all switches disappeared” (new empty DB).
 - **Health checks**:
 	- Confirm `/api/health` returns `200` and `redis: true`.
+	- If you proxy a `/health` shortcut in nginx, ensure it targets the **API port** (not the standalone WS port when `PORT` != `WS_PORT`).
 - **Rollback plan**:
 	- You should be able to redeploy the previous image/tag quickly (and keep the same Redis volume).
 
