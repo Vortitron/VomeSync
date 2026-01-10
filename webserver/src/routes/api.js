@@ -14,11 +14,11 @@ const webSocketManager = require('../websocket/manager');
 
 const router = express.Router();
 
-const abbreviateKey = (key) => {
-	if (!key) {
+const abbreviateActor = (actorId) => {
+	if (!actorId) {
 		return 'unknown';
 	}
-	return `${key.substring(0, 8)}...`;
+	return `${String(actorId).substring(0, 8)}...`;
 };
 
 // V2 crypto-auth helpers
@@ -134,7 +134,7 @@ const v2CanonicalRevokeAccessKey = (uid, data) => stableJsonStringify({
 	ownerPubKey: data.ownerPubKey,
 	ts: data.ts,
 	nonce: data.nonce,
-	apiKey: data.apiKey
+	...(data.keyId ? { keyId: data.keyId } : { apiKey: data.apiKey })
 });
 
 // Generate personal key endpoint
@@ -151,7 +151,7 @@ router.post('/generate-key',
 			// Generate JWT for additional security (optional)
 			const jwt = authManager.generateJWT(personalKey);
 
-			logger.info(`Generated new personal key: ${personalKey.substring(0, 8)}...`);
+			logger.info('Generated new personal key');
 
 			return res.json({
 				success: true,
@@ -497,6 +497,7 @@ router.post('/v2/switch/:uid/access-keys',
 				success: true,
 				data: {
 					apiKey: created.apiKey,
+					keyId: created.apiKeyId,
 					name: created.name || '',
 					permissions: created.permissions || [],
 					createdAt: created.createdAt
@@ -549,7 +550,7 @@ router.post('/v2/switch/:uid/access-keys/list',
 
 			const keys = await redisClient.listV2AccessKeys(ownerId, uid);
 			const sanitized = (keys || []).map((k) => ({
-				apiKey: k.apiKey,
+				keyId: k.apiKeyId,
 				name: k.name || '',
 				permissions: Array.isArray(k.permissions) ? k.permissions : [],
 				createdAt: k.createdAt || 0,
@@ -609,7 +610,8 @@ router.post('/v2/switch/:uid/access-keys/revoke',
 				return res.status(409).json({ success: false, error: 'Nonce already used' });
 			}
 
-			const revoked = await redisClient.revokeV2AccessKey(ownerId, uid, data.apiKey);
+			const keyRef = data.keyId || data.apiKey;
+			const revoked = await redisClient.revokeV2AccessKey(ownerId, uid, keyRef);
 			if (!revoked) {
 				return res.status(404).json({ success: false, error: 'API key not found' });
 			}
@@ -631,8 +633,7 @@ router.post('/v2/switch/:uid/toggle',
 		try {
 			const { uid } = req.params;
 			const { switchData } = req;
-			const apiKey = req.apiKeyUsed;
-			const actorLabel = abbreviateKey(apiKey);
+			const actorLabel = abbreviateActor(req.apiKeyId);
 			const timestamp = Date.now();
 
 			const oldState = Boolean(switchData.state);
@@ -645,7 +646,7 @@ router.post('/v2/switch/:uid/toggle',
 				toggleCount = await redisClient.incrementToggleCount(uid);
 			}
 
-			await redisClient.recordUserInteraction(uid, apiKey);
+			await redisClient.recordUserInteraction(uid, req.apiKeyId);
 			await redisClient.appendEvent(uid, {
 				type: 'state',
 				state: newState,
@@ -694,10 +695,9 @@ router.post('/v2/switch/:uid/metadata',
 			// Single-use website management keys: revoke after first successful save.
 			try {
 				const keyData = req.v2AccessKey;
-				const apiKey = req.apiKeyUsed;
 				const name = (keyData && typeof keyData.name === 'string') ? keyData.name : '';
-				if (name.startsWith('website_once:') && apiKey && keyData && keyData.ownerId) {
-					await redisClient.revokeV2AccessKey(keyData.ownerId, uid, apiKey);
+				if (name.startsWith('website_once:') && req.apiKeyId && keyData && keyData.ownerId) {
+					await redisClient.revokeV2AccessKey(keyData.ownerId, uid, req.apiKeyId);
 				}
 			} catch (revokeErr) {
 				logger.warn(`Failed to revoke single-use website key for ${uid}:`, revokeErr);
@@ -723,8 +723,7 @@ router.post('/v2/switch/:uid/comment',
 	async (req, res) => {
 		try {
 			const { uid } = req.params;
-			const apiKey = req.apiKeyUsed;
-			const actor = abbreviateKey(apiKey);
+			const actor = abbreviateActor(req.apiKeyId);
 			const timestamp = Date.now();
 
 			const commentEvent = {
@@ -735,7 +734,7 @@ router.post('/v2/switch/:uid/comment',
 				timestamp
 			};
 
-			await redisClient.recordUserInteraction(uid, apiKey);
+			await redisClient.recordUserInteraction(uid, req.apiKeyId);
 			await redisClient.addComment(uid, commentEvent);
 
 			return res.json({
@@ -757,7 +756,7 @@ router.post('/create-switch',
 	async (req, res) => {
 		try {
 			const uid = uuidv4();
-			const { personalKey } = req;
+			const { personalKeyId } = req;
 			const switchConfig = { ...req.validatedData };
 			const captchaToken = switchConfig.captchaToken;
 			delete switchConfig.captchaToken;
@@ -774,9 +773,9 @@ router.post('/create-switch',
 			}
 
 			// Create switch in Redis
-			const switchData = await redisClient.createSwitch(uid, personalKey, switchConfig);
+			const switchData = await redisClient.createSwitch(uid, personalKeyId, switchConfig);
 
-			logger.info(`Created new switch: ${uid} by ${personalKey.substring(0, 8)}...`);
+			logger.info(`Created new switch: ${uid}`);
 
 			// Retrieve parsed state for response
 			const parsedSwitch = await redisClient.getSwitchState(uid);
@@ -808,7 +807,7 @@ router.post('/toggle/:uid',
 		try {
 			const { uid } = req.params;
 			const { switchData } = req;
-			const actorLabel = abbreviateKey(req.apiKeyUsed || req.personalKey);
+			const actorLabel = abbreviateActor(req.apiKeyId || req.personalKeyId);
 			const timestamp = Date.now();
 
 			// Toggle state
@@ -817,12 +816,12 @@ router.post('/toggle/:uid',
 			// Update in Redis
 			await redisClient.setSwitchState(uid, newState);
 			const toggleCount = await redisClient.incrementToggleCount(uid);
-			await redisClient.recordUserInteraction(uid, req.personalKey);
+			await redisClient.recordUserInteraction(uid, req.personalKeyId);
 			await redisClient.appendEvent(uid, {
 				type: 'state',
 				state: newState,
 				actor: actorLabel,
-				viaApiKey: Boolean(req.apiKeyUsed),
+				viaApiKey: Boolean(req.apiKeyId),
 				timestamp
 			});
 
@@ -962,9 +961,9 @@ router.get('/my-switches',
 	authManager.rateLimit('my_switches', 100, 900000),
 	async (req, res) => {
 		try {
-			const { personalKey } = req;
+			const { personalKeyId } = req;
 
-			const userSwitches = await redisClient.getUserSwitches(personalKey);
+			const userSwitches = await redisClient.getUserSwitches(personalKeyId);
 
 			const sanitizedSwitches = userSwitches.map(switchData =>
 				sanitizePrivateSwitchData(switchData)
@@ -1033,17 +1032,17 @@ router.post('/switch/:uid/comment',
 	async (req, res) => {
 		try {
 			const { uid } = req.params;
-			const actor = abbreviateKey(req.apiKeyUsed || req.personalKey);
+			const actor = abbreviateActor(req.apiKeyId || req.personalKeyId);
 			const timestamp = Date.now();
 			const commentEvent = {
 				uid,
 				comment: req.validatedData.comment,
 				actor,
-				viaApiKey: Boolean(req.apiKeyUsed),
+				viaApiKey: Boolean(req.apiKeyId),
 				timestamp
 			};
 
-			await redisClient.recordUserInteraction(uid, req.personalKey);
+			await redisClient.recordUserInteraction(uid, req.personalKeyId);
 			await redisClient.addComment(uid, commentEvent);
 
 			res.json({
@@ -1065,7 +1064,7 @@ router.get('/api-keys',
 	authManager.requireAuth(),
 	async (req, res) => {
 		try {
-			const keys = await redisClient.listApiKeys(req.personalKey);
+			const keys = await redisClient.listApiKeys(req.personalKeyId);
 			res.json({ success: true, data: keys });
 		} catch (error) {
 			logger.error('Error listing API keys:', error);
@@ -1080,7 +1079,7 @@ router.post('/api-keys',
 	async (req, res) => {
 		try {
 			const name = req.body.name || '';
-			const keyData = await redisClient.createApiKey(req.personalKey, name);
+			const keyData = await redisClient.createApiKey(req.personalKeyId, name);
 			res.json({ success: true, data: keyData });
 		} catch (error) {
 			logger.error('Error creating API key:', error);
@@ -1096,7 +1095,7 @@ router.post('/profile/link',
 	async (req, res) => {
 		try {
 			const { profileUrl } = req.validatedData;
-			await redisClient.setProfileUrl(req.personalKey, profileUrl);
+			await redisClient.setProfileUrl(req.personalKeyId, profileUrl);
 			res.json({ success: true, data: { profileUrl } });
 		} catch (error) {
 			logger.error('Error saving profile link:', error);
@@ -1110,7 +1109,7 @@ router.delete('/api-keys/:apiKey',
 	async (req, res) => {
 		try {
 			const { apiKey } = req.params;
-			const revoked = await redisClient.revokeApiKey(req.personalKey, apiKey);
+			const revoked = await redisClient.revokeApiKey(req.personalKeyId, apiKey);
 			if (!revoked) {
 				return res.status(404).json({ success: false, error: 'API key not found' });
 			}
@@ -1127,7 +1126,7 @@ router.post('/session-token',
 	authManager.requireAuth(),
 	async (req, res) => {
 		try {
-			const tokenData = await redisClient.createSessionToken(req.personalKey, 300);
+			const tokenData = await redisClient.createSessionToken(req.personalKeyId, 300);
 			res.json({ success: true, data: tokenData });
 		} catch (error) {
 			logger.error('Error creating session token:', error);
@@ -1151,13 +1150,13 @@ router.post('/session-token/redeem',
 			}
 
 			// Issue a short-lived API key tied to the personal key
-			const apiKeyData = await redisClient.createApiKey(tokenData.personalKey, 'web-session');
+			const apiKeyData = await redisClient.createApiKey(tokenData.personalKeyId, 'web-session');
 
 			res.json({
 				success: true,
 				data: {
-					personalKey: tokenData.personalKey,
 					apiKey: apiKeyData.apiKey,
+					apiKeyId: apiKeyData.apiKeyId,
 					expiresIn: '1 year' // aligns with existing keys; adjust if needed
 				}
 			});
@@ -1176,13 +1175,13 @@ router.delete('/switch/:uid',
 	async (req, res) => {
 		try {
 			const { uid } = req.params;
-			const { personalKey } = req;
+			const { personalKeyId } = req;
 
 			// Remove from Redis
 			await redisClient.client.del(`switch:${uid}`);
 			await redisClient.client.del(`switch:${uid}:users`);
 			await redisClient.client.del(`switch:${uid}:events`);
-			await redisClient.client.sRem(`user:${personalKey}`, uid);
+			await redisClient.client.sRem(`user:${personalKeyId}:switches`, uid);
 			await redisClient.client.sRem('public_switches', uid);
 
 			logger.info(`Deleted switch ${uid}`);
@@ -1224,7 +1223,7 @@ router.post('/delete-key',
 			// Delete all data
 			const deletedSwitchCount = await redisClient.deletePersonalKey(personalKey);
 
-			logger.info(`Deleted personal key ${personalKey.substring(0, 8)}... and ${deletedSwitchCount} switches`);
+			logger.info(`Deleted personal key and ${deletedSwitchCount} switches`);
 
 			res.json({
 				success: true,

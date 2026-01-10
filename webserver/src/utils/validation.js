@@ -142,8 +142,16 @@ const schemas = {
 		ts: Joi.number().integer().min(0).required(),
 		nonce: Joi.string().min(8).max(128).required(),
 		sigOwner: Joi.string().max(200).required(),
-		apiKey: Joi.string().uuid().required()
-	}),
+		// Prefer keyId (hashed ID) to avoid ever needing to send/store plaintext keys for management.
+		keyId: Joi.string().hex().length(64),
+		// Backwards-compatible (older clients revoke by plaintext apiKey).
+		apiKey: Joi.string().uuid()
+	}).custom((value, helpers) => {
+		if (!value || (!value.apiKey && !value.keyId)) {
+			return helpers.message('apiKey or keyId is required');
+		}
+		return value;
+	}, 'V2 revoke access key validation'),
 
 	// V2: Update switch metadata via delegated access key (no signatures)
 	// Intentionally excludes "publicize" to avoid bypassing CAPTCHA requirements.

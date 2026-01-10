@@ -40,7 +40,7 @@ class AuthManager {
 		}
 	}
 
-	async authenticateSwitch(uid, personalKey) {
+	async authenticateSwitch(uid, personalKeyId) {
 		try {
 			// Get switch data
 			const switchData = await redisClient.getSwitchState(uid);
@@ -49,8 +49,20 @@ class AuthManager {
 				return { success: false, error: 'Switch not found' };
 			}
 
-			// Check if personal key matches
-			if (switchData.personalKey !== personalKey) {
+			// Resolve/migrate legacy v1 switch owner key (plaintext -> hashed id)
+			let ownerKeyId = switchData.ownerKeyId;
+			if (!ownerKeyId && switchData.personalKey) {
+				ownerKeyId = redisClient.getPersonalKeyId(switchData.personalKey);
+				try {
+					await redisClient.client.hSet(`switch:${uid}`, 'ownerKeyId', ownerKeyId);
+					await redisClient.client.hDel(`switch:${uid}`, 'personalKey');
+				} catch (_err) { /* ignore */ }
+				switchData.ownerKeyId = ownerKeyId;
+				delete switchData.personalKey;
+			}
+
+			// Check if caller key matches (we only compare hashed ids)
+			if (!ownerKeyId || ownerKeyId !== personalKeyId) {
 				return { success: false, error: 'Unauthorized: Invalid personal key for this switch' };
 			}
 
@@ -127,7 +139,7 @@ class AuthManager {
 				});
 			}
 
-			req.personalKey = personalKey;
+			req.personalKeyId = redisClient.getPersonalKeyId(personalKey);
 			next();
 		};
 	}
@@ -137,21 +149,22 @@ class AuthManager {
 		return async (req, res, next) => {
 			const { uid } = req.params;
 			const apiKey = req.body.apiKey || req.headers['x-api-key'] || req.query.apiKey;
-			let personalKey = req.body.personalKey || req.headers['x-personal-key'] || req.query.personalKey;
+			const personalKey = req.body.personalKey || req.headers['x-personal-key'] || req.query.personalKey;
+			let personalKeyId = personalKey ? redisClient.getPersonalKeyId(personalKey) : null;
 
 			// If apiKey provided, resolve to personalKey
-			if (!personalKey && apiKey) {
-				personalKey = await redisClient.resolvePersonalKeyFromApiKey(apiKey);
+			if (!personalKeyId && apiKey) {
+				personalKeyId = await redisClient.resolvePersonalKeyFromApiKey(apiKey);
 			}
 
-			if (!personalKey) {
+			if (!personalKeyId) {
 				return res.status(401).json({
 					success: false,
 					error: 'Personal key or API key required'
 				});
 			}
 
-			const authResult = await this.authenticateSwitch(uid, personalKey);
+			const authResult = await this.authenticateSwitch(uid, personalKeyId);
 
 			if (!authResult.success) {
 				return res.status(401).json({
@@ -160,8 +173,8 @@ class AuthManager {
 				});
 			}
 
-			req.personalKey = personalKey;
-			req.apiKeyUsed = apiKey || null;
+			req.personalKeyId = personalKeyId;
+			req.apiKeyId = apiKey ? redisClient.getApiKeyId(apiKey) : null;
 			req.switchData = authResult.switchData;
 			next();
 		};
@@ -206,7 +219,7 @@ class AuthManager {
 					return res.status(401).json({ success: false, error: 'Unauthorized: API key is not valid for this switch' });
 				}
 
-				req.apiKeyUsed = apiKey;
+				req.apiKeyId = keyData.apiKeyId || redisClient.getApiKeyId(apiKey);
 				req.v2AccessKey = keyData;
 				req.switchData = switchData;
 				next();

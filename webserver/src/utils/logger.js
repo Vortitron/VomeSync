@@ -2,10 +2,20 @@ const winston = require('winston');
 const fs = require('fs');
 const path = require('path');
 const config = require('../config/config');
+const redact = require('./redact');
+
+const redactFormat = winston.format((info) => {
+	try {
+		return redact(info);
+	} catch (_err) {
+		return info;
+	}
+});
 
 const logger = winston.createLogger({
 	level: config.logging.level,
 	format: winston.format.combine(
+		redactFormat(),
 		winston.format.timestamp(),
 		winston.format.errors({ stack: true }),
 		winston.format.json()
@@ -14,6 +24,7 @@ const logger = winston.createLogger({
 	transports: [
 		new winston.transports.Console({
 			format: winston.format.combine(
+				redactFormat(),
 				winston.format.colorize(),
 				winston.format.simple()
 			)

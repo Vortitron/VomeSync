@@ -7,6 +7,7 @@ This document is a practical checklist/runbook for operating VomeSync safely, es
 ### Security essentials
 - **Secrets set**:
 	- `JWT_SECRET`: long, random, unique per environment (beta/prod).
+	- `KEY_HASH_SECRET` (optional): dedicated secret for hashing bearer keys before storing in Redis (defaults to `JWT_SECRET`).
 	- `REDIS_PASSWORD`: long, random, unique per environment; **never** expose Redis publicly.
 - **TLS**:
 	- Use HTTPS/WSS externally (reverse proxy recommended).
@@ -17,7 +18,8 @@ This document is a practical checklist/runbook for operating VomeSync safely, es
 	- If you want to reduce abuse, set `HCAPTCHA_SECRET`/`HCAPTCHA_SITEKEY` (and optionally `HCAPTCHA_BYPASS_TOKEN` for staging).
 - **Key handling**:
 	- Treat **personal keys** and **(v2) access keys** as **bearer secrets**. Anyone with the key can act as that user/key.
-	- Ensure logs never print full keys (only prefixes).
+	- The server stores only **hashed key IDs** in Redis (no plaintext bearer keys). For legacy data, keys are migrated on first use; consider a one-time cleanup window if you had pre-existing plaintext keys.
+	- Ensure logs never print full keys (redaction is enabled in the webserver logger as defence-in-depth).
 
 ### Network exposure
 - **Expose only what you need**:

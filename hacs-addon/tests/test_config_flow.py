@@ -391,7 +391,7 @@ async def test_options_flow_list_access_keys_v2(hass, config_entry):
 	}
 	mock_coordinator = MagicMock()
 	mock_coordinator.list_v2_access_keys = AsyncMock(return_value={
-		"keys": [{"apiKey": "key-123", "name": "Friend", "permissions": ["toggle"]}],
+		"keys": [{"keyId": "a" * 64, "name": "Friend", "permissions": ["toggle"]}],
 		"count": 1
 	})
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
@@ -406,7 +406,7 @@ async def test_options_flow_list_access_keys_v2(hass, config_entry):
 	result = await flow.async_step_list_access_keys_v2(None)
 	assert result["type"] == FlowResultType.FORM
 	assert result["step_id"] == "list_access_keys_v2"
-	assert "key-123" in result["description_placeholders"]["info"]
+	assert "aaaaaaaa..." in result["description_placeholders"]["info"]
 
 
 @pytest.mark.asyncio
@@ -419,7 +419,7 @@ async def test_options_flow_revoke_access_key_v2(hass, config_entry):
 	}
 	mock_coordinator = MagicMock()
 	mock_coordinator.list_v2_access_keys = AsyncMock(return_value={
-		"keys": [{"apiKey": "key-123", "name": "Friend", "permissions": ["toggle"]}],
+		"keys": [{"keyId": "a" * 64, "name": "Friend", "permissions": ["toggle"]}],
 		"count": 1
 	})
 	mock_coordinator.revoke_v2_access_key = AsyncMock(return_value=True)
@@ -432,10 +432,10 @@ async def test_options_flow_revoke_access_key_v2(hass, config_entry):
 		"is_owner": True,
 	}
 
-	result = await flow.async_step_revoke_access_key_v2({"api_key": "key-123"})
+	result = await flow.async_step_revoke_access_key_v2({"api_key": "a" * 64})
 	assert result["type"] == FlowResultType.FORM
 	assert result["step_id"] == "revoke_access_key_v2_success"
-	mock_coordinator.revoke_v2_access_key.assert_called_once_with("vs_test_uid", "key-123")
+	mock_coordinator.revoke_v2_access_key.assert_called_once_with("vs_test_uid", "a" * 64)
 
 
 @pytest.mark.asyncio

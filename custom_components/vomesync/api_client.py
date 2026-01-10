@@ -285,16 +285,23 @@ class VomeSyncAPIClient:
 		endpoint = API_V2_ACCESS_KEYS_LIST.format(uid=uid)
 		return await self._make_request("POST", endpoint, req, require_auth=False)
 
-	async def revoke_v2_access_key(self, uid: str, api_key: str) -> bool:
+	async def revoke_v2_access_key(self, uid: str, api_key_or_id: str) -> bool:
 		"""Revoke a delegated v2 access key (signed by owner key)."""
 		if not self.crypto_enabled:
 			raise VomeSyncAPIError("Crypto mode is not enabled for this client")
 		if not isinstance(uid, str) or not uid:
 			raise VomeSyncAPIError("UID required")
-		if not isinstance(api_key, str) or not api_key:
-			raise VomeSyncAPIError("API key required")
+		if not isinstance(api_key_or_id, str) or not api_key_or_id:
+			raise VomeSyncAPIError("Access key ID required")
 		
-		req = build_v2_revoke_access_key_request(self.crypto_seed, uid=uid, api_key=api_key)
+		key_id = None
+		api_key = None
+		if len(api_key_or_id) == 64 and all(c in "0123456789abcdefABCDEF" for c in api_key_or_id):
+			key_id = api_key_or_id
+		else:
+			api_key = api_key_or_id
+
+		req = build_v2_revoke_access_key_request(self.crypto_seed, uid=uid, api_key=api_key, key_id=key_id)
 		endpoint = API_V2_ACCESS_KEYS_REVOKE.format(uid=uid)
 		await self._make_request("POST", endpoint, req, require_auth=False)
 		return True

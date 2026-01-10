@@ -1044,10 +1044,11 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		keys = resp.get("keys", []) if isinstance(resp, dict) else []
 		lines = []
 		for k in keys:
-			api_key = k.get("apiKey", "")
+			key_id = k.get("keyId", "")
 			label = k.get("name", "") or "Unnamed"
 			perms = ", ".join(k.get("permissions", []) or [])
-			lines.append(f"- {label}: {api_key} ({perms})")
+			hint = f"{str(key_id)[:8]}..." if key_id else "unknown"
+			lines.append(f"- {label}: {hint} ({perms})")
 		info = "\n".join(lines) if lines else "No access keys found for this switch."
 
 		return self.async_show_form(
@@ -1077,9 +1078,9 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			return self.async_abort(reason="no_access_keys")
 
 		key_options = {
-			k.get("apiKey"): f"{(k.get('name') or 'Unnamed')} ({str(k.get('apiKey'))[:8]}...)"
+			k.get("keyId"): f"{(k.get('name') or 'Unnamed')} ({str(k.get('keyId'))[:8]}...)"
 			for k in keys
-			if k.get("apiKey")
+			if k.get("keyId")
 		}
 
 		if user_input is not None:

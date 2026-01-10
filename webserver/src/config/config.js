@@ -22,6 +22,9 @@ const config = {
 	},
 	security: {
 		jwtSecret: process.env.JWT_SECRET || 'dev-secret-change-in-production',
+		// Used to derive stable, non-reversible IDs for bearer secrets stored in Redis.
+		// Defaults to JWT_SECRET so existing deployments don't require extra config.
+		keyHashSecret: process.env.KEY_HASH_SECRET || process.env.JWT_SECRET || 'dev-secret-change-in-production',
 		rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 900000, // 15 minutes
 		rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS, 10) || 100
 	},

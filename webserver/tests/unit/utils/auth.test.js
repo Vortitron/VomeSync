@@ -122,7 +122,7 @@ describe('AuthManager', () => {
 				switchData
 			);
 
-			const authResult = await AuthManager.authenticateSwitch(switchResult.uid, personalKey);
+			const authResult = await AuthManager.authenticateSwitch(switchResult.uid, redisClient.getPersonalKeyId(personalKey));
 
 			expect(authResult.success).toBe(true);
 			expect(authResult.switchData).toBeDefined();
@@ -142,7 +142,7 @@ describe('AuthManager', () => {
 			);
 
 			// Try to authenticate with different key
-			const authResult = await AuthManager.authenticateSwitch(switchResult.uid, otherKey);
+			const authResult = await AuthManager.authenticateSwitch(switchResult.uid, redisClient.getPersonalKeyId(otherKey));
 
 			expect(authResult.success).toBe(false);
 			expect(authResult.error).toContain('Unauthorized');
@@ -152,7 +152,7 @@ describe('AuthManager', () => {
 			const personalKey = global.testUtils.createTestPersonalKey();
 			const nonExistentUID = global.testUtils.generateTestUUID();
 
-			const authResult = await AuthManager.authenticateSwitch(nonExistentUID, personalKey);
+			const authResult = await AuthManager.authenticateSwitch(nonExistentUID, redisClient.getPersonalKeyId(personalKey));
 
 			expect(authResult.success).toBe(false);
 			expect(authResult.error).toContain('Switch not found');

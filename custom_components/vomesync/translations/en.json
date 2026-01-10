@@ -135,7 +135,7 @@
 				"title": "Revoke access key",
 				"description": "Select an access key to revoke. This cannot be undone.",
 				"data": {
-					"api_key": "Access key"
+					"api_key": "Access key ID"
 				}
 			},
 			"revoke_access_key_v2_success": {

@@ -355,15 +355,20 @@ def build_v2_list_access_keys_request(
 def build_v2_revoke_access_key_request(
 	master_seed_b64url: str,
 	uid: str,
-	api_key: str,
+	api_key: Optional[str] = None,
+	key_id: Optional[str] = None,
 	ts: Optional[int] = None,
 	nonce: Optional[str] = None,
 ) -> Dict[str, Any]:
 	"""Build a signed v2 revoke_access_key request (signed by owner key)."""
 	if not isinstance(uid, str) or not uid:
 		raise ValueError("uid must be a non-empty string")
-	if not isinstance(api_key, str) or not api_key:
+	if api_key is None and key_id is None:
+		raise ValueError("api_key or key_id must be provided")
+	if api_key is not None and (not isinstance(api_key, str) or not api_key):
 		raise ValueError("api_key must be a non-empty string")
+	if key_id is not None and (not isinstance(key_id, str) or not key_id):
+		raise ValueError("key_id must be a non-empty string")
 
 	owner_pub = owner_pubkey_b64url(master_seed_b64url)
 	if ts is None:
@@ -373,6 +378,12 @@ def build_v2_revoke_access_key_request(
 		ts_i = int(ts)
 	nonce_s = nonce or new_nonce()
 
+	key_part: Dict[str, Any] = {}
+	if key_id is not None:
+		key_part["keyId"] = key_id
+	else:
+		key_part["apiKey"] = api_key
+
 	payload = {
 		"v": 2,
 		"action": "revoke_access_key",
@@ -380,18 +391,19 @@ def build_v2_revoke_access_key_request(
 		"ownerPubKey": owner_pub,
 		"ts": ts_i,
 		"nonce": nonce_s,
-		"apiKey": api_key,
+		**key_part,
 	}
 	canon = canonical_json(payload)
 	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
 
-	return {
+	req = {
 		"ownerPubKey": owner_pub,
 		"ts": ts_i,
 		"nonce": nonce_s,
 		"sigOwner": sig_owner,
-		"apiKey": api_key,
+		**key_part,
 	}
+	return req
 
 
 def build_v2_my_switches_request(master_seed_b64url: str, ts: Optional[int] = None, nonce: Optional[str] = None) -> Dict[str, Any]:

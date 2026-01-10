@@ -653,8 +653,8 @@ describe('API Integration Tests', () => {
 
 		test('should list and revoke v2 access keys', async () => {
 			const keysBefore = await listV2AccessKeys(app, publicUid, owner, ownerPubKeyB64);
-			const apiKeysBefore = keysBefore.map((k) => k.apiKey);
-			expect(apiKeysBefore).toContain(accessKey);
+			const keyIdsBefore = keysBefore.map((k) => k.keyId);
+			expect(keyIdsBefore).toContain(redisClient.getApiKeyId(accessKey));
 
 			await revokeV2AccessKey(app, publicUid, owner, ownerPubKeyB64, accessKey);
 

@@ -45,7 +45,8 @@ describe('Redis Client', () => {
 				const result = await redisClient.createSwitch(uid, personalKey, switchConfig);
 
 				expect(result.uid).toBe(uid);
-				expect(result.personalKey).toBe(personalKey);
+				expect(result.personalKey).toBeUndefined();
+				expect(result.ownerKeyId).toBe(redisClient.getPersonalKeyId(personalKey));
 				expect(result.state).toBe('off');
 				expect(result.description).toBe(switchConfig.description);
 				expect(result.location).toBe(switchConfig.location);
@@ -275,7 +276,7 @@ describe('Redis Client', () => {
 
 				const result = await redisClient.storePersonalKey(personalKey);
 
-				expect(result.key).toBe(personalKey);
+				expect(result.personalKeyId).toBe(redisClient.getPersonalKeyId(personalKey));
 				expect(result.createdAt).toBeDefined();
 				expect(result.lastUsed).toBeDefined();
 			});
@@ -285,7 +286,8 @@ describe('Redis Client', () => {
 
 				await redisClient.storePersonalKey(personalKey);
 
-				const ttl = await redisClient.client.ttl(`key:${personalKey}`);
+				const personalKeyId = redisClient.getPersonalKeyId(personalKey);
+				const ttl = await redisClient.client.ttl(`pkey_h:${personalKeyId}`);
 				expect(ttl).toBeGreaterThan(0);
 				expect(ttl).toBeLessThanOrEqual(365 * 24 * 60 * 60); // 1 year
 			});
@@ -316,7 +318,8 @@ describe('Redis Client', () => {
 
 				await redisClient.validatePersonalKey(personalKey);
 
-				const keyData = await redisClient.client.hGetAll(`key:${personalKey}`);
+				const personalKeyId = redisClient.getPersonalKeyId(personalKey);
+				const keyData = await redisClient.client.hGetAll(`pkey_h:${personalKeyId}`);
 				expect(parseInt(keyData.lastUsed)).toBeGreaterThan(parseInt(keyData.createdAt));
 			});
 		});
@@ -333,7 +336,8 @@ describe('Redis Client', () => {
 
 				expect(deletedCount).toBe(1);
 
-				const keyExists = await redisClient.client.exists(`key:${personalKey}`);
+				const personalKeyId = redisClient.getPersonalKeyId(personalKey);
+				const keyExists = await redisClient.client.exists(`pkey_h:${personalKeyId}`);
 				const switchExists = await redisClient.client.exists(`switch:${uid}`);
 
 				expect(keyExists).toBe(0);
