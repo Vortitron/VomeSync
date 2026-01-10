@@ -11,6 +11,7 @@ This guide covers setting up VomeSync for development and production deployment.
 5. [SSL/HTTPS Setup](#sslhttps-setup)
 6. [Monitoring](#monitoring)
 7. [Troubleshooting](#troubleshooting)
+8. [Operations (pre-beta + backups)](OPERATIONS.md)
 
 ## Development Setup
 
@@ -77,18 +78,18 @@ This guide covers setting up VomeSync for development and production deployment.
 
 ### Using Docker for Development
 
-1. **Use development docker-compose:**
+1. **Use development Docker Compose:**
    ```bash
    cd docker
    cp env.example .env
    # Edit .env for development settings
-   docker-compose up -d
+   docker compose up -d
    ```
 
 2. **Development with hot reload:**
    ```bash
    # Mount source code for hot reload
-   docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
    ```
 
 ## Production Deployment
@@ -156,8 +157,8 @@ VomeSync persists switch directory data in a Docker volume. If you accidentally 
        ServerName sync.vome.io
        
        ProxyPreserveHost On
-       ProxyPass /api/ http://localhost:3000/api/
-       ProxyPassReverse /api/ http://localhost:3000/api/
+       ProxyPass /api/ http://localhost:3090/api/
+       ProxyPassReverse /api/ http://localhost:3090/api/
        
        ProxyPass /ws ws://localhost:3001/ws
        ProxyPassReverse /ws ws://localhost:3001/ws
@@ -336,6 +337,7 @@ vomesync_key: "your-personal-key-uuid"
 
 3. **Update configuration:**
    ```env
+   ENABLE_SSL=true
    SSL_CERT_PATH=/etc/letsencrypt/live/sync.vome.io/fullchain.pem
    SSL_KEY_PATH=/etc/letsencrypt/live/sync.vome.io/privkey.pem
    ```
@@ -361,6 +363,7 @@ vomesync_key: "your-personal-key-uuid"
 
 3. **Update configuration:**
    ```env
+   ENABLE_SSL=true
    SSL_CERT_PATH=/path/to/certificate.pem
    SSL_KEY_PATH=/path/to/private.key
    ```
@@ -390,7 +393,7 @@ vomesync_key: "your-personal-key-uuid"
 1. **Application logs:**
    ```bash
    # Docker
-   docker-compose logs -f vomesync-webserver
+   docker compose logs -f vomesync-webserver
    
    # Systemd
    journalctl -u vomesync -f
@@ -430,8 +433,8 @@ vomesync_key: "your-personal-key-uuid"
 
 1. **Port already in use:**
    ```bash
-   sudo netstat -tulpn | grep :3000
-   sudo kill -9 <PID>
+   # Check the port you configured (e.g. 3090 for API, 3001 for WS)
+   netstat -tulpn | grep :3090
    ```
 
 2. **Redis connection failed:**

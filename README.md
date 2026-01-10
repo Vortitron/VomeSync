@@ -79,16 +79,15 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - `POST /api/v2/switch/{UID}/comment`: Posts a comment using a delegated access key (no signatures).
   - `GET /status/{UID}`: Returns current switch state (publicly accessible).
   - `WSS /ws?uid={uid}`: WebSocket for real-time state updates to subscribed clients.
-- **Privacy**:
-  - Stores only encrypted personal keys and anonymized switch data (no IPs beyond logs).
-  - Public mode uses differential privacy for aggregated analytics (e.g., trigger counts).
-  - GDPR-compliant: Opt-in consent, data deletion via key.
+- **Privacy & security notes**:
+  - Personal keys and API keys are **bearer secrets** and are stored in Redis; treat Redis as sensitive (private network + strong password).
+  - Public mode stores **user-provided metadata** (description/location/category/link). Do not include personal data.
+  - GDPR: opt-in consent, data deletion via key.
 
 ### 2. Website (sync.vome.io)
 - **Purpose**: Public directory for discovering switches with the "publicize" flag.
 - **Tech Stack**:
-  - WordPress (free theme) hosted on the dedicated server.
-  - Optional Redis caching for performance.
+  - Static site (vanilla HTML/CSS/JavaScript) served via Nginx.
 - **Features**:
   - Lists switches (UID, description, city-level location, category) for users to browse/copy UIDs.
   - Optional theming: per-switch `iconUrl` + `bannerUrl` shown on switch pages (and `https://sync.vome.io/switch/<uid>` deep links).
@@ -104,6 +103,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - Real-time updates via WebSocket (`/ws?uid=<uid>`)
   - Optional entity linking (turn local entities on/off when VomeSync changes)
   - v2 switch management: edit metadata including `iconUrl`/`bannerUrl` for nicer public pages
+  - Manage on website: generates a single-use, fragment-based URL for editing `link`/`iconUrl`/`bannerUrl` on the website (auto-revokes after first successful save)
   - v2 delegation: create/list/revoke per-switch access keys (scoped permissions like toggle/comment)
 
 ## Installation
@@ -165,9 +165,10 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
 - **Auth Modes**:
   - **Keypair (v2)**: Ed25519 signing key stays local to Home Assistant; server only sees public keys and signatures.
   - **Personal keys (v1)** still exist on the server for non-HA clients, but the HA integration uses keypair authentication.
-- **Public Mode**: Anonymized data (city-level location, no IPs). Differential privacy for analytics.
+- **Public Mode**: Treat as global/public; only store user-provided metadata (description/location/category/link) and activity events; do not include personal data.
 - **Warnings**: Add-on UI clearly states: "Public mode is NOT private—use for non-sensitive events only."
 - **GDPR**: Consent via checkbox, data deletion via API (POST /delete-key).
+- **Ops runbook**: See `docs/OPERATIONS.md` for the pre-beta checklist, backups, restore drills, and incident response.
 
 ## Future Plans
 - **Private Mode**: Secure instance-to-instance syncing via encrypted tunnels (e.g., WireGuard VPN), aligning with multi-property VPN hosting vision.
@@ -311,44 +312,8 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
    - Discussions for questions and ideas
    - Community support via r/homeassistant
 
-## Local Test Home Assistant (fin)
-- **HA VM**: `192.168.122.9:8123` (virsh domain: `haos`)
-- **Console**: `sudo virsh console haos`
-- **Sync Integration**: `rsync -a --exclude='__pycache__' custom_components/vomesync/ /var/www/ha-shared-components/vomesync/`
-- **Server URL**: Use server IP `http://95.216.77.237:3000` (HA VM cannot resolve "fin" hostname)
-- **WebSocket URL**: Automatically derived from server URL (appends `/ws`, converts http→ws, https→wss)
-- **Restart HA**: `./test-ha-integration.sh restart` or via virsh console with `ha core restart`
-
-### Automated Testing
-
-**Backend API Test** (`./test-backend.sh`):
-```bash
-./test-backend.sh [server_url]  # Tests create-switch, toggle, status
-```
-✓ Verifies webserver functionality end-to-end  
-✓ Fixed Redis serialization issues (boolean/number handling)  
-✓ All backend tests passing
-
-**HA Integration Test** (`./test-ha-integration.sh`):
-```bash
-./test-ha-integration.sh test      # Run full integration test
-./test-ha-integration.sh restart   # Restart Home Assistant
-./test-ha-integration.sh states    # Show VomeSync entity states
-```
-✓ Checks HA connectivity and VomeSync config entry  
-✓ Displays current switch entities  
-⚠ Switch creation requires manual UI testing (options flow)
-
-### Manual HA Testing
-
-1. Sync: `rsync -a --exclude='__pycache__' custom_components/vomesync/ /var/www/ha-shared-components/vomesync/`
-2. Restart: `./test-ha-integration.sh restart`
-3. HA UI: Settings → Devices & Services → VomeSync → ⚙️ (cog) → Create/Subscribe Switch
-
-**Config Flow Notes**:
-- Personal Key field can be left blank (generates new key with consent)
-- Consent checkbox covers key generation/storage (GDPR-compliant, removable via delete-key)
-- WebSocket URL auto-derives from Server URL (leave blank for default)
+## Developer notes
+See `docs/DEV_NOTES.md` for local Home Assistant testing notes and helper scripts.
 
 ### Website directory (sync.vome.io)
 
