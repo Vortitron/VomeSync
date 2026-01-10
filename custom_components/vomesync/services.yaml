@@ -27,6 +27,7 @@ create_switch:
       default: "Other"
       selector:
         select:
+          mode: dropdown
           options:
             - "Community"
             - "Personal"

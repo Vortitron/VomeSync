@@ -614,6 +614,24 @@ describe('API Integration Tests', () => {
 			expect(response.body.data.link).toBe('https://example.com');
 		});
 
+		test('manage-on-website keys should be single-use', async () => {
+			const websiteKey = await createV2AccessKey(app, publicUid, owner, ownerPubKeyB64, ['metadata'], 'website_once:test');
+
+			// First use should succeed
+			await request(app)
+				.post(`/api/v2/switch/${publicUid}/metadata`)
+				.set('X-Api-Key', websiteKey)
+				.send({ iconUrl: 'https://example.com/icon.png' })
+				.expect(200);
+
+			// Second use should be rejected (revoked after first save)
+			await request(app)
+				.post(`/api/v2/switch/${publicUid}/metadata`)
+				.set('X-Api-Key', websiteKey)
+				.send({ iconUrl: 'https://example.com/icon2.png' })
+				.expect(401);
+		});
+
 		test('toggle should record user count and timeline', async () => {
 			const toggleResponse = await request(app)
 				.post(`/api/v2/switch/${publicUid}/toggle`)

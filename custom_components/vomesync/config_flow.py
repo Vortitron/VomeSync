@@ -185,6 +185,55 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			return raw
 		return default
 
+	def _crypto_enabled(self) -> bool:
+		"""Whether this entry is configured for v2 crypto auth."""
+		return bool(
+			self._config_entry.data.get(CONF_AUTH_MODE) == AUTH_MODE_CRYPTO
+			and self._config_entry.data.get(CONF_CRYPTO_SEED)
+		)
+
+	def _build_manage_switch_actions(self, uid: str, is_owner: bool) -> list[str]:
+		actions = ["view_switch", "link_entities"]
+		if is_owner:
+			actions.append("edit_switch")
+			# v2-only delegation (access keys + website management)
+			if self._crypto_enabled() and isinstance(uid, str) and uid.startswith("vs_"):
+				actions.append("access_keys")
+				actions.append("manage_on_website")
+			actions.append("delete_switch")
+		# Everyone can remove from this installation
+		actions.append("remove_from_installation")
+		return actions
+
+	def _resolve_entity_id_for_uid(self, uid: str) -> Optional[str]:
+		"""Best-effort entity_id lookup for UI context (non-fatal)."""
+		try:
+			entity_reg = er.async_get(self.hass)
+			entity_id = entity_reg.async_get_entity_id("switch", DOMAIN, f"vomesync_{uid}")
+			if entity_id:
+				return entity_id
+			for entity in entity_reg.entities.values():
+				if entity.config_entry_id == self._config_entry.entry_id and entity.unique_id == f"vomesync_{uid}":
+					return entity.entity_id
+			return None
+		except Exception as ex:  # noqa: BLE001
+			_LOGGER.debug("Failed to resolve entity_id for %s: %s", uid, ex)
+			return None
+
+	def _show_manage_switch_action_menu(self, uid: str, name: str, is_owner: bool) -> FlowResult:
+		actions = self._build_manage_switch_actions(uid, is_owner)
+		entity_id = self._resolve_entity_id_for_uid(uid)
+		uid_hint = uid[-6:] if isinstance(uid, str) and len(uid) >= 6 else uid
+		return self.async_show_menu(
+			step_id="manage_switch_action",
+			menu_options=actions,
+			description_placeholders={
+				"name": name,
+				"uid_hint": uid_hint,
+				"entity_id": entity_id or "Not created yet",
+			},
+		)
+
 	async def async_step_init(
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:
@@ -360,7 +409,12 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			vol.Required(CONF_SWITCH_NAME): str,
 			vol.Optional(CONF_SWITCH_DESCRIPTION, default=""): str,
 			vol.Optional(CONF_SWITCH_LOCATION, default=""): str,
-			vol.Optional(CONF_SWITCH_CATEGORY, default="Other"): vol.In(SWITCH_CATEGORIES),
+			vol.Optional(CONF_SWITCH_CATEGORY, default="Other"): selector({
+				"select": {
+					"options": SWITCH_CATEGORIES,
+					"mode": "dropdown",
+				}
+			}),
 			vol.Optional(CONF_SWITCH_PUBLICIZE, default=False): bool,
 			vol.Optional(CONF_SWITCH_LINK, default=""): str,
 			vol.Optional(CONF_SWITCH_ICON_URL, default=""): str,
@@ -456,49 +510,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			self._step_data["selected_uid"] = selected_uid
 			self._step_data["selected_name"] = selected_name
 			self._step_data["is_owner"] = is_owner
-			
-			# Determine available actions
-			actions = ["view_switch", "link_entities"]
-			
-			# Only owners can edit or delete
-			if is_owner:
-				actions.append("edit_switch")
-				# v2-only delegation (access keys)
-				is_crypto = bool(
-					self._config_entry.data.get(CONF_AUTH_MODE) == AUTH_MODE_CRYPTO
-					and self._config_entry.data.get(CONF_CRYPTO_SEED)
-				)
-				if is_crypto and isinstance(selected_uid, str) and selected_uid.startswith("vs_"):
-					actions.append("access_keys")
-					actions.append("manage_on_website")
-				actions.append("delete_switch")
-			
-			# Everyone can remove from this installation
-			actions.append("remove_from_installation")
-			
-			# Best-effort entity_id lookup for UI context
-			entity_id = None
-			try:
-				entity_reg = er.async_get(self.hass)
-				entity_id = entity_reg.async_get_entity_id("switch", DOMAIN, f"vomesync_{selected_uid}")
-				if not entity_id:
-					for entity in entity_reg.entities.values():
-						if entity.config_entry_id == self._config_entry.entry_id and entity.unique_id == f"vomesync_{selected_uid}":
-							entity_id = entity.entity_id
-							break
-			except Exception as ex:  # noqa: BLE001
-				_LOGGER.debug("Failed to resolve entity_id for %s: %s", selected_uid, ex)
-			
-			uid_hint = selected_uid[-6:]
-			return self.async_show_menu(
-				step_id="manage_switch_action",
-				menu_options=actions,
-				description_placeholders={
-					"name": selected_name,
-					"uid_hint": uid_hint,
-					"entity_id": entity_id or "Not created yet",
-				},
-			)
+			return self._show_manage_switch_action_menu(selected_uid, selected_name, is_owner)
 		
 		return self.async_show_form(
 			step_id="manage_switches",
@@ -801,37 +813,44 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		):
 			return self.async_abort(reason="crypto_required")
 
-		# On submit, just return without changing options
+		# On submit, best-effort revoke the key (if unused) and return to the switch action menu
 		if user_input is not None:
-			return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+			try:
+				api_key = self._step_data.pop("manage_on_website_key", None)
+				if api_key:
+					coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+					await coordinator.revoke_v2_access_key(selected_uid, api_key)
+			except Exception as ex:  # noqa: BLE001
+				_LOGGER.debug("Manage-on-website key revoke skipped (non-fatal): %s", ex)
+			return self._show_manage_switch_action_menu(selected_uid, selected_name, is_owner)
 
 		coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
 		server_url = (self._config_entry.data.get(CONF_SERVER_URL, "") or "").rstrip("/")
 
 		created = await coordinator.create_v2_access_key(
 			selected_uid,
-			name=f"website:{selected_name}" if selected_name else "website",
+			# Single-use key: consumed by the website on first successful save.
+			name=f"website_once:{selected_name}" if selected_name else "website_once",
 			permissions=["metadata"],
 		)
 		api_key = created.get("apiKey", "") if isinstance(created, dict) else ""
+		self._step_data["manage_on_website_key"] = api_key
 		website_url = f"{server_url}/switch/{selected_uid}" if server_url else ""
 		management_url = f"{website_url}#accessKey={api_key}" if (website_url and api_key) else website_url
 
+		link_md = f"[Open website management page]({management_url})" if management_url else ""
 		info = (
-			"Open this link in your browser to manage the switch page appearance.\n\n"
+			f"{link_md}\n\n"
+			f"`{management_url}`\n\n"
 			"Tip: the key is stored in the URL fragment (#…), so it is not sent to the server in requests.\n\n"
-			"After you're done, revoke the access key from Home Assistant (Access keys → Revoke)."
+			"This link is **single-use**: after you save once, the key is automatically revoked.\n"
+			"If you need to edit again, generate a new link from Home Assistant.\n\n"
+			"Press **Submit** to return to the menu and revoke the key (if it hasn't already been used)."
 		)
-
-		schema_fields = {}
-		if management_url:
-			schema_fields[vol.Required("website_management_url", default=management_url)] = str
-		if api_key:
-			schema_fields[vol.Required("access_key", default=api_key)] = str
 
 		return self.async_show_form(
 			step_id="manage_on_website",
-			data_schema=vol.Schema(schema_fields),
+			data_schema=vol.Schema({}),
 			description_placeholders={"info": info}
 		)
 
@@ -902,7 +921,12 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		data_schema = vol.Schema({
 			vol.Optional("description", default=switch_config.get("description", "")): str,
 			vol.Optional("location", default=switch_config.get("location", "")): str,
-			vol.Optional("category", default=switch_config.get("category", "Other")): vol.In(SWITCH_CATEGORIES),
+			vol.Optional("category", default=switch_config.get("category", "Other")): selector({
+				"select": {
+					"options": SWITCH_CATEGORIES,
+					"mode": "dropdown",
+				}
+			}),
 			vol.Optional("publicize", default=switch_config.get("publicize", False)): bool,
 			vol.Optional(CONF_SWITCH_LINK, default=switch_config.get("link", "")): str,
 			vol.Optional(CONF_SWITCH_ICON_URL, default=switch_config.get("iconUrl", "")): str,

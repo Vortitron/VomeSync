@@ -157,6 +157,7 @@ function init() {
 }
 
 const MANAGEMENT_KEY_STORAGE_PREFIX = 'vomesync_manage_key:';
+let managementAutoscrollUid = null;
 
 function getStoredManagementKey(uid) {
 	if (!uid) return '';
@@ -191,6 +192,7 @@ function importManagementKeyFromHash() {
 	if (!uid) return;
 
 	setStoredManagementKey(uid, apiKey);
+	managementAutoscrollUid = uid;
 
 	// Clear the fragment to avoid leaving the key in the address bar/history.
 	try {
@@ -614,6 +616,22 @@ function updateManagePanel(detail) {
 	if (storedKey && manageKeyInput && !manageKeyInput.value) {
 		manageKeyInput.value = storedKey;
 	}
+
+	// If a management key was supplied via #accessKey=..., scroll to this panel once
+	if (managementAutoscrollUid && managementAutoscrollUid === detail.uid) {
+		managementAutoscrollUid = null;
+		if (manageStatus) {
+			manageStatus.textContent = 'Management key loaded — edit fields below and click “Save appearance”.';
+			manageStatus.className = 'comment-status success';
+		}
+		setTimeout(() => {
+			try {
+				managePanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+			} catch {
+				// ignore
+			}
+		}, 0);
+	}
 }
 
 async function submitManageAppearance() {
@@ -675,7 +693,13 @@ async function submitManageAppearance() {
 			renderSwitchDetail(data.data);
 		}
 
-		manageStatus.textContent = 'Saved.';
+		// Single-use keys (from HA "Manage on website") are revoked by the server after first save.
+		setStoredManagementKey(currentSwitchId, '');
+		if (manageKeyInput) {
+			manageKeyInput.value = '';
+		}
+
+		manageStatus.textContent = 'Saved. (This key is now invalid — generate a new link to edit again.)';
 		manageStatus.className = 'comment-status success';
 	} catch (error) {
 		console.error('Error saving appearance:', error);
