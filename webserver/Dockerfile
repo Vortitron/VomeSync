@@ -24,8 +24,8 @@ COPY src/ ./src/
 COPY config* ./
 RUN mkdir -p config
 
-# Create logs directory
-RUN mkdir -p logs && chown -R vomesync:nodejs logs
+# Create logs + media directories
+RUN mkdir -p logs media && chown -R vomesync:nodejs logs media
 
 # Switch to non-root user
 USER vomesync

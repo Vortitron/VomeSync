@@ -2,11 +2,13 @@ const express = require('express');
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
+const path = require('path');
 const cors = require('cors');
 const helmet = require('helmet');
 const config = require('./config/config');
 const logger = require('./utils/logger');
 const redisClient = require('./utils/redis');
+const media = require('./utils/media');
 const webSocketManager = require('./websocket/manager');
 const apiRoutes = require('./routes/api');
 
@@ -68,7 +70,7 @@ class VomeSyncServer {
 			origin: config.server.corsOrigins,
 			credentials: true,
 			methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-			allowedHeaders: ['Content-Type', 'Authorization', 'X-Personal-Key']
+			allowedHeaders: ['Content-Type', 'Authorization', 'X-Personal-Key', 'X-Api-Key']
 		}));
 
 		// Body parsing
@@ -94,6 +96,27 @@ class VomeSyncServer {
 	}
 
 	setupRoutes() {
+		// Locally hosted media (icons/banners) served via the API origin.
+		const mediaRoot = media.getMediaRootDir();
+		try {
+			fs.mkdirSync(mediaRoot, { recursive: true });
+		} catch (_err) {
+			// Non-fatal; endpoints will fail when attempting to store media.
+		}
+		this.app.use('/api/media', express.static(mediaRoot, {
+			fallthrough: true,
+			setHeaders: (res, filePath) => {
+				if (String(filePath).endsWith('.webp')) {
+					res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+				}
+				// Best-effort: serve correct content type for common extensions
+				const ext = path.extname(filePath).toLowerCase();
+				if (ext === '.webp') {
+					res.setHeader('Content-Type', 'image/webp');
+				}
+			}
+		}));
+
 		// API routes
 		this.app.use('/api', apiRoutes);
 

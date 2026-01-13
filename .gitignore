@@ -3,6 +3,7 @@ venv
 webserver/.env
 docker/.env
 .redisdata/
+webserver/media/
 custom_components/vomesync/__pycache__/
 hacs-addon/tests/__pycache__/
 __pycache__/

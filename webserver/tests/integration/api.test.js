@@ -18,6 +18,11 @@ const {
 	stableJsonStringify
 } = require('../../src/utils/crypto_v2');
 
+const ONE_BY_ONE_GIF = Buffer.from(
+	'R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=',
+	'base64'
+);
+
 async function createV2PublicSwitch(app, metaOverrides = {}, index = 0) {
 	const owner = global.testUtils.createEd25519Keypair();
 	const sw = global.testUtils.createEd25519Keypair();
@@ -161,8 +166,16 @@ async function revokeV2AccessKey(app, uid, owner, ownerPubKeyB64, apiKey) {
 
 describe('API Integration Tests', () => {
 	let app;
+	let originalFetch;
 
 	beforeAll(async () => {
+		originalFetch = global.fetch;
+		// Stub image downloads used by server-side image ingestion (icon/banner URL re-hosting).
+		global.fetch = jest.fn(async () => new Response(ONE_BY_ONE_GIF, {
+			status: 200,
+			headers: { 'content-type': 'image/gif' }
+		}));
+
 		// Create Express app for testing
 		app = express();
 
@@ -182,6 +195,9 @@ describe('API Integration Tests', () => {
 	afterAll(async () => {
 		if (redisClient.isConnected) {
 			await redisClient.disconnect();
+		}
+		if (originalFetch) {
+			global.fetch = originalFetch;
 		}
 	});
 
@@ -594,7 +610,7 @@ describe('API Integration Tests', () => {
 			await request(app)
 				.post(`/api/v2/switch/${publicUid}/metadata`)
 				.set('X-Api-Key', toggleOnlyKey)
-				.send({ iconUrl: 'https://example.com/icon.png' })
+				.send({ iconUrl: 'https://8.8.8.8/icon.png' })
 				.expect(403);
 
 			// Metadata key can update theming
@@ -602,15 +618,15 @@ describe('API Integration Tests', () => {
 				.post(`/api/v2/switch/${publicUid}/metadata`)
 				.set('X-Api-Key', metadataKey)
 				.send({
-					iconUrl: 'https://example.com/icon.png',
-					bannerUrl: 'https://example.com/banner.jpg',
+					iconUrl: 'https://8.8.8.8/icon.png',
+					bannerUrl: 'https://8.8.8.8/banner.jpg',
 					link: 'https://example.com'
 				})
 				.expect(200);
 
 			expect(response.body.success).toBe(true);
-			expect(response.body.data.iconUrl).toBe('https://example.com/icon.png');
-			expect(response.body.data.bannerUrl).toBe('https://example.com/banner.jpg');
+			expect(response.body.data.iconUrl).toMatch(new RegExp(`^/api/media/switch/${publicUid}/icon_[0-9a-f]{16}\\.webp$`));
+			expect(response.body.data.bannerUrl).toMatch(new RegExp(`^/api/media/switch/${publicUid}/banner_[0-9a-f]{16}\\.webp$`));
 			expect(response.body.data.link).toBe('https://example.com');
 		});
 
@@ -621,14 +637,14 @@ describe('API Integration Tests', () => {
 			await request(app)
 				.post(`/api/v2/switch/${publicUid}/metadata`)
 				.set('X-Api-Key', websiteKey)
-				.send({ iconUrl: 'https://example.com/icon.png' })
+				.send({ iconUrl: 'https://8.8.8.8/icon.png' })
 				.expect(200);
 
 			// Second use should be rejected (revoked after first save)
 			await request(app)
 				.post(`/api/v2/switch/${publicUid}/metadata`)
 				.set('X-Api-Key', websiteKey)
-				.send({ iconUrl: 'https://example.com/icon2.png' })
+				.send({ iconUrl: 'https://8.8.8.8/icon2.png' })
 				.expect(401);
 		});
 
@@ -682,8 +698,8 @@ describe('API Integration Tests', () => {
 			const updates = {
 				link: 'https://updated.example.com',
 				description: 'Updated',
-				iconUrl: 'https://example.com/icon.png',
-				bannerUrl: 'https://example.com/banner.jpg'
+				iconUrl: 'https://8.8.8.8/icon.png',
+				bannerUrl: 'https://8.8.8.8/banner.jpg'
 			};
 			const canonical = stableJsonStringify({
 				v: 2,
@@ -710,8 +726,8 @@ describe('API Integration Tests', () => {
 			expect(response.body.success).toBe(true);
 			expect(response.body.data.link).toBe('https://updated.example.com');
 			expect(response.body.data.description).toBe('Updated');
-			expect(response.body.data.iconUrl).toBe('https://example.com/icon.png');
-			expect(response.body.data.bannerUrl).toBe('https://example.com/banner.jpg');
+			expect(response.body.data.iconUrl).toMatch(new RegExp(`^/api/media/switch/${publicUid}/icon_[0-9a-f]{16}\\.webp$`));
+			expect(response.body.data.bannerUrl).toMatch(new RegExp(`^/api/media/switch/${publicUid}/banner_[0-9a-f]{16}\\.webp$`));
 		});
 	});
 

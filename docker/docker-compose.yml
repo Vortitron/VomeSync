@@ -52,6 +52,7 @@ services:
       - "${VOMESYNC_WS_HOST_PORT:-3001}:3001"
     volumes:
       - webserver_logs:/usr/src/app/logs
+      - webserver_media:/usr/src/app/media
       - ${SSL_CERT_PATH:-/dev/null}:${SSL_CERT_PATH:-/dev/null}:ro
       - ${SSL_KEY_PATH:-/dev/null}:${SSL_KEY_PATH:-/dev/null}:ro
     networks:
@@ -184,6 +185,9 @@ volumes:
     driver: local
   webserver_logs:
     name: ${VOMESYNC_LOGS_VOLUME_NAME:-vomesync_webserver_logs}
+    driver: local
+  webserver_media:
+    name: ${VOMESYNC_MEDIA_VOLUME_NAME:-vomesync_webserver_media}
     driver: local
 
 networks:

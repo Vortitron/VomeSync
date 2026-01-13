@@ -162,7 +162,7 @@ const schemas = {
 		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
 		iconUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
 		bannerUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow('')
-	}).min(1),
+	}),
 
 	v2SetState: Joi.object({
 		ts: Joi.number().integer().min(0).required(),

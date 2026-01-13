@@ -869,6 +869,7 @@ select {
 
 .manage-panel {
 	margin-top: 1rem;
+	scroll-margin-top: 84px;
 }
 
 .comment-form h3 {

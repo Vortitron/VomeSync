@@ -97,7 +97,9 @@ const managePanel = document.getElementById('managePanel');
 const manageForm = document.getElementById('manageForm');
 const manageKeyInput = document.getElementById('manageKey');
 const manageLinkInput = document.getElementById('manageLink');
+const manageIconFileInput = document.getElementById('manageIconFile');
 const manageIconUrlInput = document.getElementById('manageIconUrl');
+const manageBannerFileInput = document.getElementById('manageBannerFile');
 const manageBannerUrlInput = document.getElementById('manageBannerUrl');
 const manageStatus = document.getElementById('manageStatus');
 const manageForgetBtn = document.getElementById('manageForgetBtn');
@@ -611,6 +613,9 @@ function updateManagePanel(detail) {
 	if (manageLinkInput) manageLinkInput.value = detail.link || '';
 	if (manageIconUrlInput) manageIconUrlInput.value = detail.iconUrl || '';
 	if (manageBannerUrlInput) manageBannerUrlInput.value = detail.bannerUrl || '';
+	// File inputs cannot be pre-filled; clear any previous selections when switching switches
+	if (manageIconFileInput) manageIconFileInput.value = '';
+	if (manageBannerFileInput) manageBannerFileInput.value = '';
 
 	const storedKey = getStoredManagementKey(detail.uid);
 	if (storedKey && manageKeyInput && !manageKeyInput.value) {
@@ -618,19 +623,29 @@ function updateManagePanel(detail) {
 	}
 
 	// If a management key was supplied via #accessKey=..., scroll to this panel once
-	if (managementAutoscrollUid && managementAutoscrollUid === detail.uid) {
+	const wantScroll = Boolean(
+		managementAutoscrollUid
+		&& String(managementAutoscrollUid).toLowerCase() === String(detail.uid || '').toLowerCase()
+	);
+	if (wantScroll) {
 		managementAutoscrollUid = null;
 		if (manageStatus) {
 			manageStatus.textContent = 'Management key loaded — edit fields below and click “Save appearance”.';
 			manageStatus.className = 'comment-status success';
 		}
-		setTimeout(() => {
+		// Give the browser a chance to lay out the newly-shown detail section before scrolling.
+		const doScroll = () => {
 			try {
 				managePanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
 			} catch {
 				// ignore
 			}
-		}, 0);
+		};
+		if (typeof window.requestAnimationFrame === 'function') {
+			window.requestAnimationFrame(() => window.requestAnimationFrame(doScroll));
+		} else {
+			setTimeout(doScroll, 50);
+		}
 	}
 }
 
@@ -653,17 +668,20 @@ async function submitManageAppearance() {
 		updates.link = link;
 	}
 
+	const iconFile = manageIconFileInput?.files?.[0] || null;
 	const iconUrl = String(manageIconUrlInput?.value || '').trim();
-	if (iconUrl !== String(detail.iconUrl || '')) {
+	if (!iconFile && iconUrl !== String(detail.iconUrl || '')) {
 		updates.iconUrl = iconUrl;
 	}
 
+	const bannerFile = manageBannerFileInput?.files?.[0] || null;
 	const bannerUrl = String(manageBannerUrlInput?.value || '').trim();
-	if (bannerUrl !== String(detail.bannerUrl || '')) {
+	if (!bannerFile && bannerUrl !== String(detail.bannerUrl || '')) {
 		updates.bannerUrl = bannerUrl;
 	}
 
-	if (Object.keys(updates).length === 0) {
+	const hasFileUpload = Boolean(iconFile || bannerFile);
+	if (Object.keys(updates).length === 0 && !hasFileUpload) {
 		manageStatus.textContent = 'No changes to save.';
 		manageStatus.className = 'comment-status';
 		return;
@@ -673,13 +691,23 @@ async function submitManageAppearance() {
 	manageStatus.className = 'comment-status';
 
 	try {
+		const form = new FormData();
+		Object.entries(updates).forEach(([k, v]) => {
+			form.append(k, v == null ? '' : String(v));
+		});
+		if (iconFile) {
+			form.append('iconFile', iconFile, iconFile.name || 'icon');
+		}
+		if (bannerFile) {
+			form.append('bannerFile', bannerFile, bannerFile.name || 'banner');
+		}
+
 		const response = await fetch(`${API_BASE_URL}/v2/switch/${currentSwitchId}/metadata`, {
 			method: 'POST',
 			headers: {
-				'Content-Type': 'application/json',
 				'X-Api-Key': apiKey
 			},
-			body: JSON.stringify(updates)
+			body: form
 		});
 
 		const data = await response.json();
@@ -698,6 +726,8 @@ async function submitManageAppearance() {
 		if (manageKeyInput) {
 			manageKeyInput.value = '';
 		}
+		if (manageIconFileInput) manageIconFileInput.value = '';
+		if (manageBannerFileInput) manageBannerFileInput.value = '';
 
 		manageStatus.textContent = 'Saved. (This key is now invalid — generate a new link to edit again.)';
 		manageStatus.className = 'comment-status success';

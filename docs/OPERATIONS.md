@@ -49,6 +49,7 @@ VomeSync stores its state in Redis and in Docker deployments uses Redis persiste
 
 ### What to back up
 - **Redis volume**: `VOMESYNC_REDIS_VOLUME_NAME` (contains Redis AOF / metadata).
+- **Media volume** (icons/banners): `VOMESYNC_MEDIA_VOLUME_NAME` (uploaded/downloaded images converted to WebP).
 - **Configuration/secrets**: your `docker/.env` (store securely; do **not** commit).
 - **Optional**: `VOMESYNC_LOGS_VOLUME_NAME` if you need log retention.
 

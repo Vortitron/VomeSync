@@ -1,8 +1,10 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
+const multer = require('multer');
 const redisClient = require('../utils/redis');
 const authManager = require('../utils/auth');
 const logger = require('../utils/logger');
+const media = require('../utils/media');
 const {
 	validateRequest,
 	validateUID,
@@ -13,6 +15,19 @@ const {
 const webSocketManager = require('../websocket/manager');
 
 const router = express.Router();
+
+const upload = multer({
+	storage: multer.memoryStorage(),
+	limits: {
+		// Allow enough for a banner upload; additional checks exist in media util.
+		fileSize: Number.parseInt(process.env.MEDIA_MAX_UPLOAD_BYTES || '', 10) || 10_000_000
+	}
+});
+
+const uploadV2MetadataFiles = upload.fields([
+	{ name: 'iconFile', maxCount: 1 },
+	{ name: 'bannerFile', maxCount: 1 }
+]);
 
 const abbreviateActor = (actorId) => {
 	if (!actorId) {
@@ -235,6 +250,17 @@ router.post('/v2/switch',
 			}
 
 			const switchConfig = pickSwitchMetadata(data);
+			// If icon/banner URLs are provided, ingest and re-host them (store only local URLs).
+			try {
+				if (typeof switchConfig.iconUrl === 'string' && switchConfig.iconUrl.trim()) {
+					switchConfig.iconUrl = await media.ingestImageFromUrl(uid, 'icon', switchConfig.iconUrl);
+				}
+				if (typeof switchConfig.bannerUrl === 'string' && switchConfig.bannerUrl.trim()) {
+					switchConfig.bannerUrl = await media.ingestImageFromUrl(uid, 'banner', switchConfig.bannerUrl);
+				}
+			} catch (imgErr) {
+				return res.status(400).json({ success: false, error: imgErr && imgErr.message ? imgErr.message : 'Invalid image URL' });
+			}
 
 			await redisClient.createSwitchV2(uid, ownerId, data.ownerPubKey, data.switchPubKey, data.index, switchConfig);
 			const parsedSwitch = await redisClient.getSwitchState(uid);
@@ -425,6 +451,18 @@ router.post('/v2/switch/:uid',
 						error: captcha.error || 'Captcha verification failed'
 					});
 				}
+			}
+
+			// Ingest icon/banner URLs if provided (store only local URLs).
+			try {
+				if (typeof updates.iconUrl === 'string' && updates.iconUrl.trim()) {
+					updates.iconUrl = await media.ingestImageFromUrl(uid, 'icon', updates.iconUrl);
+				}
+				if (typeof updates.bannerUrl === 'string' && updates.bannerUrl.trim()) {
+					updates.bannerUrl = await media.ingestImageFromUrl(uid, 'banner', updates.bannerUrl);
+				}
+			} catch (imgErr) {
+				return res.status(400).json({ success: false, error: imgErr && imgErr.message ? imgErr.message : 'Invalid image URL' });
 			}
 
 			const updated = await redisClient.updateSwitch(uid, updates);
@@ -678,13 +716,36 @@ router.post('/v2/switch/:uid/metadata',
 	validateUID,
 	authManager.rateLimit('v2_metadata_access_key', 200, 900000),
 	authManager.requireV2AccessKey('metadata'),
+	uploadV2MetadataFiles,
 	validateRequest(schemas.v2UpdateSwitchViaAccessKey),
 	async (req, res) => {
 		try {
 			const { uid } = req.params;
-			const updates = pickSwitchMetadataUpdatesV2(req.validatedData);
-			if (!updates || Object.keys(updates).length === 0) {
+			const updates = pickSwitchMetadataUpdatesV2(req.validatedData || {});
+			const iconFile = req.files && req.files.iconFile ? req.files.iconFile[0] : null;
+			const bannerFile = req.files && req.files.bannerFile ? req.files.bannerFile[0] : null;
+
+			const hasAnyUpdate = updates && Object.keys(updates).length > 0;
+			const hasAnyFile = Boolean(iconFile || bannerFile);
+			if (!hasAnyUpdate && !hasAnyFile) {
 				return res.status(400).json({ success: false, error: 'No metadata updates provided' });
+			}
+
+			// Ingest uploaded images (preferred over URLs)
+			try {
+				if (iconFile && iconFile.buffer) {
+					updates.iconUrl = await media.ingestImageBuffer(uid, 'icon', iconFile.buffer);
+				} else if (typeof updates.iconUrl === 'string' && updates.iconUrl.trim()) {
+					updates.iconUrl = await media.ingestImageFromUrl(uid, 'icon', updates.iconUrl);
+				}
+
+				if (bannerFile && bannerFile.buffer) {
+					updates.bannerUrl = await media.ingestImageBuffer(uid, 'banner', bannerFile.buffer);
+				} else if (typeof updates.bannerUrl === 'string' && updates.bannerUrl.trim()) {
+					updates.bannerUrl = await media.ingestImageFromUrl(uid, 'banner', updates.bannerUrl);
+				}
+			} catch (imgErr) {
+				return res.status(400).json({ success: false, error: imgErr && imgErr.message ? imgErr.message : 'Invalid image' });
 			}
 
 			const updated = await redisClient.updateSwitch(uid, updates);
