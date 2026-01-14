@@ -146,6 +146,7 @@ describe('Website SPA (v2 directory)', () => {
 
 		// Deep link: should use /switch/<uid>
 		expect(window.location.pathname).toBe(`/switch/${uid}`);
+		expect(document.body.classList.contains('view-switch')).toBe(true);
 
 		// Banner: hero background should be set
 		const hero = document.querySelector('.hero');
@@ -178,6 +179,10 @@ describe('Website SPA (v2 directory)', () => {
 		expect(commentOptions.method).toBe('POST');
 		expect(commentOptions.headers['X-Api-Key']).toBe(accessKey);
 		expect(String(commentOptions.body)).toContain('Hello');
+
+		// Closing detail should restore directory view
+		window.closeDetail();
+		expect(document.body.classList.contains('view-switch')).toBe(false);
 	});
 
 	test('manage-on-website deep link (#accessKey=...) loads the key and triggers autoscroll', async () => {

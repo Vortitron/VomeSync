@@ -737,6 +737,15 @@ select {
 	display: block;
 }
 
+/* When viewing a specific switch, hide the directory/search UI so the page reads like a switch detail page */
+body.view-switch .controls,
+body.view-switch .stats,
+body.view-switch .info-note,
+body.view-switch .switches,
+body.view-switch .categories {
+	display: none !important;
+}
+
 .detail-card {
 	background: var(--bg-secondary);
 	border: 1px solid var(--border);

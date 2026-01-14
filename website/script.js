@@ -391,6 +391,7 @@ function setupEventListeners() {
 			if (!file) return;
 			manageIconAction = 'replace';
 			setManageIconEditVisible(true);
+			if (manageIconUrlInput) manageIconUrlInput.value = '';
 			revokeObjectUrl(manageIconObjectUrl);
 			try {
 				manageIconObjectUrl = URL.createObjectURL(file);
@@ -408,6 +409,7 @@ function setupEventListeners() {
 			setManageIconEditVisible(true);
 			revokeObjectUrl(manageIconObjectUrl);
 			manageIconObjectUrl = null;
+			if (manageIconFileInput) manageIconFileInput.value = '';
 			setMediaPreviewImage(manageIconPreview, manageIconPlaceholder, url);
 		});
 	}
@@ -448,6 +450,7 @@ function setupEventListeners() {
 			if (!file) return;
 			manageBannerAction = 'replace';
 			setManageBannerEditVisible(true);
+			if (manageBannerUrlInput) manageBannerUrlInput.value = '';
 			revokeObjectUrl(manageBannerObjectUrl);
 			try {
 				manageBannerObjectUrl = URL.createObjectURL(file);
@@ -465,6 +468,7 @@ function setupEventListeners() {
 			setManageBannerEditVisible(true);
 			revokeObjectUrl(manageBannerObjectUrl);
 			manageBannerObjectUrl = null;
+			if (manageBannerFileInput) manageBannerFileInput.value = '';
 			setMediaPreviewImage(manageBannerPreview, manageBannerPlaceholder, url);
 		});
 	}
@@ -901,6 +905,10 @@ function copyText(value, button, defaultLabel) {
 
 async function openSwitchDetails(uid, fromPopState = false) {
 	try {
+		if (document?.body) {
+			document.body.classList.add('view-switch');
+		}
+
 		// Apply banner ASAP (from list data) to make expansion feel instant
 		const preview = allSwitches.find(sw => sw.uid === uid);
 		if (preview && preview.bannerUrl) {
@@ -1272,6 +1280,9 @@ function closeDetail() {
 	currentSwitchDetail = null;
 	clearHeroBanner();
 	restoreHeroText();
+	if (document?.body) {
+		document.body.classList.remove('view-switch');
+	}
 	clearSwitchQuery();
 }
 
