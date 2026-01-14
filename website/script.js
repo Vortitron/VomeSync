@@ -146,6 +146,21 @@ let manageBannerObjectUrl = null;
 let quickViewUid = null;
 let quickViewDetail = null;
 
+// Smarter refresh / update UI
+const AUTO_REFRESH_MS = 60_000;
+const LAST_UPDATE_TICK_MS = 1_000;
+
+let lastSwitchFetchAt = 0;
+let autoRefreshTimer = null;
+let lastUpdateTimer = null;
+let autoRefreshInFlight = false;
+
+// Best-effort realtime updates (state + last toggled) via WebSocket
+let wsClient = null;
+let wsReconnectTimer = null;
+let wsReconnectAttempts = 0;
+const wsSubscribedUids = new Set();
+
 document.addEventListener('DOMContentLoaded', () => {
 	init();
 });
@@ -500,13 +515,21 @@ function setupEventListeners() {
 		restoreSwitchFromQuery();
 	});
 
-	setInterval(loadAllData, 30000);
+	document.addEventListener('visibilitychange', () => {
+		// Kick a refresh when the user returns to the tab
+		if (document.visibilityState === 'visible') {
+			autoRefreshTick();
+		}
+	});
+
+	startLastUpdateTicker();
+	startAutoRefresh();
 }
 
 async function loadAllData() {
 	showLoading();
 	try {
-		await Promise.all([loadSwitches(), loadCategories()]);
+		await Promise.all([refreshSwitches({ silent: false }), loadCategories()]);
 		hideMessages();
 		if (allSwitches.length === 0) {
 			showEmptyMessage();
@@ -518,6 +541,181 @@ async function loadAllData() {
 }
 
 async function loadSwitches() {
+	// Backwards-compatible entry point (used by the "Try Again" button)
+	try {
+		await loadAllData();
+	} catch (_err) {
+		// loadAllData already shows error UI
+	}
+}
+
+function startAutoRefresh() {
+	if (autoRefreshTimer) return;
+	autoRefreshTimer = setInterval(autoRefreshTick, AUTO_REFRESH_MS);
+}
+
+async function autoRefreshTick() {
+	if (autoRefreshInFlight) return;
+	if (document.visibilityState && document.visibilityState !== 'visible') return;
+
+	autoRefreshInFlight = true;
+	try {
+		await refreshSwitches({ silent: true });
+	} catch (error) {
+		// Don't flash error UI for background refreshes
+		console.warn('Background refresh failed:', error);
+	} finally {
+		autoRefreshInFlight = false;
+	}
+}
+
+function startLastUpdateTicker() {
+	if (lastUpdateTimer) return;
+	lastUpdateTimer = setInterval(updateLastUpdateDisplay, LAST_UPDATE_TICK_MS);
+	updateLastUpdateDisplay();
+}
+
+function updateLastUpdateDisplay() {
+	if (!lastUpdate) return;
+	if (!lastSwitchFetchAt) {
+		lastUpdate.textContent = '-';
+		return;
+	}
+	lastUpdate.textContent = formatTimeAgo(new Date(lastSwitchFetchAt));
+	updateRelativeTimeStamps();
+}
+
+function updateRelativeTimeStamps() {
+	// Update "Last Changed" timestamps on cards without doing any network requests.
+	const stampEls = document.querySelectorAll('[data-field="lastChanged"][data-ts]');
+	stampEls.forEach((el) => {
+		const tsRaw = el.dataset.ts || '';
+		const ts = tsRaw ? Number(tsRaw) : 0;
+		if (!ts) {
+			el.textContent = 'Never';
+			return;
+		}
+		el.textContent = formatTimeAgo(new Date(ts));
+	});
+}
+
+function getRenderedSwitchUids() {
+	if (!switchesGrid) return [];
+	return Array.from(switchesGrid.querySelectorAll('.switch-card[data-uid]'))
+		.map((el) => String(el.dataset.uid || '').trim())
+		.filter(Boolean);
+}
+
+function areUidListsEqual(a, b) {
+	if (a === b) return true;
+	if (!Array.isArray(a) || !Array.isArray(b)) return false;
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
+}
+
+function updateSwitchCardElement(card, switchData) {
+	if (!card || !switchData) return;
+	const uid = String(switchData.uid || '').trim();
+	if (!uid) return;
+
+	const stateClass = switchData.state ? 'state-on' : 'state-off';
+	card.classList.remove('state-on', 'state-off');
+	card.classList.add(stateClass);
+
+	card.dataset.bannerUrl = String(switchData.bannerUrl || '');
+
+	const iconEl = card.querySelector('[data-field="icon"]');
+	if (iconEl) {
+		const iconUrl = String(switchData.iconUrl || '').trim();
+		if (iconUrl) {
+			iconEl.src = iconUrl;
+			iconEl.classList.remove('hidden');
+		} else {
+			iconEl.removeAttribute('src');
+			iconEl.classList.add('hidden');
+		}
+	}
+
+	const descEl = card.querySelector('[data-field="description"]');
+	if (descEl) {
+		descEl.textContent = switchData.description || 'Untitled Switch';
+	}
+
+	const stateEl = card.querySelector('[data-field="stateBadge"]');
+	if (stateEl) {
+		const on = Boolean(switchData.state);
+		stateEl.classList.remove('on', 'off');
+		stateEl.classList.add(on ? 'on' : 'off');
+		stateEl.textContent = on ? 'ON' : 'OFF';
+	}
+
+	const usersEl = card.querySelector('[data-field="users"]');
+	if (usersEl) {
+		const userCount = (typeof switchData.userCount === 'number') ? switchData.userCount : 0;
+		usersEl.textContent = `${userCount} user${userCount === 1 ? '' : 's'}`;
+	}
+
+	const togglesEl = card.querySelector('[data-field="toggles"]');
+	if (togglesEl) {
+		const toggleCount = (typeof switchData.toggleCount === 'number') ? switchData.toggleCount : 0;
+		togglesEl.textContent = `${toggleCount} toggles`;
+	}
+
+	const lastEl = card.querySelector('[data-field="lastChanged"]');
+	if (lastEl) {
+		const ts = switchData.lastToggled ? Number(switchData.lastToggled) : 0;
+		lastEl.dataset.ts = ts ? String(ts) : '';
+		lastEl.textContent = ts ? formatTimeAgo(new Date(ts)) : 'Never';
+	}
+}
+
+function updateRenderedSwitchCards() {
+	const uids = getRenderedSwitchUids();
+	if (!uids.length) return;
+
+	const byUid = new Map(allSwitches.map((sw) => [sw.uid, sw]));
+	uids.forEach((uid) => {
+		const sw = byUid.get(uid);
+		if (!sw) return;
+		const card = switchesGrid.querySelector(`.switch-card[data-uid="${uid}"]`);
+		updateSwitchCardElement(card, sw);
+	});
+}
+
+function computeFilteredSwitches() {
+	const searchQuery = searchBox.value.toLowerCase().trim();
+	const category = categoryFilter.value;
+	const minUsers = userCountFilter.value ? parseInt(userCountFilter.value, 10) : null;
+
+	return allSwitches.filter((switchData) => {
+		const description = (switchData.description || '').toLowerCase();
+		const location = (switchData.location || '').toLowerCase();
+		const categoryValue = (switchData.category || '').toLowerCase();
+
+		const matchesSearch = !searchQuery || description.includes(searchQuery) || location.includes(searchQuery) || categoryValue.includes(searchQuery);
+		const matchesCategory = !category || switchData.category === category;
+		const matchesUserCount = !minUsers || (switchData.userCount || 0) >= minUsers;
+
+		return matchesSearch && matchesCategory && matchesUserCount;
+	});
+}
+
+function applyFilters(options = {}) {
+	const shouldRender = options.render !== false;
+	filteredSwitches = computeFilteredSwitches();
+	if (shouldRender) {
+		renderSwitches();
+	}
+}
+
+async function refreshSwitches(options = {}) {
+	const silent = options.silent === true;
+
+	const renderedBefore = getRenderedSwitchUids();
+
 	const response = await fetch(`${API_BASE_URL}/public-switches`);
 	if (!response.ok) {
 		throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -529,9 +727,202 @@ async function loadSwitches() {
 	}
 
 	allSwitches = data.data.switches || [];
-	filteredSwitches = [...allSwitches];
+	lastSwitchFetchAt = Date.now();
 	updateStats();
-	renderSwitches();
+	updateLastUpdateDisplay();
+
+	// Preserve current filters (don't reset on refresh)
+	applyFilters({ render: false });
+
+	// If we're in "quiet" mode and the visible set hasn't changed, update cards in-place (no flicker).
+	const renderedAfter = filteredSwitches.map((sw) => sw.uid);
+	const canPatchInPlace = silent
+		&& switchesGrid
+		&& switchesGrid.querySelectorAll('.switch-card[data-uid]').length > 0
+		&& areUidListsEqual(renderedBefore, renderedAfter);
+
+	if (canPatchInPlace) {
+		updateRenderedSwitchCards();
+		wireSwitchCardClicks();
+	} else {
+		renderSwitches();
+	}
+
+	ensureRealtimeSubscriptions();
+}
+
+function resolveWebSocketBaseUrl() {
+	let api;
+	try {
+		api = new URL(API_BASE_URL);
+	} catch {
+		return '';
+	}
+
+	const wsProtocol = api.protocol === 'https:' ? 'wss:' : 'ws:';
+	let port = api.port || '';
+
+	// When pointing directly at the webserver ports, use the configured WS ports.
+	if (port === '3090') port = '3001';
+	if (port === '3091') port = '3002';
+
+	const host = api.hostname + (port ? `:${port}` : '');
+	return `${wsProtocol}//${host}/ws`;
+}
+
+function clearWsReconnectTimer() {
+	if (!wsReconnectTimer) return;
+	try {
+		clearTimeout(wsReconnectTimer);
+	} catch {
+		// ignore
+	}
+	wsReconnectTimer = null;
+}
+
+function disconnectRealtime() {
+	clearWsReconnectTimer();
+	wsReconnectAttempts = 0;
+	wsSubscribedUids.clear();
+
+	try {
+		if (wsClient) {
+			wsClient.onopen = null;
+			wsClient.onmessage = null;
+			wsClient.onclose = null;
+			wsClient.onerror = null;
+			wsClient.close();
+		}
+	} catch {
+		// ignore
+	}
+	wsClient = null;
+}
+
+function scheduleWsReconnect(desiredUid) {
+	clearWsReconnectTimer();
+	wsReconnectAttempts = Math.min(wsReconnectAttempts + 1, 8);
+	const delayMs = Math.min(30_000, 500 * (2 ** wsReconnectAttempts));
+	wsReconnectTimer = setTimeout(() => {
+		connectRealtime(desiredUid);
+	}, delayMs);
+}
+
+function wsSendJson(value) {
+	try {
+		if (!wsClient || wsClient.readyState !== 1) return false; // 1 = OPEN
+		wsClient.send(JSON.stringify(value));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function handleStateUpdate(uid, state, timestamp) {
+	const targetUid = String(uid || '').trim();
+	if (!targetUid) return;
+
+	const idx = allSwitches.findIndex((sw) => sw && sw.uid === targetUid);
+	if (idx >= 0) {
+		allSwitches[idx] = {
+			...allSwitches[idx],
+			state: Boolean(state),
+			lastToggled: timestamp ? Number(timestamp) : allSwitches[idx].lastToggled
+		};
+	}
+
+	// Patch visible card if present
+	const card = switchesGrid ? switchesGrid.querySelector(`.switch-card[data-uid="${targetUid}"]`) : null;
+	if (card && idx >= 0) {
+		updateSwitchCardElement(card, allSwitches[idx]);
+		updateStats();
+	}
+}
+
+function connectRealtime(initialUid) {
+	if (typeof window.WebSocket !== 'function') return;
+
+	const uid = String(initialUid || '').trim();
+	if (!uid) return;
+
+	const base = resolveWebSocketBaseUrl();
+	if (!base) return;
+
+	// If already connected, keep it.
+	if (wsClient && (wsClient.readyState === 0 || wsClient.readyState === 1)) {
+		return;
+	}
+
+	const wsUrl = `${base}?uid=${encodeURIComponent(uid)}`;
+	try {
+		wsClient = new window.WebSocket(wsUrl);
+	} catch (err) {
+		console.warn('Failed to create WebSocket:', err);
+		wsClient = null;
+		return;
+	}
+
+	wsClient.onopen = () => {
+		wsReconnectAttempts = 0;
+		clearWsReconnectTimer();
+		// We'll subscribe after open via ensureRealtimeSubscriptions()
+		ensureRealtimeSubscriptions();
+	};
+
+	wsClient.onmessage = (event) => {
+		try {
+			const raw = event && event.data ? String(event.data) : '';
+			if (!raw) return;
+			const msg = JSON.parse(raw);
+			if (msg && msg.type === 'state_update') {
+				handleStateUpdate(msg.uid, msg.state, msg.timestamp);
+			}
+		} catch (err) {
+			console.warn('Bad WS message:', err);
+		}
+	};
+
+	wsClient.onclose = () => {
+		wsClient = null;
+		scheduleWsReconnect(uid);
+	};
+
+	wsClient.onerror = () => {
+		// Let onclose handle reconnect
+	};
+}
+
+function ensureRealtimeSubscriptions() {
+	// Subscribe to the switches that are currently visible (plus current detail).
+	const desired = new Set(getRenderedSwitchUids());
+	if (currentSwitchId) desired.add(currentSwitchId);
+
+	const desiredList = Array.from(desired).filter(Boolean);
+	if (desiredList.length === 0) {
+		disconnectRealtime();
+		return;
+	}
+
+	// Ensure connection (server requires a uid query param)
+	connectRealtime(desiredList[0]);
+
+	// If WS not ready yet, we'll subscribe on open.
+	if (!wsClient || wsClient.readyState !== 1) return;
+
+	// Subscribe new
+	desiredList.forEach((uid) => {
+		if (wsSubscribedUids.has(uid)) return;
+		if (wsSendJson({ type: 'subscribe', uid })) {
+			wsSubscribedUids.add(uid);
+		}
+	});
+
+	// Unsubscribe old
+	Array.from(wsSubscribedUids).forEach((uid) => {
+		if (desired.has(uid)) return;
+		wsSendJson({ type: 'unsubscribe', uid });
+		wsSubscribedUids.delete(uid);
+	});
 }
 
 async function loadCategories() {
@@ -592,31 +983,16 @@ function hideMessages() {
 function updateStats() {
 	const total = allSwitches.length;
 	const active = allSwitches.filter(sw => sw.state).length;
-	const now = new Date();
-
 	totalSwitches.textContent = total;
 	activeSwitches.textContent = active;
-	lastUpdate.textContent = now.toLocaleTimeString();
 }
 
-function applyFilters() {
-	const searchQuery = searchBox.value.toLowerCase().trim();
-	const category = categoryFilter.value;
-	const minUsers = userCountFilter.value ? parseInt(userCountFilter.value, 10) : null;
-
-	filteredSwitches = allSwitches.filter((switchData) => {
-		const description = (switchData.description || '').toLowerCase();
-		const location = (switchData.location || '').toLowerCase();
-		const categoryValue = (switchData.category || '').toLowerCase();
-
-		const matchesSearch = !searchQuery || description.includes(searchQuery) || location.includes(searchQuery) || categoryValue.includes(searchQuery);
-		const matchesCategory = !category || switchData.category === category;
-		const matchesUserCount = !minUsers || (switchData.userCount || 0) >= minUsers;
-
-		return matchesSearch && matchesCategory && matchesUserCount;
-	});
-
-	renderSwitches();
+function applyFilters(options = {}) {
+	const shouldRender = options.render !== false;
+	filteredSwitches = computeFilteredSwitches();
+	if (shouldRender) {
+		renderSwitches();
+	}
 }
 
 function renderSwitches() {
@@ -800,16 +1176,17 @@ function createSwitchCard(switchData) {
 	const usersLabel = typeof userCount === 'number' ? `${userCount} user${userCount === 1 ? '' : 's'}` : '0 users';
 	const togglesLabel = typeof toggleCount === 'number' ? `${toggleCount} toggles` : '0 toggles';
 	const webLink = link ? `<a class="inline-link" href="${escapeAttr(link)}" target="_blank" rel="noopener">🌐 Link</a>` : '';
-	const iconHtml = iconUrl ? `<img class="switch-icon" src="${escapeAttr(iconUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '';
+	const iconSrc = String(iconUrl || '').trim();
+	const iconHtml = `<img class="switch-icon ${iconSrc ? '' : 'hidden'}" data-field="icon" ${iconSrc ? `src="${escapeAttr(iconSrc)}"` : ''} alt="" loading="lazy" referrerpolicy="no-referrer">`;
 
 	return `
 		<div class="switch-card ${stateClass}" data-uid="${escapeAttr(uid)}" data-banner-url="${escapeAttr(bannerUrl || '')}">
 			<div class="switch-header">
 				<div class="switch-title">
 					${iconHtml}
-					<div class="switch-description">${escapeHtml(description || 'Untitled Switch')}</div>
+					<div class="switch-description" data-field="description">${escapeHtml(description || 'Untitled Switch')}</div>
 				</div>
-				<div class="switch-state ${stateText}">${stateLabel}</div>
+				<div class="switch-state ${stateText}" data-field="stateBadge">${stateLabel}</div>
 			</div>
 
 			<div class="switch-details">
@@ -827,17 +1204,17 @@ function createSwitchCard(switchData) {
 
 				<div class="switch-detail">
 					<span class="switch-detail-label">👥 Users:</span>
-					<span class="switch-detail-value">${usersLabel}</span>
+					<span class="switch-detail-value" data-field="users">${usersLabel}</span>
 				</div>
 
 				<div class="switch-detail">
 					<span class="switch-detail-label">🔢 Toggles:</span>
-					<span class="switch-detail-value">${togglesLabel}</span>
+					<span class="switch-detail-value" data-field="toggles">${togglesLabel}</span>
 				</div>
 
 				<div class="switch-detail">
 					<span class="switch-detail-label">🕒 Last Changed:</span>
-					<span class="switch-detail-value">${lastToggledText}</span>
+					<span class="switch-detail-value" data-field="lastChanged" data-ts="${lastToggled ? String(lastToggled) : ''}">${lastToggledText}</span>
 				</div>
 
 				<div class="switch-detail">
@@ -927,6 +1304,7 @@ async function openSwitchDetails(uid, fromPopState = false) {
 
 		detailSection.classList.remove('hidden');
 		renderSwitchDetail(data.data);
+		ensureRealtimeSubscriptions();
 		if (!fromPopState) {
 			pushSwitchQuery(uid);
 		}
@@ -1284,6 +1662,7 @@ function closeDetail() {
 		document.body.classList.remove('view-switch');
 	}
 	clearSwitchQuery();
+	ensureRealtimeSubscriptions();
 }
 
 function filterByCategory(encodedCategory) {
