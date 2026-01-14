@@ -5,7 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>VomeSync - Public Remote Switches</title>
 	<meta name="description" content="Discover and monitor public remote switches from the VomeSync community. Connect your Home Assistant to global IoT devices.">
-	<link rel="stylesheet" href="/styles.css">
+	<link rel="stylesheet" href="/styles.css?v=20260114">
 	<link rel="apple-touch-icon" sizes="180x180" href="/favicon/apple-icon-180x180.png">
 	<link rel="icon" type="image/png" sizes="32x32" href="/favicon/favicon-32x32.png">
 	<link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-16x16.png">
@@ -18,14 +18,14 @@
 <body>
 	<nav class="navbar">
 		<div class="container">
-			<div class="nav-brand">
+			<a class="nav-brand" id="homeBrand" href="/" aria-label="VomeSync home">
 				<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 					<circle cx="12" cy="12" r="10"/>
 					<path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
 				</svg>
 				<span class="brand-name">VomeSync</span>
 				<span id="envBadge" class="env-badge" style="display:none"></span>
-			</div>
+			</a>
 			<div class="nav-links">
 				<a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration" class="btn btn-secondary" target="_blank" rel="noopener">
 					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
@@ -39,11 +39,11 @@
 	<header class="hero">
 		<div class="container">
 			<div class="hero-content">
-				<h1 class="hero-title">
+				<h1 id="heroTitle" class="hero-title">
 					Shared Remote Switches<br>
 					<span class="gradient-text">For Home Assistant</span>
 				</h1>
-				<p class="hero-subtitle">
+				<p id="heroSubtitle" class="hero-subtitle">
 					Connect to community-shared virtual switches. Monitor states in real-time and sync automations across the globe.
 				</p>
 				<div class="hero-buttons">
@@ -199,14 +199,49 @@
 								<input id="manageKey" type="text" autocomplete="off" placeholder="Paste access key">
 								<label for="manageLink">Link (optional):</label>
 								<input id="manageLink" type="url" autocomplete="off" placeholder="https://example.com">
-								<label for="manageIconFile">Icon upload (optional):</label>
-								<input id="manageIconFile" type="file" accept="image/*">
-								<label for="manageIconUrl">Icon URL (optional):</label>
-								<input id="manageIconUrl" type="url" autocomplete="off" placeholder="https://example.com/icon.png">
-								<label for="manageBannerFile">Banner upload (optional):</label>
-								<input id="manageBannerFile" type="file" accept="image/*">
-								<label for="manageBannerUrl">Banner URL (optional):</label>
-								<input id="manageBannerUrl" type="url" autocomplete="off" placeholder="https://example.com/banner.jpg">
+
+								<div class="media-picker" id="manageIconPicker">
+									<label>Icon</label>
+									<div class="media-current">
+										<img id="manageIconPreview" class="media-preview media-preview-icon hidden" alt="">
+										<div id="manageIconPlaceholder" class="media-placeholder">No icon</div>
+										<div class="media-buttons">
+											<button id="manageIconReplaceBtn" type="button" class="ghost-btn">Replace</button>
+											<button id="manageIconRemoveBtn" type="button" class="ghost-btn">Remove</button>
+										</div>
+									</div>
+									<div id="manageIconEdit" class="media-edit hidden">
+										<label for="manageIconFile">Upload (optional):</label>
+										<input id="manageIconFile" type="file" accept="image/*">
+										<label for="manageIconUrl">Import from URL (optional):</label>
+										<input id="manageIconUrl" type="url" autocomplete="off" placeholder="https://example.com/icon.png">
+										<div class="media-edit-actions">
+											<button id="manageIconCancelBtn" type="button" class="ghost-btn">Cancel</button>
+										</div>
+									</div>
+								</div>
+
+								<div class="media-picker" id="manageBannerPicker">
+									<label>Banner</label>
+									<div class="media-current">
+										<img id="manageBannerPreview" class="media-preview media-preview-banner hidden" alt="">
+										<div id="manageBannerPlaceholder" class="media-placeholder">No banner</div>
+										<div class="media-buttons">
+											<button id="manageBannerReplaceBtn" type="button" class="ghost-btn">Replace</button>
+											<button id="manageBannerRemoveBtn" type="button" class="ghost-btn">Remove</button>
+										</div>
+									</div>
+									<div id="manageBannerEdit" class="media-edit hidden">
+										<label for="manageBannerFile">Upload (optional):</label>
+										<input id="manageBannerFile" type="file" accept="image/*">
+										<label for="manageBannerUrl">Import from URL (optional):</label>
+										<input id="manageBannerUrl" type="url" autocomplete="off" placeholder="https://example.com/banner.jpg">
+										<div class="media-edit-actions">
+											<button id="manageBannerCancelBtn" type="button" class="ghost-btn">Cancel</button>
+										</div>
+									</div>
+								</div>
+
 								<div class="comment-actions">
 									<button type="submit" class="refresh-btn">💾 Save appearance</button>
 									<button id="manageForgetBtn" type="button" class="ghost-btn">Forget key</button>
@@ -273,7 +308,26 @@
 		</div>
 	</footer>
 
-	<script src="/network-bg.js"></script>
-	<script src="/script.js"></script>
+	<div id="quickView" class="quickview hidden" aria-hidden="true">
+		<div id="quickViewBackdrop" class="quickview-backdrop"></div>
+		<div class="quickview-card" role="dialog" aria-modal="true" aria-labelledby="quickViewTitle">
+			<button id="quickViewClose" type="button" class="quickview-close" aria-label="Close">✕</button>
+			<div class="quickview-header">
+				<img id="quickViewIcon" class="quickview-icon hidden" alt="">
+				<div>
+					<h2 id="quickViewTitle" class="detail-title">Switch details</h2>
+					<p id="quickViewSubtitle" class="detail-subtitle"></p>
+				</div>
+			</div>
+			<div id="quickViewMeta" class="detail-meta"></div>
+			<div class="detail-actions">
+				<button id="quickViewCopyUid" type="button" class="ghost-btn">📋 Copy UID</button>
+				<button id="quickViewOpenDetails" type="button" class="ghost-btn">👁️ Details</button>
+			</div>
+		</div>
+	</div>
+
+	<script src="/network-bg.js?v=20260114"></script>
+	<script src="/script.js?v=20260114"></script>
 </body>
 </html>

@@ -127,6 +127,21 @@ describe('Website SPA (v2 directory)', () => {
 		expect(grid.innerHTML).toContain('switch-icon');
 		expect(grid.innerHTML).toContain(uid);
 
+		// Quick view: clicking the card (not the "Details" button) should open a modal without navigating
+		const card = grid.querySelector('.switch-card');
+		expect(card).toBeTruthy();
+		card.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(window.location.pathname).toBe('/');
+		const quickView = document.getElementById('quickView');
+		expect(quickView.classList.contains('hidden')).toBe(false);
+		expect(document.getElementById('quickViewTitle').textContent).toBe('Pretty Switch');
+
+		window.closeQuickView();
+		expect(quickView.classList.contains('hidden')).toBe(true);
+
 		await window.openSwitchDetails(uid, false);
 
 		// Deep link: should use /switch/<uid>
@@ -136,6 +151,9 @@ describe('Website SPA (v2 directory)', () => {
 		const hero = document.querySelector('.hero');
 		expect(hero.classList.contains('hero-banner-active')).toBe(true);
 		expect(hero.style.getPropertyValue('--hero-banner-image')).toContain(bannerUrl);
+
+		// Hero text should reflect the switch (not the marketing headline)
+		expect(document.getElementById('heroTitle').textContent).toBe('Pretty Switch');
 
 		// Icon: should be visible in detail header
 		const detailIcon = document.getElementById('detailIcon');

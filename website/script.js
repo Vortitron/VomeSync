@@ -61,6 +61,9 @@ let currentSwitchDetail = null;
 
 // DOM elements
 const heroSection = document.querySelector('.hero');
+const heroTitleEl = document.getElementById('heroTitle');
+const heroSubtitleEl = document.getElementById('heroSubtitle');
+const homeBrand = document.getElementById('homeBrand');
 const loadingMessage = document.getElementById('loadingMessage');
 const errorMessage = document.getElementById('errorMessage');
 const emptySwitches = document.getElementById('emptySwitches');
@@ -103,6 +106,45 @@ const manageBannerFileInput = document.getElementById('manageBannerFile');
 const manageBannerUrlInput = document.getElementById('manageBannerUrl');
 const manageStatus = document.getElementById('manageStatus');
 const manageForgetBtn = document.getElementById('manageForgetBtn');
+
+// Manage media pickers (previews + replace UX)
+const manageIconPreview = document.getElementById('manageIconPreview');
+const manageIconPlaceholder = document.getElementById('manageIconPlaceholder');
+const manageIconEdit = document.getElementById('manageIconEdit');
+const manageIconReplaceBtn = document.getElementById('manageIconReplaceBtn');
+const manageIconRemoveBtn = document.getElementById('manageIconRemoveBtn');
+const manageIconCancelBtn = document.getElementById('manageIconCancelBtn');
+
+const manageBannerPreview = document.getElementById('manageBannerPreview');
+const manageBannerPlaceholder = document.getElementById('manageBannerPlaceholder');
+const manageBannerEdit = document.getElementById('manageBannerEdit');
+const manageBannerReplaceBtn = document.getElementById('manageBannerReplaceBtn');
+const manageBannerRemoveBtn = document.getElementById('manageBannerRemoveBtn');
+const manageBannerCancelBtn = document.getElementById('manageBannerCancelBtn');
+
+// Quick view modal
+const quickView = document.getElementById('quickView');
+const quickViewBackdrop = document.getElementById('quickViewBackdrop');
+const quickViewCloseBtn = document.getElementById('quickViewClose');
+const quickViewIcon = document.getElementById('quickViewIcon');
+const quickViewTitle = document.getElementById('quickViewTitle');
+const quickViewSubtitle = document.getElementById('quickViewSubtitle');
+const quickViewMeta = document.getElementById('quickViewMeta');
+const quickViewCopyUidBtn = document.getElementById('quickViewCopyUid');
+const quickViewOpenDetailsBtn = document.getElementById('quickViewOpenDetails');
+
+const DEFAULT_HERO_TITLE_HTML = heroTitleEl ? heroTitleEl.innerHTML : '';
+const DEFAULT_HERO_SUBTITLE_TEXT = heroSubtitleEl ? heroSubtitleEl.textContent : '';
+
+let manageIconAction = 'keep';
+let manageBannerAction = 'keep';
+let manageCurrentIconUrl = '';
+let manageCurrentBannerUrl = '';
+let manageIconObjectUrl = null;
+let manageBannerObjectUrl = null;
+
+let quickViewUid = null;
+let quickViewDetail = null;
 
 document.addEventListener('DOMContentLoaded', () => {
 	init();
@@ -147,6 +189,35 @@ function clearHeroBanner() {
 	if (!heroSection) return;
 	heroSection.classList.remove('hero-banner-active');
 	heroSection.style.removeProperty('--hero-banner-image');
+}
+
+function setHeroText(title, subtitle) {
+	if (heroTitleEl) heroTitleEl.textContent = title || '';
+	if (heroSubtitleEl) heroSubtitleEl.textContent = subtitle || '';
+}
+
+function restoreHeroText() {
+	if (!heroTitleEl || !heroSubtitleEl) return;
+	heroTitleEl.innerHTML = DEFAULT_HERO_TITLE_HTML;
+	heroSubtitleEl.textContent = DEFAULT_HERO_SUBTITLE_TEXT;
+}
+
+function setHeroForSwitch(detail) {
+	if (!detail) return;
+	if (!heroTitleEl || !heroSubtitleEl) return;
+
+	const title = String(detail.description || '').trim() || 'Switch';
+	const subtitleBits = [];
+	const location = String(detail.location || '').trim();
+	if (location) subtitleBits.push(`📍 ${location}`);
+	const category = String(detail.category || '').trim();
+	if (category) subtitleBits.push(`🏷️ ${category}`);
+	const users = (typeof detail.userCount === 'number') ? detail.userCount : null;
+	if (users != null) {
+		subtitleBits.push(`👥 ${users} user${users === 1 ? '' : 's'}`);
+	}
+
+	setHeroText(title, subtitleBits.join('  ·  ') || DEFAULT_HERO_SUBTITLE_TEXT);
 }
 
 function init() {
@@ -233,6 +304,19 @@ function setupEventListeners() {
 	userCountFilter.addEventListener('change', () => applyFilters());
 	refreshBtn.addEventListener('click', loadAllData);
 
+	if (homeBrand) {
+		homeBrand.addEventListener('click', (e) => {
+			e.preventDefault();
+			closeQuickView();
+			closeDetail();
+			try {
+				window.scrollTo({ top: 0, behavior: 'smooth' });
+			} catch {
+				// ignore
+			}
+		});
+	}
+
 	backToList.addEventListener('click', () => {
 		closeDetail();
 		scrollToSwitches();
@@ -270,6 +354,143 @@ function setupEventListeners() {
 			}
 		});
 	}
+
+	// Manage icon picker actions
+	if (manageIconReplaceBtn) {
+		manageIconReplaceBtn.addEventListener('click', () => {
+			manageIconAction = 'replace';
+			setManageIconEditVisible(true);
+			if (manageIconUrlInput) manageIconUrlInput.focus();
+		});
+	}
+	if (manageIconCancelBtn) {
+		manageIconCancelBtn.addEventListener('click', () => {
+			manageIconAction = 'keep';
+			revokeObjectUrl(manageIconObjectUrl);
+			manageIconObjectUrl = null;
+			if (manageIconFileInput) manageIconFileInput.value = '';
+			if (manageIconUrlInput) manageIconUrlInput.value = '';
+			setManageIconEditVisible(false);
+			setMediaPreviewImage(manageIconPreview, manageIconPlaceholder, manageCurrentIconUrl);
+		});
+	}
+	if (manageIconRemoveBtn) {
+		manageIconRemoveBtn.addEventListener('click', () => {
+			manageIconAction = 'remove';
+			revokeObjectUrl(manageIconObjectUrl);
+			manageIconObjectUrl = null;
+			if (manageIconFileInput) manageIconFileInput.value = '';
+			if (manageIconUrlInput) manageIconUrlInput.value = '';
+			setManageIconEditVisible(false);
+			setMediaPreviewImage(manageIconPreview, manageIconPlaceholder, '');
+		});
+	}
+	if (manageIconFileInput) {
+		manageIconFileInput.addEventListener('change', () => {
+			const file = manageIconFileInput.files?.[0] || null;
+			if (!file) return;
+			manageIconAction = 'replace';
+			setManageIconEditVisible(true);
+			revokeObjectUrl(manageIconObjectUrl);
+			try {
+				manageIconObjectUrl = URL.createObjectURL(file);
+			} catch {
+				manageIconObjectUrl = null;
+			}
+			setMediaPreviewImage(manageIconPreview, manageIconPlaceholder, manageIconObjectUrl);
+		});
+	}
+	if (manageIconUrlInput) {
+		manageIconUrlInput.addEventListener('input', () => {
+			const url = String(manageIconUrlInput.value || '').trim();
+			if (!url) return;
+			manageIconAction = 'replace';
+			setManageIconEditVisible(true);
+			revokeObjectUrl(manageIconObjectUrl);
+			manageIconObjectUrl = null;
+			setMediaPreviewImage(manageIconPreview, manageIconPlaceholder, url);
+		});
+	}
+
+	// Manage banner picker actions
+	if (manageBannerReplaceBtn) {
+		manageBannerReplaceBtn.addEventListener('click', () => {
+			manageBannerAction = 'replace';
+			setManageBannerEditVisible(true);
+			if (manageBannerUrlInput) manageBannerUrlInput.focus();
+		});
+	}
+	if (manageBannerCancelBtn) {
+		manageBannerCancelBtn.addEventListener('click', () => {
+			manageBannerAction = 'keep';
+			revokeObjectUrl(manageBannerObjectUrl);
+			manageBannerObjectUrl = null;
+			if (manageBannerFileInput) manageBannerFileInput.value = '';
+			if (manageBannerUrlInput) manageBannerUrlInput.value = '';
+			setManageBannerEditVisible(false);
+			setMediaPreviewImage(manageBannerPreview, manageBannerPlaceholder, manageCurrentBannerUrl);
+		});
+	}
+	if (manageBannerRemoveBtn) {
+		manageBannerRemoveBtn.addEventListener('click', () => {
+			manageBannerAction = 'remove';
+			revokeObjectUrl(manageBannerObjectUrl);
+			manageBannerObjectUrl = null;
+			if (manageBannerFileInput) manageBannerFileInput.value = '';
+			if (manageBannerUrlInput) manageBannerUrlInput.value = '';
+			setManageBannerEditVisible(false);
+			setMediaPreviewImage(manageBannerPreview, manageBannerPlaceholder, '');
+		});
+	}
+	if (manageBannerFileInput) {
+		manageBannerFileInput.addEventListener('change', () => {
+			const file = manageBannerFileInput.files?.[0] || null;
+			if (!file) return;
+			manageBannerAction = 'replace';
+			setManageBannerEditVisible(true);
+			revokeObjectUrl(manageBannerObjectUrl);
+			try {
+				manageBannerObjectUrl = URL.createObjectURL(file);
+			} catch {
+				manageBannerObjectUrl = null;
+			}
+			setMediaPreviewImage(manageBannerPreview, manageBannerPlaceholder, manageBannerObjectUrl);
+		});
+	}
+	if (manageBannerUrlInput) {
+		manageBannerUrlInput.addEventListener('input', () => {
+			const url = String(manageBannerUrlInput.value || '').trim();
+			if (!url) return;
+			manageBannerAction = 'replace';
+			setManageBannerEditVisible(true);
+			revokeObjectUrl(manageBannerObjectUrl);
+			manageBannerObjectUrl = null;
+			setMediaPreviewImage(manageBannerPreview, manageBannerPlaceholder, url);
+		});
+	}
+
+	// Quick view modal handlers
+	if (quickViewCloseBtn) quickViewCloseBtn.addEventListener('click', closeQuickView);
+	if (quickViewBackdrop) quickViewBackdrop.addEventListener('click', closeQuickView);
+	if (quickViewCopyUidBtn) {
+		quickViewCopyUidBtn.addEventListener('click', () => {
+			if (!quickViewUid) return;
+			copyText(quickViewUid, quickViewCopyUidBtn, '📋 Copy UID');
+		});
+	}
+	if (quickViewOpenDetailsBtn) {
+		quickViewOpenDetailsBtn.addEventListener('click', () => {
+			if (!quickViewUid) return;
+			const uid = quickViewUid;
+			closeQuickView();
+			openSwitchDetails(uid, false);
+		});
+	}
+	window.addEventListener('keydown', (e) => {
+		if (e.key === 'Escape') {
+			closeQuickView();
+		}
+	});
 
 	window.addEventListener('popstate', () => {
 		restoreSwitchFromQuery();
@@ -406,6 +627,150 @@ function renderSwitches() {
 	}
 
 	switchesGrid.innerHTML = filteredSwitches.map(createSwitchCard).join('');
+	wireSwitchCardClicks();
+}
+
+function setQuickViewBanner(bannerUrl) {
+	if (!quickView) return;
+	const url = String(bannerUrl || '').trim();
+	if (!url) {
+		quickView.style.removeProperty('--quickview-banner-image');
+		return;
+	}
+	quickView.style.setProperty('--quickview-banner-image', `url("${cssEscapeUrl(url)}")`);
+}
+
+function showQuickView() {
+	if (!quickView) return;
+	quickView.classList.remove('hidden');
+	document.body.classList.add('modal-open');
+	quickView.setAttribute('aria-hidden', 'false');
+}
+
+function closeQuickView() {
+	if (!quickView) return;
+	quickView.classList.add('hidden');
+	document.body.classList.remove('modal-open');
+	quickView.setAttribute('aria-hidden', 'true');
+
+	setQuickViewBanner('');
+	quickViewUid = null;
+	quickViewDetail = null;
+
+	if (quickViewIcon) {
+		quickViewIcon.removeAttribute('src');
+		quickViewIcon.classList.add('hidden');
+	}
+	if (quickViewTitle) quickViewTitle.textContent = 'Switch details';
+	if (quickViewSubtitle) quickViewSubtitle.textContent = '';
+	if (quickViewMeta) quickViewMeta.innerHTML = '';
+}
+
+function renderQuickView(detail) {
+	if (!detail) return;
+	if (quickViewTitle) quickViewTitle.textContent = detail.description || 'Untitled switch';
+	if (quickViewSubtitle) {
+		quickViewSubtitle.textContent = detail.location ? `📍 ${detail.location}` : '';
+	}
+	if (quickViewIcon) {
+		const icon = String(detail.iconUrl || '').trim();
+		if (icon) {
+			quickViewIcon.src = icon;
+			quickViewIcon.classList.remove('hidden');
+		} else {
+			quickViewIcon.removeAttribute('src');
+			quickViewIcon.classList.add('hidden');
+		}
+	}
+	setQuickViewBanner(detail.bannerUrl);
+
+	if (quickViewMeta) {
+		const category = escapeHtml(detail.category || 'Other');
+		const users = typeof detail.userCount === 'number' ? detail.userCount : (detail.userCount || 0);
+		const toggles = typeof detail.toggleCount === 'number' ? detail.toggleCount : (detail.toggleCount || 0);
+		const last = detail.lastToggled ? formatTimeAgo(new Date(detail.lastToggled)) : 'Never';
+
+		quickViewMeta.innerHTML = `
+			<div class="meta-item">
+				<span class="meta-label">Category</span>
+				<span class="meta-value">${category}</span>
+			</div>
+			<div class="meta-item">
+				<span class="meta-label">Users</span>
+				<span class="meta-value">${users} user${users === 1 ? '' : 's'}</span>
+			</div>
+			<div class="meta-item">
+				<span class="meta-label">Toggle count</span>
+				<span class="meta-value">${toggles} toggles</span>
+			</div>
+			<div class="meta-item">
+				<span class="meta-label">Last change</span>
+				<span class="meta-value">${escapeHtml(last)}</span>
+			</div>
+			<div class="meta-item">
+				<span class="meta-label">UID</span>
+				<span class="meta-value mono">${escapeHtml(detail.uid)}</span>
+			</div>
+		`;
+	}
+}
+
+async function openQuickView(uid, previewBannerUrl = '') {
+	if (!uid) return;
+	if (!quickView) {
+		await openSwitchDetails(uid, false);
+		return;
+	}
+
+	quickViewUid = uid;
+	quickViewDetail = null;
+	if (quickViewTitle) quickViewTitle.textContent = 'Loading…';
+	if (quickViewSubtitle) quickViewSubtitle.textContent = '';
+	if (quickViewMeta) quickViewMeta.innerHTML = '';
+	if (quickViewIcon) {
+		quickViewIcon.removeAttribute('src');
+		quickViewIcon.classList.add('hidden');
+	}
+	setQuickViewBanner(previewBannerUrl);
+	showQuickView();
+
+	try {
+		const response = await fetch(`${API_BASE_URL}/switch/${uid}`);
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+		}
+		const data = await response.json();
+		if (!data.success) {
+			throw new Error(data.error || 'Failed to load switch detail');
+		}
+
+		quickViewDetail = data.data;
+		renderQuickView(data.data);
+	} catch (error) {
+		console.error('Error loading quick view:', error);
+		if (quickViewTitle) quickViewTitle.textContent = 'Unable to load switch';
+		if (quickViewSubtitle) quickViewSubtitle.textContent = 'Please try again.';
+	}
+}
+
+function wireSwitchCardClicks() {
+	if (!switchesGrid) return;
+	const cards = Array.from(switchesGrid.querySelectorAll('.switch-card[data-uid]'));
+	cards.forEach((card) => {
+		if (!card || card.dataset.wired === '1') return;
+		card.dataset.wired = '1';
+		card.addEventListener('click', (event) => {
+			const interactive = event.target && event.target.closest
+				? event.target.closest('button, a, input, select, textarea, label')
+				: null;
+			if (interactive) return;
+
+			const uid = String(card.dataset.uid || '').trim();
+			if (!uid) return;
+			const bannerUrl = String(card.dataset.bannerUrl || '').trim();
+			openQuickView(uid, bannerUrl);
+		});
+	});
 }
 
 function createSwitchCard(switchData) {
@@ -419,7 +784,8 @@ function createSwitchCard(switchData) {
 		userCount,
 		toggleCount,
 		link,
-		iconUrl
+		iconUrl,
+		bannerUrl
 	} = switchData;
 
 	const stateClass = state ? 'state-on' : 'state-off';
@@ -433,7 +799,7 @@ function createSwitchCard(switchData) {
 	const iconHtml = iconUrl ? `<img class="switch-icon" src="${escapeAttr(iconUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '';
 
 	return `
-		<div class="switch-card ${stateClass}">
+		<div class="switch-card ${stateClass}" data-uid="${escapeAttr(uid)}" data-banner-url="${escapeAttr(bannerUrl || '')}">
 			<div class="switch-header">
 				<div class="switch-title">
 					${iconHtml}
@@ -577,6 +943,7 @@ function renderSwitchDetail(detail) {
 		}
 	}
 	setHeroBanner(detail.bannerUrl);
+	setHeroForSwitch(detail);
 	detailLocation.textContent = detail.location ? `📍 ${detail.location}` : '📍 Not specified';
 	detailCategory.textContent = detail.category || 'Other';
 	detailUsers.textContent = `${detail.userCount || 0} user${(detail.userCount || 0) === 1 ? '' : 's'}`;
@@ -605,17 +972,74 @@ function renderSwitchDetail(detail) {
 	renderEvents(detail.events || []);
 }
 
+function revokeObjectUrl(value) {
+	if (!value) return;
+	try {
+		if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+			URL.revokeObjectURL(value);
+		}
+	} catch {
+		// ignore
+	}
+}
+
+function setMediaPreviewImage(imgEl, placeholderEl, url) {
+	if (!imgEl) return;
+	const value = String(url || '').trim();
+	if (value) {
+		imgEl.src = value;
+		imgEl.classList.remove('hidden');
+		if (placeholderEl) placeholderEl.classList.add('hidden');
+		return;
+	}
+	imgEl.removeAttribute('src');
+	imgEl.classList.add('hidden');
+	if (placeholderEl) placeholderEl.classList.remove('hidden');
+}
+
+function setManageIconEditVisible(visible) {
+	if (!manageIconEdit) return;
+	if (visible) manageIconEdit.classList.remove('hidden');
+	else manageIconEdit.classList.add('hidden');
+}
+
+function setManageBannerEditVisible(visible) {
+	if (!manageBannerEdit) return;
+	if (visible) manageBannerEdit.classList.remove('hidden');
+	else manageBannerEdit.classList.add('hidden');
+}
+
+function resetManageMediaPickers(detail) {
+	manageIconAction = 'keep';
+	manageBannerAction = 'keep';
+
+	manageCurrentIconUrl = detail && detail.iconUrl ? String(detail.iconUrl) : '';
+	manageCurrentBannerUrl = detail && detail.bannerUrl ? String(detail.bannerUrl) : '';
+
+	revokeObjectUrl(manageIconObjectUrl);
+	revokeObjectUrl(manageBannerObjectUrl);
+	manageIconObjectUrl = null;
+	manageBannerObjectUrl = null;
+
+	if (manageIconUrlInput) manageIconUrlInput.value = '';
+	if (manageBannerUrlInput) manageBannerUrlInput.value = '';
+	if (manageIconFileInput) manageIconFileInput.value = '';
+	if (manageBannerFileInput) manageBannerFileInput.value = '';
+
+	setManageIconEditVisible(false);
+	setManageBannerEditVisible(false);
+
+	setMediaPreviewImage(manageIconPreview, manageIconPlaceholder, manageCurrentIconUrl);
+	setMediaPreviewImage(manageBannerPreview, manageBannerPlaceholder, manageCurrentBannerUrl);
+}
+
 function updateManagePanel(detail) {
 	if (!managePanel) return;
 	// Directory is v2-only; owner tools are optional (access key required).
 	managePanel.classList.remove('hidden');
 
 	if (manageLinkInput) manageLinkInput.value = detail.link || '';
-	if (manageIconUrlInput) manageIconUrlInput.value = detail.iconUrl || '';
-	if (manageBannerUrlInput) manageBannerUrlInput.value = detail.bannerUrl || '';
-	// File inputs cannot be pre-filled; clear any previous selections when switching switches
-	if (manageIconFileInput) manageIconFileInput.value = '';
-	if (manageBannerFileInput) manageBannerFileInput.value = '';
+	resetManageMediaPickers(detail);
 
 	const storedKey = getStoredManagementKey(detail.uid);
 	if (storedKey && manageKeyInput && !manageKeyInput.value) {
@@ -670,14 +1094,40 @@ async function submitManageAppearance() {
 
 	const iconFile = manageIconFileInput?.files?.[0] || null;
 	const iconUrl = String(manageIconUrlInput?.value || '').trim();
-	if (!iconFile && iconUrl !== String(detail.iconUrl || '')) {
-		updates.iconUrl = iconUrl;
+	let iconMode = manageIconAction;
+	if (iconMode === 'keep' && (iconFile || iconUrl)) {
+		iconMode = 'replace';
+	}
+	if (iconMode === 'remove') {
+		updates.iconUrl = '';
+	} else if (iconMode === 'replace') {
+		if (!iconFile && !iconUrl) {
+			manageStatus.textContent = 'Icon: please choose a file or enter a URL (or click Cancel).';
+			manageStatus.className = 'comment-status error';
+			return;
+		}
+		if (!iconFile) {
+			updates.iconUrl = iconUrl;
+		}
 	}
 
 	const bannerFile = manageBannerFileInput?.files?.[0] || null;
 	const bannerUrl = String(manageBannerUrlInput?.value || '').trim();
-	if (!bannerFile && bannerUrl !== String(detail.bannerUrl || '')) {
-		updates.bannerUrl = bannerUrl;
+	let bannerMode = manageBannerAction;
+	if (bannerMode === 'keep' && (bannerFile || bannerUrl)) {
+		bannerMode = 'replace';
+	}
+	if (bannerMode === 'remove') {
+		updates.bannerUrl = '';
+	} else if (bannerMode === 'replace') {
+		if (!bannerFile && !bannerUrl) {
+			manageStatus.textContent = 'Banner: please choose a file or enter a URL (or click Cancel).';
+			manageStatus.className = 'comment-status error';
+			return;
+		}
+		if (!bannerFile) {
+			updates.bannerUrl = bannerUrl;
+		}
 	}
 
 	const hasFileUpload = Boolean(iconFile || bannerFile);
@@ -726,8 +1176,7 @@ async function submitManageAppearance() {
 		if (manageKeyInput) {
 			manageKeyInput.value = '';
 		}
-		if (manageIconFileInput) manageIconFileInput.value = '';
-		if (manageBannerFileInput) manageBannerFileInput.value = '';
+	resetManageMediaPickers(currentSwitchDetail || {});
 
 		manageStatus.textContent = 'Saved. (This key is now invalid — generate a new link to edit again.)';
 		manageStatus.className = 'comment-status success';
@@ -822,6 +1271,7 @@ function closeDetail() {
 	currentSwitchId = null;
 	currentSwitchDetail = null;
 	clearHeroBanner();
+	restoreHeroText();
 	clearSwitchQuery();
 }
 
