@@ -41,7 +41,7 @@ describe('Website SPA (v2 directory)', () => {
 		// Start at home
 		window.history.pushState({}, '', '/');
 
-		const uid = 'vs_abcdefghijklmnopqrstuvwxyza';
+		const uid = 'vs_75bz1byjrbv0jfmxv8dq27rp2w';
 		const iconUrl = 'https://example.com/icon.png';
 		const bannerUrl = 'https://example.com/banner.jpg';
 		const accessKey = '00000000-0000-4000-8000-000000000000';
@@ -160,6 +160,86 @@ describe('Website SPA (v2 directory)', () => {
 		expect(commentOptions.method).toBe('POST');
 		expect(commentOptions.headers['X-Api-Key']).toBe(accessKey);
 		expect(String(commentOptions.body)).toContain('Hello');
+	});
+
+	test('manage-on-website deep link (#accessKey=...) loads the key and triggers autoscroll', async () => {
+		// Arrange DOM
+		const websiteRoot = path.resolve(__dirname, '../../../website');
+		const html = fs.readFileSync(path.join(websiteRoot, 'index.html'), 'utf8');
+		document.documentElement.innerHTML = html;
+
+		// Prevent timers / UI popups from interfering with Jest
+		window.setInterval = jest.fn();
+		window.alert = jest.fn();
+		window.requestAnimationFrame = (cb) => cb();
+
+		const uid = 'vs_75bz1byjrbv0jfmxv8dq27rp2w';
+		const accessKey = '896a0f98-fde4-409a-b81a-74cae381969b';
+
+		// Start at the deep link with fragment
+		window.history.pushState({}, '', `/switch/${uid}#accessKey=${accessKey}`);
+
+		// Spy on history.replaceState (JSDOM doesn't reliably update window.location.hash)
+		const originalReplaceState = window.history.replaceState.bind(window.history);
+		window.history.replaceState = jest.fn((...args) => originalReplaceState(...args));
+
+		const publicSwitchDetail = {
+			success: true,
+			data: {
+				uid,
+				description: 'Pretty Switch',
+				location: 'Test City',
+				category: 'Community',
+				state: false,
+				lastToggled: 0,
+				toggleCount: 0,
+				userCount: 0,
+				link: '',
+				iconUrl: '',
+				bannerUrl: '',
+				ownerProfileUrl: '',
+				events: []
+			}
+		};
+
+		global.fetch = jest.fn(async (url) => {
+			const u = String(url);
+			if (u.endsWith('/public-switches')) {
+				return createMockResponse({ success: true, data: { switches: [], count: 0, timestamp: Date.now() } });
+			}
+			if (u.endsWith(`/switch/${uid}`)) {
+				return createMockResponse(publicSwitchDetail);
+			}
+			if (u.endsWith('/categories')) {
+				return createMockResponse({ success: true, data: {} });
+			}
+			return createMockResponse({ success: false, error: `Unhandled fetch in test: ${u}` }, false, 404);
+		});
+
+		// Spy on scroll
+		const managePanel = document.getElementById('managePanel');
+		managePanel.scrollIntoView = jest.fn();
+
+		// Load website script and run init manually (JSDOM won't re-fire DOMContentLoaded after eval)
+		const script = fs.readFileSync(path.join(websiteRoot, 'script.js'), 'utf8');
+		window.eval(script);
+		window.init();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Assert: fragment is cleared (key should not remain in the URL)
+		expect(window.history.replaceState).toHaveBeenCalled();
+		const replaceCalls = window.history.replaceState.mock.calls;
+		const lastReplace = replaceCalls[replaceCalls.length - 1] || [];
+		const urlArg = String(lastReplace[2] || '');
+		expect(urlArg).not.toContain('#accessKey=');
+
+		// Assert: key is populated into the management box
+		const manageKey = document.getElementById('manageKey');
+		expect(manageKey.value).toBe(accessKey);
+
+		// Assert: autoscroll attempted
+		expect(managePanel.scrollIntoView).toHaveBeenCalled();
 	});
 });
 
