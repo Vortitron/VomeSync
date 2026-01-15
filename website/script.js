@@ -63,6 +63,10 @@ let currentSwitchDetail = null;
 const heroSection = document.querySelector('.hero');
 const heroTitleEl = document.getElementById('heroTitle');
 const heroSubtitleEl = document.getElementById('heroSubtitle');
+const heroButtonsDefault = document.getElementById('heroButtonsDefault');
+const heroButtonsSwitch = document.getElementById('heroButtonsSwitch');
+const heroStatusButton = document.getElementById('heroStatusButton');
+const heroHaLink = document.getElementById('heroHaLink');
 const homeBrand = document.getElementById('homeBrand');
 const loadingMessage = document.getElementById('loadingMessage');
 const errorMessage = document.getElementById('errorMessage');
@@ -211,10 +215,33 @@ function setHeroText(title, subtitle) {
 	if (heroSubtitleEl) heroSubtitleEl.textContent = subtitle || '';
 }
 
+function updateHeroStatusButton(detail) {
+	if (!heroStatusButton) return;
+	const stateKnown = typeof detail?.state === 'boolean';
+	const isOn = stateKnown ? Boolean(detail.state) : false;
+	const statusLabel = stateKnown ? `Status: ${isOn ? 'ON' : 'OFF'}` : 'Status: Unknown';
+
+	heroStatusButton.textContent = statusLabel;
+	heroStatusButton.classList.toggle('status-on', stateKnown && isOn);
+	heroStatusButton.classList.toggle('status-off', stateKnown && !isOn);
+
+	const ts = detail?.lastToggled ? Number(detail.lastToggled) : 0;
+	if (ts) {
+		const absolute = new Date(ts).toLocaleString();
+		const relative = formatTimeAgo(new Date(ts));
+		heroStatusButton.title = `Last changed: ${absolute} (${relative})`;
+	} else if (stateKnown) {
+		heroStatusButton.title = 'No activity yet';
+	} else {
+		heroStatusButton.title = 'Status unknown';
+	}
+}
+
 function restoreHeroText() {
 	if (!heroTitleEl || !heroSubtitleEl) return;
 	heroTitleEl.innerHTML = DEFAULT_HERO_TITLE_HTML;
 	heroSubtitleEl.textContent = DEFAULT_HERO_SUBTITLE_TEXT;
+	updateHeroStatusButton(null);
 }
 
 function setHeroForSwitch(detail) {
@@ -233,6 +260,7 @@ function setHeroForSwitch(detail) {
 	}
 
 	setHeroText(title, subtitleBits.join('  ·  ') || DEFAULT_HERO_SUBTITLE_TEXT);
+	updateHeroStatusButton(detail);
 }
 
 function init() {
@@ -836,6 +864,16 @@ function handleStateUpdate(uid, state, timestamp) {
 	if (card && idx >= 0) {
 		updateSwitchCardElement(card, allSwitches[idx]);
 		updateStats();
+	}
+
+	if (currentSwitchId && currentSwitchId === targetUid) {
+		currentSwitchDetail = {
+			...(currentSwitchDetail || {}),
+			uid: targetUid,
+			state: Boolean(state),
+			lastToggled: timestamp ? Number(timestamp) : (currentSwitchDetail?.lastToggled || null)
+		};
+		updateHeroStatusButton(currentSwitchDetail);
 	}
 }
 

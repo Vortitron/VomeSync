@@ -5,7 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>VomeSync - Public Remote Switches</title>
 	<meta name="description" content="Discover and monitor public remote switches from the VomeSync community. Connect your Home Assistant to global IoT devices.">
-	<link rel="stylesheet" href="/styles.css?v=20260114-3">
+	<link rel="stylesheet" href="/styles.css?v=20260114-4">
 	<link rel="apple-touch-icon" sizes="180x180" href="/favicon/apple-icon-180x180.png">
 	<link rel="icon" type="image/png" sizes="32x32" href="/favicon/favicon-32x32.png">
 	<link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-16x16.png">
@@ -46,7 +46,7 @@
 				<p id="heroSubtitle" class="hero-subtitle">
 					Connect to community-shared virtual switches. Monitor states in real-time and sync automations across the globe.
 				</p>
-				<div class="hero-buttons">
+				<div id="heroButtonsDefault" class="hero-buttons hero-buttons-default">
 					<a href="#switches" class="btn btn-primary btn-lg">
 						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
 						Explore Switches
@@ -54,6 +54,14 @@
 					<a href="https://github.com/Vortitron/VomeSync" class="btn btn-ghost btn-lg" target="_blank" rel="noopener">
 						View on GitHub
 					</a>
+				</div>
+				<div id="heroButtonsSwitch" class="hero-buttons hero-buttons-switch">
+					<a id="heroHaLink" href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration" class="btn btn-primary btn-lg" target="_blank" rel="noopener" title="Opens the VomeSync HACS repository in Home Assistant">
+						Add to Home Assistant
+					</a>
+					<button id="heroStatusButton" type="button" class="btn btn-secondary btn-lg hero-status-btn" title="Status unknown">
+						Status: Unknown
+					</button>
 				</div>
 			</div>
 		</div>
@@ -136,7 +144,7 @@
 			<div class="detail-card">
 				<div class="detail-header">
 					<div>
-						<p class="detail-breadcrumb"><button id="backToList" class="link-button">← Back to switches</button></p>
+						<p class="detail-breadcrumb"><button id="backToList" class="ghost-btn back-button">← Back to switches</button></p>
 						<div class="detail-title-row">
 							<img id="detailIcon" class="detail-icon hidden" alt="">
 							<h2 id="detailTitle" class="detail-title">Switch details</h2>
@@ -327,7 +335,7 @@
 		</div>
 	</div>
 
-	<script src="/network-bg.js?v=20260114-3"></script>
-	<script src="/script.js?v=20260114-3"></script>
+	<script src="/network-bg.js?v=20260114-4"></script>
+	<script src="/script.js?v=20260114-4"></script>
 </body>
 </html>
