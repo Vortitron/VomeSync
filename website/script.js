@@ -154,6 +154,8 @@ let quickViewDetail = null;
 const AUTO_REFRESH_MS = 60_000;
 const LAST_UPDATE_TICK_MS = 1_000;
 
+const HOME_ASSISTANT_CONFIG_FLOW_URL = 'https://my.home-assistant.io/redirect/config_flow_start/?domain=vomesync';
+
 let lastSwitchFetchAt = 0;
 let autoRefreshTimer = null;
 let lastUpdateTimer = null;
@@ -215,6 +217,14 @@ function setHeroText(title, subtitle) {
 	if (heroSubtitleEl) heroSubtitleEl.textContent = subtitle || '';
 }
 
+function buildHomeAssistantConfigLink(uid) {
+	const base = HOME_ASSISTANT_CONFIG_FLOW_URL;
+	const trimmed = String(uid || '').trim();
+	if (!trimmed) return base;
+	// We don't know if HA will use this yet, but it is safe to include and still copy UID to clipboard.
+	return `${base}&uid=${encodeURIComponent(trimmed)}`;
+}
+
 function updateHeroStatusButton(detail) {
 	if (!heroStatusButton) return;
 	const stateKnown = typeof detail?.state === 'boolean';
@@ -242,6 +252,9 @@ function restoreHeroText() {
 	heroTitleEl.innerHTML = DEFAULT_HERO_TITLE_HTML;
 	heroSubtitleEl.textContent = DEFAULT_HERO_SUBTITLE_TEXT;
 	updateHeroStatusButton(null);
+	if (heroHaLink) {
+		heroHaLink.href = HOME_ASSISTANT_CONFIG_FLOW_URL;
+	}
 }
 
 function setHeroForSwitch(detail) {
@@ -261,6 +274,9 @@ function setHeroForSwitch(detail) {
 
 	setHeroText(title, subtitleBits.join('  ·  ') || DEFAULT_HERO_SUBTITLE_TEXT);
 	updateHeroStatusButton(detail);
+	if (heroHaLink) {
+		heroHaLink.href = buildHomeAssistantConfigLink(detail.uid);
+	}
 }
 
 function init() {
@@ -357,6 +373,13 @@ function setupEventListeners() {
 			} catch {
 				// ignore
 			}
+		});
+	}
+
+	if (heroHaLink) {
+		heroHaLink.addEventListener('click', () => {
+			if (!currentSwitchId) return;
+			copyText(currentSwitchId, heroHaLink, 'Add to Home Assistant');
 		});
 	}
 
