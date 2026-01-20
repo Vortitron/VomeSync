@@ -217,14 +217,6 @@ function setHeroText(title, subtitle) {
 	if (heroSubtitleEl) heroSubtitleEl.textContent = subtitle || '';
 }
 
-function buildHomeAssistantConfigLink(uid) {
-	const base = HOME_ASSISTANT_CONFIG_FLOW_URL;
-	const trimmed = String(uid || '').trim();
-	if (!trimmed) return base;
-	// We don't know if HA will use this yet, but it is safe to include and still copy UID to clipboard.
-	return `${base}&uid=${encodeURIComponent(trimmed)}`;
-}
-
 function updateHeroStatusButton(detail) {
 	if (!heroStatusButton) return;
 	const stateKnown = typeof detail?.state === 'boolean';
@@ -275,7 +267,7 @@ function setHeroForSwitch(detail) {
 	setHeroText(title, subtitleBits.join('  ·  ') || DEFAULT_HERO_SUBTITLE_TEXT);
 	updateHeroStatusButton(detail);
 	if (heroHaLink) {
-		heroHaLink.href = buildHomeAssistantConfigLink(detail.uid);
+		heroHaLink.href = HOME_ASSISTANT_CONFIG_FLOW_URL;
 	}
 }
 

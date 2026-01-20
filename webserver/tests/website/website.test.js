@@ -156,10 +156,9 @@ describe('Website SPA (v2 directory)', () => {
 		// Hero text should reflect the switch (not the marketing headline)
 		expect(document.getElementById('heroTitle').textContent).toBe('Pretty Switch');
 
-		// Home Assistant deep link should target config flow (with UID appended)
+		// Home Assistant deep link should target config flow
 		const heroHaLink = document.getElementById('heroHaLink');
 		expect(heroHaLink.getAttribute('href')).toContain('my.home-assistant.io/redirect/config_flow_start/?domain=vomesync');
-		expect(heroHaLink.getAttribute('href')).toContain(`uid=${uid}`);
 
 		// Icon: should be visible in detail header
 		const detailIcon = document.getElementById('detailIcon');
