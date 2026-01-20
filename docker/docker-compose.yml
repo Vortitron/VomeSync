@@ -128,6 +128,8 @@ services:
     ports:
       - "${VOMESYNC_API_DEV_HOST_PORT:-3091}:3091"
       - "${VOMESYNC_WS_DEV_HOST_PORT:-3002}:3002"
+    volumes:
+      - webserver_media_dev:/usr/src/app/media
     networks:
       - vomesync_network
     healthcheck:
@@ -188,6 +190,9 @@ volumes:
     driver: local
   webserver_media:
     name: ${VOMESYNC_MEDIA_VOLUME_NAME:-vomesync_webserver_media}
+    driver: local
+  webserver_media_dev:
+    name: ${VOMESYNC_MEDIA_DEV_VOLUME_NAME:-vomesync_webserver_media_dev}
     driver: local
 
 networks:

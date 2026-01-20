@@ -135,7 +135,16 @@ const quickViewTitle = document.getElementById('quickViewTitle');
 const quickViewSubtitle = document.getElementById('quickViewSubtitle');
 const quickViewMeta = document.getElementById('quickViewMeta');
 const quickViewCopyUidBtn = document.getElementById('quickViewCopyUid');
+const quickViewCopyHaBtn = document.getElementById('quickViewCopyHa');
 const quickViewOpenDetailsBtn = document.getElementById('quickViewOpenDetails');
+
+const haDialog = document.getElementById('haDialog');
+const haDialogBackdrop = document.getElementById('haDialogBackdrop');
+const haDialogCloseBtn = document.getElementById('haDialogClose');
+const haDialogCode = document.getElementById('haDialogCode');
+const haDialogCopyBtn = document.getElementById('haDialogCopyBtn');
+const haDialogCopyOpenBtn = document.getElementById('haDialogCopyOpenBtn');
+const haDialogOpenLink = document.getElementById('haDialogOpenLink');
 
 const DEFAULT_HERO_TITLE_HTML = heroTitleEl ? heroTitleEl.innerHTML : '';
 const DEFAULT_HERO_SUBTITLE_TEXT = heroSubtitleEl ? heroSubtitleEl.textContent : '';
@@ -166,6 +175,8 @@ let wsClient = null;
 let wsReconnectTimer = null;
 let wsReconnectAttempts = 0;
 const wsSubscribedUids = new Set();
+
+let detailRefreshTimer = null;
 
 document.addEventListener('DOMContentLoaded', () => {
 	init();
@@ -369,9 +380,10 @@ function setupEventListeners() {
 	}
 
 	if (heroHaLink) {
-		heroHaLink.addEventListener('click', () => {
+		heroHaLink.addEventListener('click', (e) => {
 			if (!currentSwitchId) return;
-			copyText(currentSwitchId, heroHaLink, 'Add to Home Assistant');
+			e.preventDefault();
+			openHaDialogForUid(currentSwitchId);
 		});
 	}
 
@@ -548,9 +560,33 @@ function setupEventListeners() {
 			openSwitchDetails(uid, false);
 		});
 	}
+	if (quickViewCopyHaBtn) {
+		quickViewCopyHaBtn.addEventListener('click', () => {
+			if (!quickViewUid) return;
+			copyAndOpenHomeAssistant(quickViewUid, quickViewCopyHaBtn, '🏠 Copy UID + Add to HA');
+		});
+	}
+	if (haDialogCloseBtn) haDialogCloseBtn.addEventListener('click', closeHaDialog);
+	if (haDialogBackdrop) haDialogBackdrop.addEventListener('click', closeHaDialog);
+	if (haDialogCopyBtn) {
+		haDialogCopyBtn.addEventListener('click', () => {
+			const uid = haDialogCode?.value || '';
+			if (!uid) return;
+			copyText(uid, haDialogCopyBtn, 'Copy');
+		});
+	}
+	if (haDialogCopyOpenBtn) {
+		haDialogCopyOpenBtn.addEventListener('click', () => {
+			const uid = haDialogCode?.value || '';
+			if (!uid) return;
+			copyAndOpenHomeAssistant(uid, haDialogCopyOpenBtn, 'Copy and Open');
+			closeHaDialog();
+		});
+	}
 	window.addEventListener('keydown', (e) => {
 		if (e.key === 'Escape') {
 			closeQuickView();
+			closeHaDialog();
 		}
 	});
 
@@ -889,6 +925,84 @@ function handleStateUpdate(uid, state, timestamp) {
 			lastToggled: timestamp ? Number(timestamp) : (currentSwitchDetail?.lastToggled || null)
 		};
 		updateHeroStatusButton(currentSwitchDetail);
+		scheduleDetailRefresh(targetUid);
+	}
+}
+
+function scheduleDetailRefresh(uid) {
+	if (!uid || uid !== currentSwitchId) return;
+	if (detailRefreshTimer) return;
+	detailRefreshTimer = setTimeout(() => {
+		detailRefreshTimer = null;
+		refreshSwitchDetail(uid);
+	}, 800);
+}
+
+async function refreshSwitchDetail(uid) {
+	if (!uid || uid !== currentSwitchId) return;
+	try {
+		const response = await fetch(`${API_BASE_URL}/switch/${uid}`);
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+		}
+		const data = await response.json();
+		if (!data.success || !data.data) {
+			throw new Error(data.error || 'Failed to load switch detail');
+		}
+
+		const detail = data.data;
+		currentSwitchDetail = detail;
+		updateHeroStatusButton(detail);
+
+		// Update activity + counts without resetting the manage panel inputs.
+		updateDetailActivity(detail);
+		syncSwitchDetailToIndex(detail);
+	} catch (error) {
+		console.warn('Failed to refresh switch detail:', error);
+	}
+}
+
+function updateDetailActivity(detail) {
+	if (!detail) return;
+
+	if (detailUsers) detailUsers.textContent = `${detail.userCount || 0} user${(detail.userCount || 0) === 1 ? '' : 's'}`;
+	if (detailToggles) detailToggles.textContent = `${detail.toggleCount || 0} toggles`;
+	if (detailLastChange) detailLastChange.textContent = detail.lastToggled ? formatTimeAgo(new Date(detail.lastToggled)) : 'Never';
+
+	// If the icon/banner/description changes, update visible pieces too
+	if (detailTitle) detailTitle.textContent = detail.description || 'Untitled switch';
+	if (detailIcon) {
+		const icon = String(detail.iconUrl || '').trim();
+		if (icon) {
+			detailIcon.src = icon;
+			detailIcon.classList.remove('hidden');
+		} else {
+			detailIcon.removeAttribute('src');
+			detailIcon.classList.add('hidden');
+		}
+	}
+
+	renderEvents(detail.events || []);
+}
+
+function syncSwitchDetailToIndex(detail) {
+	if (!detail || !detail.uid) return;
+	const idx = allSwitches.findIndex((sw) => sw && sw.uid === detail.uid);
+	if (idx >= 0) {
+		allSwitches[idx] = {
+			...allSwitches[idx],
+			state: detail.state,
+			lastToggled: detail.lastToggled,
+			toggleCount: detail.toggleCount,
+			userCount: detail.userCount,
+			iconUrl: detail.iconUrl || allSwitches[idx].iconUrl,
+			bannerUrl: detail.bannerUrl || allSwitches[idx].bannerUrl,
+			description: detail.description || allSwitches[idx].description,
+			location: detail.location || allSwitches[idx].location,
+			category: detail.category || allSwitches[idx].category
+		};
+		updateRenderedSwitchCards();
+		updateStats();
 	}
 }
 
@@ -1097,6 +1211,48 @@ function closeQuickView() {
 	if (quickViewTitle) quickViewTitle.textContent = 'Switch details';
 	if (quickViewSubtitle) quickViewSubtitle.textContent = '';
 	if (quickViewMeta) quickViewMeta.innerHTML = '';
+}
+
+function showHaDialog() {
+	if (!haDialog) return;
+	haDialog.classList.remove('hidden');
+	document.body.classList.add('modal-open');
+	haDialog.setAttribute('aria-hidden', 'false');
+}
+
+function closeHaDialog() {
+	if (!haDialog) return;
+	haDialog.classList.add('hidden');
+	document.body.classList.remove('modal-open');
+	haDialog.setAttribute('aria-hidden', 'true');
+	if (haDialogCode) haDialogCode.value = '';
+}
+
+function openHaDialogForUid(uid) {
+	const trimmed = String(uid || '').trim();
+	if (!trimmed) return;
+	if (haDialogCode) haDialogCode.value = trimmed;
+	if (haDialogOpenLink) haDialogOpenLink.href = HOME_ASSISTANT_CONFIG_FLOW_URL;
+	showHaDialog();
+}
+
+async function copyAndOpenHomeAssistant(uid, button, defaultLabel) {
+	const trimmed = String(uid || '').trim();
+	if (!trimmed) return;
+	if (button) {
+		copyText(trimmed, button, defaultLabel || button.textContent || 'Copy and Open');
+	} else {
+		try {
+			await navigator.clipboard.writeText(trimmed);
+		} catch {
+			// ignore
+		}
+	}
+	try {
+		window.open(HOME_ASSISTANT_CONFIG_FLOW_URL, '_blank', 'noopener');
+	} catch {
+		// ignore
+	}
 }
 
 function renderQuickView(detail) {

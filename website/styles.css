@@ -1012,6 +1012,51 @@ body.modal-open {
 	box-shadow: var(--shadow-xl);
 }
 
+.ha-dialog {
+	position: fixed;
+	inset: 0;
+	z-index: 2100;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 1.5rem;
+}
+
+.ha-dialog-backdrop {
+	position: absolute;
+	inset: 0;
+	background: rgba(15, 23, 42, 0.6);
+	backdrop-filter: blur(6px);
+}
+
+.ha-dialog-card {
+	position: relative;
+	z-index: 1;
+	width: min(720px, 100%);
+	background: rgba(30, 41, 59, 0.96);
+	border: 1px solid rgba(71, 85, 105, 0.7);
+	border-radius: var(--radius-lg);
+	padding: 1.5rem;
+	box-shadow: var(--shadow-xl);
+}
+
+.ha-dialog-code {
+	display: flex;
+	gap: 0.75rem;
+	align-items: center;
+	margin: 1rem 0 1.25rem;
+}
+
+.ha-dialog-code input {
+	flex: 1;
+	padding: 0.65rem 0.75rem;
+	border-radius: var(--radius);
+	border: 1px solid var(--border);
+	background: var(--bg-secondary);
+	color: var(--text-primary);
+	font-size: 0.95rem;
+}
+
 .quickview-close {
 	position: absolute;
 	top: 1rem;

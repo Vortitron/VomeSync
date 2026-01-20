@@ -5,7 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>VomeSync - Public Remote Switches</title>
 	<meta name="description" content="Discover and monitor public remote switches from the VomeSync community. Connect your Home Assistant to global IoT devices.">
-	<link rel="stylesheet" href="/styles.css?v=20260114-4">
+	<link rel="stylesheet" href="/styles.css?v=20260114-5">
 	<link rel="apple-touch-icon" sizes="180x180" href="/favicon/apple-icon-180x180.png">
 	<link rel="icon" type="image/png" sizes="32x32" href="/favicon/favicon-32x32.png">
 	<link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-16x16.png">
@@ -330,12 +330,30 @@
 			<div id="quickViewMeta" class="detail-meta"></div>
 			<div class="detail-actions">
 				<button id="quickViewCopyUid" type="button" class="ghost-btn">📋 Copy UID</button>
+					<button id="quickViewCopyHa" type="button" class="ghost-btn">🏠 Copy UID + Add to HA</button>
 				<button id="quickViewOpenDetails" type="button" class="ghost-btn">👁️ Details</button>
 			</div>
 		</div>
 	</div>
 
-	<script src="/network-bg.js?v=20260114-4"></script>
-	<script src="/script.js?v=20260114-4"></script>
+		<div id="haDialog" class="ha-dialog hidden" aria-hidden="true">
+			<div id="haDialogBackdrop" class="ha-dialog-backdrop"></div>
+			<div class="ha-dialog-card" role="dialog" aria-modal="true" aria-labelledby="haDialogTitle">
+				<button id="haDialogClose" type="button" class="quickview-close" aria-label="Close">✕</button>
+				<h2 id="haDialogTitle" class="detail-title">Add to Home Assistant</h2>
+				<p class="muted small">Open Home Assistant, start VomeSync setup, then paste this UID when prompted.</p>
+				<div class="ha-dialog-code">
+					<input id="haDialogCode" type="text" readonly>
+					<button id="haDialogCopyBtn" type="button" class="ghost-btn">Copy</button>
+				</div>
+				<div class="detail-actions">
+					<button id="haDialogCopyOpenBtn" type="button" class="btn btn-primary">Copy and Open</button>
+					<a id="haDialogOpenLink" href="https://my.home-assistant.io/redirect/config_flow_start/?domain=vomesync" class="btn btn-secondary" target="_blank" rel="noopener">Open Home Assistant</a>
+				</div>
+			</div>
+		</div>
+
+	<script src="/network-bg.js?v=20260114-5"></script>
+	<script src="/script.js?v=20260114-5"></script>
 </body>
 </html>
