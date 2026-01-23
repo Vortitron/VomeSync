@@ -3,7 +3,7 @@
 		"step": {
 			"user": {
 				"title": "Set up VomeSync",
-				"description": "Set up VomeSync using **keypair authentication**. This uses a locally stored signing key so you can migrate servers later without changing UIDs.\n\nIf you already have a switch UID, paste it below to subscribe immediately.\n\nUse **Default URLs** for sync.vome.io, or untick to edit server + WebSocket URLs. Use **Generate new user key** to create a fresh signing key, or untick to paste an existing one.\n\n⚠️ Public mode is NOT private — anyone with the UID can view switch state and activity. Toggling requires an access key.",
+				"description": "VomeSync uses **keypair authentication** using a locally stored signing key.\n\nUse **Generate new user key** to create a fresh signing key, or untick to paste an existing one after submit.\n\n⚠️ Anyone with the UID can view switch state and activity in Public mode.",
 				"data": {
 					"uid": "Switch UID (optional)",
 					"generate_new_key": "Generate new user key",
