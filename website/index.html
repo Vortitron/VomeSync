@@ -26,12 +26,12 @@
 				<span class="brand-name">VomeSync</span>
 				<span id="envBadge" class="env-badge" style="display:none"></span>
 			</a>
+			<div id="navSwitchStatus" class="nav-switch-status hidden" role="button" tabindex="0" aria-label="Open switch status"></div>
 			<div class="nav-links">
-				<a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration" class="btn btn-secondary" target="_blank" rel="noopener">
+				<button id="hacsBtn" type="button" class="btn btn-secondary">
 					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
 					Add to HACS
-				</a>
-				<a id="loginLink" href="/login" class="btn btn-primary" target="_blank" rel="noopener">Login</a>
+				</button>
 			</div>
 		</div>
 	</nav>
@@ -187,24 +187,45 @@
 						<ul id="detailEvents" class="timeline"></ul>
 					</div>
 					<div>
-						<h3>Comments (owner/API key)</h3>
-						<form id="commentForm" class="comment-form">
-							<label for="commentKey">API/access key (not stored):</label>
-							<input id="commentKey" type="password" autocomplete="off" placeholder="Enter key to comment">
-							<label for="commentText">Comment:</label>
-							<textarea id="commentText" rows="3" maxlength="500" placeholder="Why the switch changed, notes, etc."></textarea>
-							<div class="comment-actions">
-								<button type="submit" class="refresh-btn">💬 Post comment</button>
-								<span id="commentStatus" class="comment-status"></span>
+						<div id="authPanel" class="auth-panel comment-form">
+							<h3>Switch authentication</h3>
+							<p class="muted small">Authenticate to comment or edit this switch. Keys are stored for this browser session only.</p>
+							<div id="authLoggedOut">
+								<button id="authLoginBtn" type="button" class="refresh-btn">Authenticate to do this…</button>
 							</div>
-						</form>
+							<div id="authLoggedIn" class="hidden">
+								<p id="authStatusText" class="muted small"></p>
+								<div class="comment-actions">
+									<button id="authChangeBtn" type="button" class="ghost-btn">Change key</button>
+									<button id="authLogoutBtn" type="button" class="ghost-btn">Forget key</button>
+								</div>
+							</div>
+							<span id="authStatus" class="comment-status hidden"></span>
+						</div>
+
+						<div id="commentSection" class="hidden">
+							<h3>Comments (owner/API key)</h3>
+							<form id="commentForm" class="comment-form">
+								<label for="commentText">Comment:</label>
+								<textarea id="commentText" rows="3" maxlength="500" placeholder="Why the switch changed, notes, etc."></textarea>
+								<label id="commentStateLabel" for="commentState">Change state (optional):</label>
+								<select id="commentState">
+									<option value="">No change</option>
+									<option value="on">Turn ON</option>
+									<option value="off">Turn OFF</option>
+								</select>
+								<p id="commentKeyNote" class="muted small comment-note">State changes require authentication.</p>
+								<div class="comment-actions">
+									<button type="submit" class="refresh-btn">💬 Post comment</button>
+									<span id="commentStatus" class="comment-status"></span>
+								</div>
+							</form>
+						</div>
 
 						<div id="managePanel" class="manage-panel hidden">
 							<h3>Owner tools (appearance)</h3>
-							<p class="muted small">Use a delegated access key with <span class="mono">metadata</span> permission (created in Home Assistant) to update icon/banner/link.</p>
+							<p class="muted small">Use a delegated access key with <span class="mono">metadata</span>, <span class="mono">toggle</span>, and <span class="mono">comment</span> permissions (created in Home Assistant) to update icon/banner/link and toggle/comment here.</p>
 							<form id="manageForm" class="comment-form">
-								<label for="manageKey">Management access key (not stored):</label>
-								<input id="manageKey" type="text" autocomplete="off" placeholder="Paste access key">
 								<label for="manageLink">Link (optional):</label>
 								<input id="manageLink" type="url" autocomplete="off" placeholder="https://example.com">
 
@@ -252,7 +273,6 @@
 
 								<div class="comment-actions">
 									<button type="submit" class="refresh-btn">💾 Save appearance</button>
-									<button id="manageForgetBtn" type="button" class="ghost-btn">Forget key</button>
 									<span id="manageStatus" class="comment-status"></span>
 								</div>
 							</form>
@@ -330,7 +350,8 @@
 			<div id="quickViewMeta" class="detail-meta"></div>
 			<div class="detail-actions">
 				<button id="quickViewCopyUid" type="button" class="ghost-btn">📋 Copy UID</button>
-					<button id="quickViewCopyHa" type="button" class="ghost-btn">🏠 Copy UID + Add to HA</button>
+				<button id="quickViewCopyHa" type="button" class="ghost-btn">🏠 Copy UID + Add to HA</button>
+				<button id="quickViewAddHacs" type="button" class="ghost-btn">➕ Add integration to HACS</button>
 				<button id="quickViewOpenDetails" type="button" class="ghost-btn">👁️ Details</button>
 			</div>
 		</div>
@@ -342,6 +363,11 @@
 				<button id="haDialogClose" type="button" class="quickview-close" aria-label="Close">✕</button>
 				<h2 id="haDialogTitle" class="detail-title">Add to Home Assistant</h2>
 				<p class="muted small">Open Home Assistant, start VomeSync setup, then paste this UID when prompted.</p>
+				<div class="ha-dialog-badge">
+					<a id="haDialogBadgeLink" href="https://my.home-assistant.io/redirect/config_flow_start/?domain=vomesync" target="_blank" rel="noopener">
+						<img src="https://my.home-assistant.io/badges/config_flow_start.svg" alt="Add to Home Assistant">
+					</a>
+				</div>
 				<div class="ha-dialog-code">
 					<input id="haDialogCode" type="text" readonly>
 					<button id="haDialogCopyBtn" type="button" class="ghost-btn">Copy</button>
@@ -349,6 +375,63 @@
 				<div class="detail-actions">
 					<button id="haDialogCopyOpenBtn" type="button" class="btn btn-primary">Copy and Open</button>
 					<a id="haDialogOpenLink" href="https://my.home-assistant.io/redirect/config_flow_start/?domain=vomesync" class="btn btn-secondary" target="_blank" rel="noopener">Open Home Assistant</a>
+				</div>
+			</div>
+		</div>
+
+		<div id="hacsDialog" class="ha-dialog hidden" aria-hidden="true">
+			<div id="hacsDialogBackdrop" class="ha-dialog-backdrop"></div>
+			<div class="ha-dialog-card" role="dialog" aria-modal="true" aria-labelledby="hacsDialogTitle">
+				<button id="hacsDialogClose" type="button" class="quickview-close" aria-label="Close">✕</button>
+				<h2 id="hacsDialogTitle" class="detail-title">Add to HACS</h2>
+				<p class="muted small">Open HACS and add the VomeSync integration repository.</p>
+				<div class="ha-dialog-badge">
+					<a id="hacsDialogBadgeLink" href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration" target="_blank" rel="noopener">
+						<img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Add to HACS">
+					</a>
+				</div>
+				<div class="ha-dialog-code">
+					<input id="hacsDialogRepo" type="text" readonly>
+					<button id="hacsDialogCopyBtn" type="button" class="ghost-btn">Copy repo URL</button>
+				</div>
+				<div class="detail-actions">
+					<a id="hacsDialogOpenLink" href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration" class="btn btn-secondary" target="_blank" rel="noopener">Open HACS</a>
+				</div>
+			</div>
+		</div>
+
+		<div id="toggleDialog" class="ha-dialog hidden" aria-hidden="true">
+			<div id="toggleDialogBackdrop" class="ha-dialog-backdrop"></div>
+			<div class="ha-dialog-card" role="dialog" aria-modal="true" aria-labelledby="toggleDialogTitle">
+				<button id="toggleDialogClose" type="button" class="quickview-close" aria-label="Close">✕</button>
+				<h2 id="toggleDialogTitle" class="detail-title">Switch status</h2>
+				<p class="muted small">Tap the switch to toggle. Live updates appear below.</p>
+				<div class="toggle-dialog-row">
+					<label class="toggle-switch toggle-switch-large">
+						<input id="toggleDialogSwitch" type="checkbox">
+						<span class="toggle-slider"></span>
+					</label>
+					<span id="toggleDialogState" class="muted small">Status: Unknown</span>
+				</div>
+				<div class="toggle-dialog-activity">
+					<h4>Recent activity</h4>
+					<ul id="toggleDialogEvents" class="timeline"></ul>
+				</div>
+				<span id="toggleDialogStatus" class="comment-status"></span>
+			</div>
+		</div>
+
+		<div id="authDialog" class="ha-dialog hidden" aria-hidden="true">
+			<div id="authDialogBackdrop" class="ha-dialog-backdrop"></div>
+			<div class="ha-dialog-card" role="dialog" aria-modal="true" aria-labelledby="authDialogTitle">
+				<button id="authDialogClose" type="button" class="quickview-close" aria-label="Close">✕</button>
+				<h2 id="authDialogTitle" class="detail-title">Switch authentication</h2>
+				<p class="muted small">Enter a management or API key to unlock edit and comment tools.</p>
+				<label for="authDialogKey" class="muted small">Access key</label>
+				<input id="authDialogKey" type="password" autocomplete="off" placeholder="Paste management or API key">
+				<div class="comment-actions">
+					<button id="authDialogLoginBtn" type="button" class="refresh-btn">Authenticate</button>
+					<span id="authDialogStatus" class="comment-status"></span>
 				</div>
 			</div>
 		</div>

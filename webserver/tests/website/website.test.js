@@ -118,9 +118,11 @@ describe('Website SPA (v2 directory)', () => {
 		// Load website script
 		const script = fs.readFileSync(path.join(websiteRoot, 'script.js'), 'utf8');
 		window.eval(script);
+		window.setupEventListeners();
 
 		// Act: load list, open detail, post a comment
 		// Note: functions are global in this static site (inline handlers depend on them).
+		window.sessionStorage.setItem(`vomesync_api_key:${uid}`, accessKey);
 		await window.loadSwitches();
 
 		const grid = document.getElementById('switchesGrid');
@@ -138,6 +140,13 @@ describe('Website SPA (v2 directory)', () => {
 		const quickView = document.getElementById('quickView');
 		expect(quickView.classList.contains('hidden')).toBe(false);
 		expect(document.getElementById('quickViewTitle').textContent).toBe('Pretty Switch');
+
+		const quickViewAddHacsBtn = document.getElementById('quickViewAddHacs');
+		quickViewAddHacsBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+		const hacsDialog = document.getElementById('hacsDialog');
+		expect(hacsDialog.classList.contains('hidden')).toBe(false);
+		window.closeHacsDialog();
+		expect(quickView.classList.contains('hidden')).toBe(true);
 
 		window.closeQuickView();
 		expect(quickView.classList.contains('hidden')).toBe(true);
@@ -166,7 +175,6 @@ describe('Website SPA (v2 directory)', () => {
 		expect(detailIcon.getAttribute('src')).toBe(iconUrl);
 
 		// Post comment using v2 access key
-		document.getElementById('commentKey').value = accessKey;
 		document.getElementById('commentText').value = 'Hello';
 
 		if (typeof window.submitComment === 'function') {
@@ -187,6 +195,232 @@ describe('Website SPA (v2 directory)', () => {
 		// Closing detail should restore directory view
 		window.closeDetail();
 		expect(document.body.classList.contains('view-switch')).toBe(false);
+	});
+
+	test('management key enables hero status toggle', async () => {
+		// Arrange DOM
+		const websiteRoot = path.resolve(__dirname, '../../../website');
+		const html = fs.readFileSync(path.join(websiteRoot, 'index.html'), 'utf8');
+		document.documentElement.innerHTML = html;
+
+		window.setInterval = jest.fn();
+		window.alert = jest.fn();
+
+		const uid = 'vs_toggle_test';
+		const accessKey = '00000000-0000-4000-8000-111111111111';
+		const toggleOk = {
+			success: true,
+			data: {
+				uid,
+				state: true,
+				timestamp: Date.now(),
+				toggleCount: 1
+			}
+		};
+
+		const publicSwitchList = {
+			success: true,
+			data: {
+				switches: [{
+					uid,
+					description: 'Toggle Switch',
+					location: 'Test City',
+					category: 'Community',
+					state: false,
+					lastToggled: 0,
+					toggleCount: 0,
+					userCount: 0,
+					link: '',
+					iconUrl: '',
+					bannerUrl: '',
+					ownerProfileUrl: ''
+				}],
+				count: 1,
+				timestamp: Date.now()
+			}
+		};
+
+		const publicSwitchDetail = {
+			success: true,
+			data: {
+				uid,
+				description: 'Toggle Switch',
+				location: 'Test City',
+				category: 'Community',
+				state: false,
+				lastToggled: 0,
+				toggleCount: 0,
+				userCount: 0,
+				link: '',
+				iconUrl: '',
+				bannerUrl: '',
+				ownerProfileUrl: '',
+				events: []
+			}
+		};
+
+		global.fetch = jest.fn(async (url, options) => {
+			const u = String(url);
+			if (u.endsWith('/public-switches')) {
+				return createMockResponse(publicSwitchList);
+			}
+			if (u.endsWith(`/switch/${uid}`)) {
+				return createMockResponse(publicSwitchDetail);
+			}
+			if (u.endsWith('/categories')) {
+				return createMockResponse({ success: true, data: {} });
+			}
+			if (u.endsWith(`/v2/switch/${uid}/toggle`)) {
+				return createMockResponse(toggleOk);
+			}
+			return createMockResponse({ success: false, error: `Unhandled fetch in test: ${u}` }, false, 404);
+		});
+
+		const script = fs.readFileSync(path.join(websiteRoot, 'script.js'), 'utf8');
+		window.eval(script);
+		window.setupEventListeners();
+
+		window.sessionStorage.setItem(`vomesync_manage_key:${uid}`, accessKey);
+		await window.loadSwitches();
+		await window.openSwitchDetails(uid, false);
+
+		const heroStatusButton = document.getElementById('heroStatusButton');
+		heroStatusButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+		const toggleDialogSwitch = document.getElementById('toggleDialogSwitch');
+		toggleDialogSwitch.checked = true;
+		toggleDialogSwitch.dispatchEvent(new window.Event('change', { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const toggleCalls = global.fetch.mock.calls.filter(([u]) => String(u).endsWith(`/v2/switch/${uid}/toggle`));
+		expect(toggleCalls.length).toBeGreaterThanOrEqual(1);
+		const [_toggleUrl, toggleOptions] = toggleCalls[0];
+		expect(toggleOptions.method).toBe('POST');
+		expect(toggleOptions.headers['X-Api-Key']).toBe(accessKey);
+	});
+
+	test('nav status shows auth state and opens the toggle dialog', async () => {
+		const websiteRoot = path.resolve(__dirname, '../../../website');
+		const html = fs.readFileSync(path.join(websiteRoot, 'index.html'), 'utf8');
+		document.documentElement.innerHTML = html;
+
+		window.setInterval = jest.fn();
+		window.alert = jest.fn();
+
+		const uid = 'vs_nav_test';
+		const accessKey = '00000000-0000-4000-8000-222222222222';
+		const toggleOk = {
+			success: true,
+			data: {
+				uid,
+				state: true,
+				timestamp: Date.now(),
+				toggleCount: 1
+			}
+		};
+
+		const publicSwitchList = {
+			success: true,
+			data: {
+				switches: [{
+					uid,
+					description: 'Nav Switch',
+					location: 'Test City',
+					category: 'Community',
+					state: true,
+					lastToggled: 0,
+					toggleCount: 0,
+					userCount: 0,
+					link: '',
+					iconUrl: '',
+					bannerUrl: '',
+					ownerProfileUrl: ''
+				}],
+				count: 1,
+				timestamp: Date.now()
+			}
+		};
+
+		const publicSwitchDetail = {
+			success: true,
+			data: {
+				uid,
+				description: 'Nav Switch',
+				location: 'Test City',
+				category: 'Community',
+				state: true,
+				lastToggled: 0,
+				toggleCount: 0,
+				userCount: 0,
+				link: '',
+				iconUrl: '',
+				bannerUrl: '',
+				ownerProfileUrl: '',
+				events: []
+			}
+		};
+
+		global.fetch = jest.fn(async (url) => {
+			const u = String(url);
+			if (u.endsWith('/public-switches')) {
+				return createMockResponse(publicSwitchList);
+			}
+			if (u.endsWith(`/switch/${uid}`)) {
+				return createMockResponse(publicSwitchDetail);
+			}
+			if (u.endsWith('/categories')) {
+				return createMockResponse({ success: true, data: {} });
+			}
+			if (u.endsWith(`/v2/switch/${uid}/toggle`)) {
+				return createMockResponse(toggleOk);
+			}
+			return createMockResponse({ success: false, error: `Unhandled fetch in test: ${u}` }, false, 404);
+		});
+
+		const script = fs.readFileSync(path.join(websiteRoot, 'script.js'), 'utf8');
+		window.eval(script);
+		window.setupEventListeners();
+
+		window.sessionStorage.setItem(`vomesync_manage_key:${uid}`, accessKey);
+		await window.loadSwitches();
+		await window.openSwitchDetails(uid, false);
+
+		if (typeof window.initHeroObserver === 'function') {
+			window.initHeroObserver();
+		}
+
+		const navStatus = document.getElementById('navSwitchStatus');
+		expect(navStatus.classList.contains('hidden')).toBe(false);
+		expect(navStatus.textContent).toContain('Nav Switch');
+		expect(navStatus.textContent).toContain('Authenticated');
+
+		navStatus.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+		const toggleDialog = document.getElementById('toggleDialog');
+		expect(toggleDialog.classList.contains('hidden')).toBe(false);
+	});
+
+	test('Add to HACS button opens the HACS dialog', async () => {
+		const websiteRoot = path.resolve(__dirname, '../../../website');
+		const html = fs.readFileSync(path.join(websiteRoot, 'index.html'), 'utf8');
+		document.documentElement.innerHTML = html;
+
+		window.setInterval = jest.fn();
+		window.alert = jest.fn();
+
+		const script = fs.readFileSync(path.join(websiteRoot, 'script.js'), 'utf8');
+		window.eval(script);
+		window.setupEventListeners();
+
+		const hacsBtn = document.getElementById('hacsBtn');
+		if (hacsBtn && typeof hacsBtn.click === 'function') {
+			hacsBtn.click();
+		} else if (typeof window.openHacsDialog === 'function') {
+			window.openHacsDialog();
+		}
+
+		const hacsDialog = document.getElementById('hacsDialog');
+		expect(hacsDialog.classList.contains('hidden')).toBe(false);
+		expect(document.getElementById('hacsDialogRepo').value).toBe('https://github.com/Vortitron/VomeSync');
+		expect(document.getElementById('hacsDialogOpenLink').getAttribute('href')).toContain('my.home-assistant.io/redirect/hacs_repository/');
 	});
 
 	test('manage-on-website deep link (#accessKey=...) loads the key and triggers autoscroll', async () => {
@@ -240,6 +474,9 @@ describe('Website SPA (v2 directory)', () => {
 			if (u.endsWith('/categories')) {
 				return createMockResponse({ success: true, data: {} });
 			}
+			if (u.endsWith(`/v2/switch/${uid}/metadata`)) {
+				return createMockResponse({ success: false, error: 'No metadata updates provided' }, false, 400);
+			}
 			return createMockResponse({ success: false, error: `Unhandled fetch in test: ${u}` }, false, 404);
 		});
 
@@ -261,9 +498,9 @@ describe('Website SPA (v2 directory)', () => {
 		const urlArg = String(lastReplace[2] || '');
 		expect(urlArg).not.toContain('#accessKey=');
 
-		// Assert: key is populated into the management box
-		const manageKey = document.getElementById('manageKey');
-		expect(manageKey.value).toBe(accessKey);
+		// Assert: key stored for session
+		const storedKey = window.sessionStorage.getItem(`vomesync_manage_key:${uid}`);
+		expect(storedKey).toBe(accessKey);
 
 		// Assert: autoscroll attempted
 		expect(managePanel.scrollIntoView).toHaveBeenCalled();

@@ -52,6 +52,8 @@ function resolveEnvBadge(apiBaseUrl) {
 
 // API base URL (resolved once at startup)
 const API_BASE_URL = resolveApiBaseUrl();
+const HACS_REPO_URL = 'https://github.com/Vortitron/VomeSync';
+const HACS_ADD_URL = 'https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration';
 
 let allSwitches = [];
 let filteredSwitches = [];
@@ -67,6 +69,8 @@ const heroButtonsDefault = document.getElementById('heroButtonsDefault');
 const heroButtonsSwitch = document.getElementById('heroButtonsSwitch');
 const heroStatusButton = document.getElementById('heroStatusButton');
 const heroHaLink = document.getElementById('heroHaLink');
+const navSwitchStatus = document.getElementById('navSwitchStatus');
+const hacsBtn = document.getElementById('hacsBtn');
 const homeBrand = document.getElementById('homeBrand');
 const loadingMessage = document.getElementById('loadingMessage');
 const errorMessage = document.getElementById('errorMessage');
@@ -94,22 +98,31 @@ const backToList = document.getElementById('backToList');
 const copySwitchLinkBtn = document.getElementById('copySwitchLink');
 const switchWebLink = document.getElementById('switchWebLink');
 const ownerWebLink = document.getElementById('ownerWebLink');
+const authPanel = document.getElementById('authPanel');
+const authLoggedOut = document.getElementById('authLoggedOut');
+const authLoggedIn = document.getElementById('authLoggedIn');
+const authStatusText = document.getElementById('authStatusText');
+const authStatus = document.getElementById('authStatus');
+const authLoginBtn = document.getElementById('authLoginBtn');
+const authChangeBtn = document.getElementById('authChangeBtn');
+const authLogoutBtn = document.getElementById('authLogoutBtn');
+const commentSection = document.getElementById('commentSection');
 const commentForm = document.getElementById('commentForm');
-const commentKeyInput = document.getElementById('commentKey');
 const commentTextInput = document.getElementById('commentText');
+const commentStateLabel = document.getElementById('commentStateLabel');
+const commentStateSelect = document.getElementById('commentState');
+const commentKeyNote = document.getElementById('commentKeyNote');
 const commentStatus = document.getElementById('commentStatus');
 
 // Owner tools (appearance)
 const managePanel = document.getElementById('managePanel');
 const manageForm = document.getElementById('manageForm');
-const manageKeyInput = document.getElementById('manageKey');
 const manageLinkInput = document.getElementById('manageLink');
 const manageIconFileInput = document.getElementById('manageIconFile');
 const manageIconUrlInput = document.getElementById('manageIconUrl');
 const manageBannerFileInput = document.getElementById('manageBannerFile');
 const manageBannerUrlInput = document.getElementById('manageBannerUrl');
 const manageStatus = document.getElementById('manageStatus');
-const manageForgetBtn = document.getElementById('manageForgetBtn');
 
 // Manage media pickers (previews + replace UX)
 const manageIconPreview = document.getElementById('manageIconPreview');
@@ -136,6 +149,7 @@ const quickViewSubtitle = document.getElementById('quickViewSubtitle');
 const quickViewMeta = document.getElementById('quickViewMeta');
 const quickViewCopyUidBtn = document.getElementById('quickViewCopyUid');
 const quickViewCopyHaBtn = document.getElementById('quickViewCopyHa');
+const quickViewAddHacsBtn = document.getElementById('quickViewAddHacs');
 const quickViewOpenDetailsBtn = document.getElementById('quickViewOpenDetails');
 
 const haDialog = document.getElementById('haDialog');
@@ -145,6 +159,30 @@ const haDialogCode = document.getElementById('haDialogCode');
 const haDialogCopyBtn = document.getElementById('haDialogCopyBtn');
 const haDialogCopyOpenBtn = document.getElementById('haDialogCopyOpenBtn');
 const haDialogOpenLink = document.getElementById('haDialogOpenLink');
+const haDialogBadgeLink = document.getElementById('haDialogBadgeLink');
+
+const hacsDialog = document.getElementById('hacsDialog');
+const hacsDialogBackdrop = document.getElementById('hacsDialogBackdrop');
+const hacsDialogCloseBtn = document.getElementById('hacsDialogClose');
+const hacsDialogRepo = document.getElementById('hacsDialogRepo');
+const hacsDialogCopyBtn = document.getElementById('hacsDialogCopyBtn');
+const hacsDialogOpenLink = document.getElementById('hacsDialogOpenLink');
+const hacsDialogBadgeLink = document.getElementById('hacsDialogBadgeLink');
+
+const toggleDialog = document.getElementById('toggleDialog');
+const toggleDialogBackdrop = document.getElementById('toggleDialogBackdrop');
+const toggleDialogCloseBtn = document.getElementById('toggleDialogClose');
+const toggleDialogSwitch = document.getElementById('toggleDialogSwitch');
+const toggleDialogState = document.getElementById('toggleDialogState');
+const toggleDialogStatus = document.getElementById('toggleDialogStatus');
+const toggleDialogEvents = document.getElementById('toggleDialogEvents');
+
+const authDialog = document.getElementById('authDialog');
+const authDialogBackdrop = document.getElementById('authDialogBackdrop');
+const authDialogCloseBtn = document.getElementById('authDialogClose');
+const authDialogKeyInput = document.getElementById('authDialogKey');
+const authDialogLoginBtn = document.getElementById('authDialogLoginBtn');
+const authDialogStatus = document.getElementById('authDialogStatus');
 
 const DEFAULT_HERO_TITLE_HTML = heroTitleEl ? heroTitleEl.innerHTML : '';
 const DEFAULT_HERO_SUBTITLE_TEXT = heroSubtitleEl ? heroSubtitleEl.textContent : '';
@@ -155,6 +193,10 @@ let manageCurrentIconUrl = '';
 let manageCurrentBannerUrl = '';
 let manageIconObjectUrl = null;
 let manageBannerObjectUrl = null;
+let heroToggleInFlight = false;
+let pendingAuthToggle = false;
+const togglePermissionDeniedByUid = {};
+let heroInView = true;
 
 let quickViewUid = null;
 let quickViewDetail = null;
@@ -237,17 +279,82 @@ function updateHeroStatusButton(detail) {
 	heroStatusButton.textContent = statusLabel;
 	heroStatusButton.classList.toggle('status-on', stateKnown && isOn);
 	heroStatusButton.classList.toggle('status-off', stateKnown && !isOn);
+	const uid = detail?.uid || currentSwitchId;
+	const authed = Boolean(uid && hasAccessKey(uid));
+	heroStatusButton.classList.toggle('is-interactive', authed);
 
 	const ts = detail?.lastToggled ? Number(detail.lastToggled) : 0;
+	let title = '';
 	if (ts) {
 		const absolute = new Date(ts).toLocaleString();
 		const relative = formatTimeAgo(new Date(ts));
-		heroStatusButton.title = `Last changed: ${absolute} (${relative})`;
+		title = `Last changed: ${absolute} (${relative})`;
 	} else if (stateKnown) {
-		heroStatusButton.title = 'No activity yet';
+		title = 'No activity yet';
 	} else {
-		heroStatusButton.title = 'Status unknown';
+		title = 'Status unknown';
 	}
+	if (authed) {
+		title = `${title} — click to toggle`;
+	} else if (uid) {
+		title = `${title} — authenticate to toggle`;
+	}
+	heroStatusButton.title = title;
+
+	updateNavSwitchStatus(detail);
+}
+
+function updateNavSwitchStatus(detail) {
+	if (!navSwitchStatus) return;
+	const uid = currentSwitchId;
+	if (!uid || heroInView) {
+		navSwitchStatus.classList.add('hidden');
+		navSwitchStatus.classList.remove('on', 'off');
+		return;
+	}
+	const info = detail || currentSwitchDetail || {};
+	const name = String(info.description || info.name || uid).trim() || 'Switch';
+	const stateKnown = typeof info.state === 'boolean';
+	const isOn = stateKnown ? Boolean(info.state) : false;
+	const stateLabel = stateKnown ? (isOn ? 'ON' : 'OFF') : 'Unknown';
+	const authLabel = hasAccessKey(uid) ? 'Authenticated' : 'Not authenticated';
+	navSwitchStatus.textContent = `${name} · ${stateLabel} · ${authLabel}`;
+	navSwitchStatus.classList.toggle('on', stateKnown && isOn);
+	navSwitchStatus.classList.toggle('off', stateKnown && !isOn);
+	navSwitchStatus.classList.remove('hidden');
+}
+
+function initHeroObserver() {
+	if (!heroSection || !navSwitchStatus) return;
+	if (typeof window.IntersectionObserver === 'function') {
+		const observer = new IntersectionObserver((entries) => {
+			const entry = entries && entries[0];
+			heroInView = entry ? entry.isIntersecting : true;
+			updateNavSwitchStatus(currentSwitchDetail || {});
+		}, { rootMargin: '-64px 0px 0px 0px', threshold: 0.1 });
+		observer.observe(heroSection);
+		return;
+	}
+	const onScroll = () => {
+		const rect = heroSection.getBoundingClientRect();
+		heroInView = rect.bottom > 64;
+		updateNavSwitchStatus(currentSwitchDetail || {});
+	};
+	window.addEventListener('scroll', onScroll, { passive: true });
+	onScroll();
+}
+
+function handleStatusAction() {
+	if (!currentSwitchId) return;
+	if (!hasAccessKey(currentSwitchId)) {
+		openAuthDialog(true, 'Authentication required to toggle.');
+		return;
+	}
+	if (!hasTogglePermission(currentSwitchId)) {
+		openAuthDialog(true, 'Key lacks toggle permission. Enter a new key.');
+		return;
+	}
+	openToggleDialogForDetail(currentSwitchDetail || { uid: currentSwitchId });
 }
 
 function restoreHeroText() {
@@ -286,12 +393,14 @@ function init() {
 	applyEnvBadge();
 	applyDynamicLinks();
 	setupEventListeners();
+	initHeroObserver();
 	importManagementKeyFromHash();
 	loadAllData();
 	restoreSwitchFromQuery();
 }
 
 const MANAGEMENT_KEY_STORAGE_PREFIX = 'vomesync_manage_key:';
+const API_KEY_STORAGE_PREFIX = 'vomesync_api_key:';
 let managementAutoscrollUid = null;
 
 function getStoredManagementKey(uid) {
@@ -316,6 +425,113 @@ function setStoredManagementKey(uid, apiKey) {
 	}
 }
 
+function getStoredApiKey(uid) {
+	if (!uid) return '';
+	try {
+		return sessionStorage.getItem(`${API_KEY_STORAGE_PREFIX}${uid}`) || '';
+	} catch {
+		return '';
+	}
+}
+
+function setStoredApiKey(uid, apiKey) {
+	if (!uid) return;
+	try {
+		if (!apiKey) {
+			sessionStorage.removeItem(`${API_KEY_STORAGE_PREFIX}${uid}`);
+		} else {
+			sessionStorage.setItem(`${API_KEY_STORAGE_PREFIX}${uid}`, apiKey);
+		}
+	} catch {
+		// ignore
+	}
+}
+
+function getActiveManagementKey(uid) {
+	return getStoredManagementKey(uid);
+}
+
+function getActiveApiKey(uid) {
+	return getStoredApiKey(uid);
+}
+
+function resolveCommentAccessKey(uid) {
+	return getActiveApiKey(uid) || getActiveManagementKey(uid);
+}
+
+function hasAccessKey(uid) {
+	return Boolean(getActiveApiKey(uid) || getActiveManagementKey(uid));
+}
+
+function getActiveToggleKey(uid) {
+	return getActiveApiKey(uid) || getActiveManagementKey(uid);
+}
+
+function hasTogglePermission(uid) {
+	if (!uid) return false;
+	if (!hasAccessKey(uid)) return false;
+	return togglePermissionDeniedByUid[uid] !== true;
+}
+
+function updateCommentStateVisibility() {
+	if (!commentStateSelect || !commentStateLabel) return;
+	const uid = currentSwitchId;
+	const allowed = Boolean(uid && hasTogglePermission(uid));
+	if (allowed) {
+		commentStateLabel.classList.remove('hidden');
+		commentStateSelect.classList.remove('hidden');
+		if (commentKeyNote) {
+			commentKeyNote.textContent = 'State changes use your authenticated key.';
+		}
+	} else {
+		commentStateLabel.classList.add('hidden');
+		commentStateSelect.classList.add('hidden');
+		commentStateSelect.value = '';
+		if (commentKeyNote) {
+			commentKeyNote.textContent = 'Authenticate to enable state changes.';
+		}
+	}
+}
+
+async function detectManagementPermission(uid, key) {
+	if (!uid || !key) return { valid: false, error: 'Access key required.' };
+	try {
+		const response = await fetch(`${API_BASE_URL}/v2/switch/${uid}/metadata`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'X-Api-Key': key
+			},
+			body: JSON.stringify({})
+		});
+		let data = {};
+		try {
+			data = await response.json();
+		} catch {
+			data = {};
+		}
+
+		if (response.status === 401) {
+			return { valid: false, error: data.error || 'Invalid access key.' };
+		}
+		if (response.status === 403) {
+			return { valid: true, isManagement: false };
+		}
+		if (response.status === 404) {
+			return { valid: false, error: 'Switch not found.' };
+		}
+		if (response.status === 400) {
+			return { valid: true, isManagement: true };
+		}
+		if (response.ok) {
+			return { valid: true, isManagement: true };
+		}
+		return { valid: true, isManagement: false };
+	} catch (error) {
+		return { valid: false, error: 'Network error while checking key.' };
+	}
+}
+
 function importManagementKeyFromHash() {
 	const hash = String(window.location.hash || '');
 	if (!hash || hash.length < 2) return;
@@ -326,8 +542,29 @@ function importManagementKeyFromHash() {
 	const uid = extractSwitchUidFromPathname(window.location.pathname);
 	if (!uid) return;
 
-	setStoredManagementKey(uid, apiKey);
 	managementAutoscrollUid = uid;
+	detectManagementPermission(uid, apiKey).then((result) => {
+		if (!result.valid) {
+			setStoredManagementKey(uid, '');
+			setStoredApiKey(uid, '');
+			setAuthStatus(result.error || 'Access key invalid or expired.', true);
+			updateAuthPanel({ uid });
+			updateAuthGates({ uid });
+			updateCommentStateVisibility();
+			return;
+		}
+		if (result.isManagement) {
+			setStoredManagementKey(uid, apiKey);
+		} else {
+			setStoredApiKey(uid, apiKey);
+		}
+		togglePermissionDeniedByUid[uid] = false;
+		setAuthStatus('Authenticated via website link.', false);
+		updateAuthPanel({ uid });
+		updateAuthGates({ uid });
+		updateCommentStateVisibility();
+		updateManagePanel({ uid });
+	});
 
 	// Clear the fragment to avoid leaving the key in the address bar/history.
 	try {
@@ -349,10 +586,6 @@ function applyEnvBadge() {
 }
 
 function applyDynamicLinks() {
-	const loginLink = document.getElementById('loginLink');
-	if (loginLink) {
-		loginLink.href = `${window.location.origin}/login`;
-	}
 	
 	const serverStatusLink = document.getElementById('serverStatusLink');
 	if (serverStatusLink) {
@@ -387,6 +620,30 @@ function setupEventListeners() {
 		});
 	}
 
+	if (hacsBtn) {
+		hacsBtn.addEventListener('click', () => {
+			openHacsDialog();
+		});
+	}
+
+	if (heroStatusButton) {
+		heroStatusButton.addEventListener('click', async () => {
+			handleStatusAction();
+		});
+	}
+
+	if (navSwitchStatus) {
+		navSwitchStatus.addEventListener('click', () => {
+			handleStatusAction();
+		});
+		navSwitchStatus.addEventListener('keydown', (event) => {
+			if (event.key === 'Enter' || event.key === ' ') {
+				event.preventDefault();
+				handleStatusAction();
+			}
+		});
+	}
+
 	backToList.addEventListener('click', () => {
 		closeDetail();
 		scrollToSwitches();
@@ -410,18 +667,26 @@ function setupEventListeners() {
 		});
 	}
 
-	if (manageForgetBtn) {
-		manageForgetBtn.addEventListener('click', () => {
-			if (currentSwitchId) {
-				setStoredManagementKey(currentSwitchId, '');
-			}
-			if (manageKeyInput) {
-				manageKeyInput.value = '';
-			}
-			if (manageStatus) {
-				manageStatus.textContent = 'Key cleared (this browser session).';
-				manageStatus.className = 'comment-status';
-			}
+	if (authLoginBtn) {
+		authLoginBtn.addEventListener('click', () => openAuthDialog(false));
+	}
+
+	if (authChangeBtn) {
+		authChangeBtn.addEventListener('click', () => openAuthDialog(false));
+	}
+
+	if (authLogoutBtn) {
+		authLogoutBtn.addEventListener('click', () => {
+			if (!currentSwitchId) return;
+			setStoredManagementKey(currentSwitchId, '');
+			setStoredApiKey(currentSwitchId, '');
+			togglePermissionDeniedByUid[currentSwitchId] = false;
+			setAuthStatus('Logged out.', false);
+			updateAuthPanel(currentSwitchDetail || {});
+			updateAuthGates(currentSwitchDetail || {});
+			updateCommentStateVisibility();
+			updateHeroStatusButton(currentSwitchDetail || {});
+			updateManagePanel(currentSwitchDetail || {});
 		});
 	}
 
@@ -566,6 +831,12 @@ function setupEventListeners() {
 			copyAndOpenHomeAssistant(quickViewUid, quickViewCopyHaBtn, '🏠 Copy UID + Add to HA');
 		});
 	}
+	if (quickViewAddHacsBtn) {
+		quickViewAddHacsBtn.addEventListener('click', () => {
+			closeQuickView();
+			openHacsDialog();
+		});
+	}
 	if (haDialogCloseBtn) haDialogCloseBtn.addEventListener('click', closeHaDialog);
 	if (haDialogBackdrop) haDialogBackdrop.addEventListener('click', closeHaDialog);
 	if (haDialogCopyBtn) {
@@ -573,6 +844,31 @@ function setupEventListeners() {
 			const uid = haDialogCode?.value || '';
 			if (!uid) return;
 			copyText(uid, haDialogCopyBtn, 'Copy');
+		});
+	}
+	if (hacsDialogCloseBtn) hacsDialogCloseBtn.addEventListener('click', closeHacsDialog);
+	if (hacsDialogBackdrop) hacsDialogBackdrop.addEventListener('click', closeHacsDialog);
+	if (hacsDialogCopyBtn) {
+		hacsDialogCopyBtn.addEventListener('click', () => {
+			const repo = hacsDialogRepo?.value || HACS_REPO_URL;
+			copyText(repo, hacsDialogCopyBtn, 'Copy repo URL');
+		});
+	}
+
+	if (toggleDialogCloseBtn) toggleDialogCloseBtn.addEventListener('click', closeToggleDialog);
+	if (toggleDialogBackdrop) toggleDialogBackdrop.addEventListener('click', closeToggleDialog);
+	if (toggleDialogSwitch) {
+		toggleDialogSwitch.addEventListener('change', () => {
+			updateToggleDialogStateLabel(toggleDialogSwitch.checked);
+			applyToggleDialog();
+		});
+	}
+
+	if (authDialogCloseBtn) authDialogCloseBtn.addEventListener('click', closeAuthDialog);
+	if (authDialogBackdrop) authDialogBackdrop.addEventListener('click', closeAuthDialog);
+	if (authDialogLoginBtn) {
+		authDialogLoginBtn.addEventListener('click', () => {
+			applyAuthDialog();
 		});
 	}
 	if (haDialogCopyOpenBtn) {
@@ -587,6 +883,9 @@ function setupEventListeners() {
 		if (e.key === 'Escape') {
 			closeQuickView();
 			closeHaDialog();
+			closeHacsDialog();
+			closeToggleDialog();
+			closeAuthDialog();
 		}
 	});
 
@@ -925,6 +1224,13 @@ function handleStateUpdate(uid, state, timestamp) {
 			lastToggled: timestamp ? Number(timestamp) : (currentSwitchDetail?.lastToggled || null)
 		};
 		updateHeroStatusButton(currentSwitchDetail);
+		if (toggleDialog && !toggleDialog.classList.contains('hidden')) {
+			if (toggleDialogSwitch) {
+				toggleDialogSwitch.checked = Boolean(state);
+			}
+			updateToggleDialogStateLabel(Boolean(state));
+			renderToggleDialogActivity(currentSwitchDetail || {});
+		}
 		scheduleDetailRefresh(targetUid);
 	}
 }
@@ -962,6 +1268,41 @@ async function refreshSwitchDetail(uid) {
 	}
 }
 
+async function ensureCurrentSwitchDetail(uid) {
+	if (!uid || uid !== currentSwitchId) return currentSwitchDetail;
+	if (currentSwitchDetail && currentSwitchDetail.uid === uid && typeof currentSwitchDetail.state === 'boolean') {
+		return currentSwitchDetail;
+	}
+	await refreshSwitchDetail(uid);
+	return currentSwitchDetail;
+}
+
+async function toggleSwitchWithAccessKey(uid, apiKey) {
+	if (!uid || !apiKey) {
+		throw new Error('Access key required');
+	}
+	const response = await fetch(`${API_BASE_URL}/v2/switch/${uid}/toggle`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			'X-Api-Key': apiKey
+		},
+		body: JSON.stringify({})
+	});
+	const data = await response.json();
+	if (!response.ok || !data.success) {
+		throw new Error(data.error || 'Failed to toggle switch');
+	}
+	if (data.data) {
+		handleStateUpdate(uid, data.data.state, data.data.timestamp);
+		if (currentSwitchDetail && currentSwitchDetail.uid === uid && typeof data.data.toggleCount === 'number') {
+			currentSwitchDetail.toggleCount = data.data.toggleCount;
+			if (detailToggles) detailToggles.textContent = `${data.data.toggleCount} toggles`;
+		}
+	}
+	return data.data;
+}
+
 function updateDetailActivity(detail) {
 	if (!detail) return;
 
@@ -983,6 +1324,10 @@ function updateDetailActivity(detail) {
 	}
 
 	renderEvents(detail.events || []);
+	if (toggleDialog && !toggleDialog.classList.contains('hidden')) {
+		renderToggleDialogActivity(detail);
+	}
+	updateCommentStateVisibility();
 }
 
 function syncSwitchDetailToIndex(detail) {
@@ -1233,7 +1578,241 @@ function openHaDialogForUid(uid) {
 	if (!trimmed) return;
 	if (haDialogCode) haDialogCode.value = trimmed;
 	if (haDialogOpenLink) haDialogOpenLink.href = HOME_ASSISTANT_CONFIG_FLOW_URL;
+	if (haDialogBadgeLink) haDialogBadgeLink.href = HOME_ASSISTANT_CONFIG_FLOW_URL;
 	showHaDialog();
+}
+
+function showHacsDialog() {
+	if (!hacsDialog) return;
+	hacsDialog.classList.remove('hidden');
+	document.body.classList.add('modal-open');
+	hacsDialog.setAttribute('aria-hidden', 'false');
+}
+
+function closeHacsDialog() {
+	if (!hacsDialog) return;
+	hacsDialog.classList.add('hidden');
+	document.body.classList.remove('modal-open');
+	hacsDialog.setAttribute('aria-hidden', 'true');
+}
+
+function openHacsDialog() {
+	if (hacsDialogRepo) hacsDialogRepo.value = HACS_REPO_URL;
+	if (hacsDialogOpenLink) hacsDialogOpenLink.href = HACS_ADD_URL;
+	if (hacsDialogBadgeLink) hacsDialogBadgeLink.href = HACS_ADD_URL;
+	showHacsDialog();
+}
+
+function showAuthDialog() {
+	if (!authDialog) return;
+	authDialog.classList.remove('hidden');
+	document.body.classList.add('modal-open');
+	authDialog.setAttribute('aria-hidden', 'false');
+}
+
+function closeAuthDialog() {
+	if (!authDialog) return;
+	authDialog.classList.add('hidden');
+	document.body.classList.remove('modal-open');
+	authDialog.setAttribute('aria-hidden', 'true');
+	if (authDialogStatus) {
+		authDialogStatus.textContent = '';
+		authDialogStatus.className = 'comment-status';
+	}
+	if (authDialogKeyInput) authDialogKeyInput.value = '';
+	pendingAuthToggle = false;
+}
+
+function openAuthDialog(shouldToggleAfter = false, message = '') {
+	if (!currentSwitchId) return;
+	pendingAuthToggle = Boolean(shouldToggleAfter);
+	if (authDialogStatus) {
+		authDialogStatus.textContent = message || '';
+		authDialogStatus.className = message ? 'comment-status error' : 'comment-status';
+	}
+	showAuthDialog();
+}
+
+function applyAuthDialog() {
+	if (!currentSwitchId) return;
+	const key = authDialogKeyInput ? String(authDialogKeyInput.value || '').trim() : '';
+	if (!key) {
+		if (authDialogStatus) {
+			authDialogStatus.textContent = 'Access key required.';
+			authDialogStatus.className = 'comment-status error';
+		}
+		return;
+	}
+	authDialogStatus.textContent = 'Checking key...';
+	authDialogStatus.className = 'comment-status';
+	(async () => {
+		const result = await detectManagementPermission(currentSwitchId, key);
+		if (!result.valid) {
+			authDialogStatus.textContent = result.error || 'Invalid access key.';
+			authDialogStatus.className = 'comment-status error';
+			return;
+		}
+		setStoredManagementKey(currentSwitchId, '');
+		setStoredApiKey(currentSwitchId, '');
+		if (result.isManagement) {
+			setStoredManagementKey(currentSwitchId, key);
+		} else {
+			setStoredApiKey(currentSwitchId, key);
+		}
+		togglePermissionDeniedByUid[currentSwitchId] = false;
+		updateAuthPanel(currentSwitchDetail || { uid: currentSwitchId });
+		updateAuthGates(currentSwitchDetail || { uid: currentSwitchId });
+		updateHeroStatusButton(currentSwitchDetail || {});
+		updateCommentStateVisibility();
+		updateManagePanel(currentSwitchDetail || { uid: currentSwitchId });
+		setAuthStatus('Authenticated.', false);
+		const shouldToggle = pendingAuthToggle;
+		closeAuthDialog();
+
+		if (shouldToggle) {
+			openToggleDialogForDetail(currentSwitchDetail || { uid: currentSwitchId });
+		}
+	})();
+}
+
+function showToggleDialog() {
+	if (!toggleDialog) return;
+	toggleDialog.classList.remove('hidden');
+	document.body.classList.add('modal-open');
+	toggleDialog.setAttribute('aria-hidden', 'false');
+}
+
+function closeToggleDialog() {
+	if (!toggleDialog) return;
+	toggleDialog.classList.add('hidden');
+	document.body.classList.remove('modal-open');
+	toggleDialog.setAttribute('aria-hidden', 'true');
+	if (toggleDialogStatus) {
+		toggleDialogStatus.textContent = '';
+		toggleDialogStatus.className = 'comment-status';
+	}
+}
+
+function updateToggleDialogStateLabel(state) {
+	if (!toggleDialogState) return;
+	if (typeof state !== 'boolean') {
+		toggleDialogState.textContent = 'Status: Unknown';
+		return;
+	}
+	toggleDialogState.textContent = `Status: ${state ? 'ON' : 'OFF'}`;
+}
+
+function openToggleDialogForDetail(detail) {
+	if (!toggleDialog) return;
+	const stateKnown = typeof detail?.state === 'boolean';
+	if (toggleDialogSwitch) {
+		toggleDialogSwitch.checked = stateKnown ? detail.state : false;
+	}
+	updateToggleDialogStateLabel(stateKnown ? detail.state : null);
+	renderToggleDialogActivity(detail);
+	if (toggleDialogStatus) {
+		if (!hasAccessKey(detail?.uid)) {
+			toggleDialogStatus.textContent = 'Authenticate to toggle.';
+			toggleDialogStatus.className = 'comment-status error';
+		} else {
+			toggleDialogStatus.textContent = '';
+			toggleDialogStatus.className = 'comment-status';
+		}
+	}
+	showToggleDialog();
+}
+
+async function applyToggleDialog() {
+	if (!currentSwitchId || heroToggleInFlight) return;
+	if (!toggleDialogSwitch) return;
+
+	const uid = currentSwitchId;
+	const desiredState = Boolean(toggleDialogSwitch.checked);
+	const detail = await ensureCurrentSwitchDetail(uid);
+	const currentState = (detail && typeof detail.state === 'boolean') ? detail.state : null;
+	if (currentState == null) {
+		if (toggleDialogStatus) {
+			toggleDialogStatus.textContent = 'Current state unavailable.';
+			toggleDialogStatus.className = 'comment-status error';
+		}
+		return;
+	}
+	const previousState = currentState;
+	const apiKey = getActiveApiKey(uid);
+	const managementKey = getActiveManagementKey(uid);
+	const primaryKey = apiKey || managementKey;
+	const fallbackKey = (primaryKey === apiKey) ? managementKey : apiKey;
+	if (!primaryKey) {
+		if (toggleDialogStatus) {
+			toggleDialogStatus.textContent = 'Access key required.';
+			toggleDialogStatus.className = 'comment-status error';
+		}
+		return;
+	}
+
+	if (currentState === desiredState) {
+		if (toggleDialogStatus) {
+			toggleDialogStatus.textContent = 'Already in the requested state.';
+			toggleDialogStatus.className = 'comment-status';
+		}
+		return;
+	}
+
+	heroToggleInFlight = true;
+	if (toggleDialogStatus) {
+		toggleDialogStatus.textContent = 'Toggling...';
+		toggleDialogStatus.className = 'comment-status';
+	}
+	try {
+		await toggleSwitchWithAccessKey(uid, primaryKey);
+		togglePermissionDeniedByUid[uid] = false;
+		updateToggleDialogStateLabel(desiredState);
+		updateAuthPanel(detail);
+		updateAuthGates(detail);
+		updateHeroStatusButton(currentSwitchDetail || {});
+		updateCommentStateVisibility();
+		if (toggleDialogStatus) {
+			toggleDialogStatus.textContent = 'Updated.';
+			toggleDialogStatus.className = 'comment-status success';
+		}
+	} catch (error) {
+		if (toggleDialogSwitch) {
+			toggleDialogSwitch.checked = previousState;
+		}
+		updateToggleDialogStateLabel(previousState);
+		let message = error && error.message ? error.message : 'Failed to toggle.';
+		if (/insufficient permissions/i.test(message) && fallbackKey) {
+			try {
+				await toggleSwitchWithAccessKey(uid, fallbackKey);
+				togglePermissionDeniedByUid[uid] = false;
+				if (toggleDialogSwitch) {
+					toggleDialogSwitch.checked = desiredState;
+				}
+				updateToggleDialogStateLabel(desiredState);
+				updateAuthPanel(detail);
+				updateAuthGates(detail);
+				updateHeroStatusButton(currentSwitchDetail || {});
+				updateCommentStateVisibility();
+				if (toggleDialogStatus) {
+					toggleDialogStatus.textContent = 'Updated.';
+					toggleDialogStatus.className = 'comment-status success';
+				}
+				return;
+			} catch (fallbackError) {
+				message = fallbackError && fallbackError.message ? fallbackError.message : message;
+			}
+		}
+		if (/insufficient permissions/i.test(message)) {
+			togglePermissionDeniedByUid[uid] = true;
+			message = 'Key missing toggle permission. Generate a new management/API key with toggle access.';
+		}
+		if (toggleDialogStatus) {
+			toggleDialogStatus.textContent = message;
+			toggleDialogStatus.className = 'comment-status error';
+		}
+	} finally {
+		heroToggleInFlight = false;
+	}
 }
 
 async function copyAndOpenHomeAssistant(uid, button, defaultLabel) {
@@ -1546,6 +2125,8 @@ function renderSwitchDetail(detail) {
 	detailLastChange.textContent = detail.lastToggled ? formatTimeAgo(new Date(detail.lastToggled)) : 'Never';
 	detailUid.textContent = detail.uid;
 
+	updateAuthPanel(detail);
+	updateAuthGates(detail);
 	updateManagePanel(detail);
 
 	if (detail.link) {
@@ -1565,6 +2146,9 @@ function renderSwitchDetail(detail) {
 	}
 
 	renderEvents(detail.events || []);
+	if (toggleDialog && !toggleDialog.classList.contains('hidden')) {
+		renderToggleDialogActivity(detail);
+	}
 }
 
 function revokeObjectUrl(value) {
@@ -1628,18 +2212,67 @@ function resetManageMediaPickers(detail) {
 	setMediaPreviewImage(manageBannerPreview, manageBannerPlaceholder, manageCurrentBannerUrl);
 }
 
+function updateAuthPanel(detail) {
+	if (!authPanel || !detail) return;
+	const uid = detail.uid;
+	const hasManagement = Boolean(getActiveManagementKey(uid));
+	const hasApi = Boolean(getActiveApiKey(uid));
+	const authed = hasManagement || hasApi;
+
+	if (authLoggedOut) authLoggedOut.classList.toggle('hidden', authed);
+	if (authLoggedIn) authLoggedIn.classList.toggle('hidden', !authed);
+
+	if (authStatusText) {
+		if (!authed) {
+			authStatusText.textContent = '';
+		} else if (hasManagement && hasApi) {
+			authStatusText.textContent = 'Authenticated with management + API keys (session only).';
+		} else if (hasManagement) {
+			authStatusText.textContent = 'Authenticated with management key (session only).';
+		} else {
+			authStatusText.textContent = 'Authenticated with API key (session only).';
+		}
+	}
+
+	if (authStatus) {
+		authStatus.textContent = '';
+		authStatus.className = 'comment-status hidden';
+	}
+
+	updateNavSwitchStatus(detail);
+}
+
+function setAuthStatus(message, isError = false) {
+	if (!authStatus) return;
+	if (!message || !isError) {
+		authStatus.textContent = '';
+		authStatus.className = 'comment-status hidden';
+		return;
+	}
+	authStatus.textContent = message;
+	authStatus.className = 'comment-status error';
+}
+
+function updateAuthGates(detail) {
+	if (!detail) return;
+	const hasAny = hasAccessKey(detail.uid);
+	const hasManagement = Boolean(getActiveManagementKey(detail.uid));
+	if (commentSection) commentSection.classList.toggle('hidden', !hasAny);
+	if (commentForm) commentForm.classList.toggle('hidden', !hasAny);
+	if (managePanel) managePanel.classList.toggle('hidden', !hasManagement);
+}
+
 function updateManagePanel(detail) {
 	if (!managePanel) return;
-	// Directory is v2-only; owner tools are optional (access key required).
-	managePanel.classList.remove('hidden');
+	if (!detail || !detail.uid) return;
+	const hasManagement = Boolean(getActiveManagementKey(detail.uid));
+	managePanel.classList.toggle('hidden', !hasManagement);
+	if (!hasManagement) {
+		return;
+	}
 
 	if (manageLinkInput) manageLinkInput.value = detail.link || '';
 	resetManageMediaPickers(detail);
-
-	const storedKey = getStoredManagementKey(detail.uid);
-	if (storedKey && manageKeyInput && !manageKeyInput.value) {
-		manageKeyInput.value = storedKey;
-	}
 
 	// If a management key was supplied via #accessKey=..., scroll to this panel once
 	const wantScroll = Boolean(
@@ -1666,13 +2299,15 @@ function updateManagePanel(detail) {
 			setTimeout(doScroll, 50);
 		}
 	}
+
+	updateHeroStatusButton(detail);
 }
 
 async function submitManageAppearance() {
 	if (!currentSwitchId) return;
 	if (!manageStatus) return;
 
-	const apiKey = String(manageKeyInput?.value || '').trim() || getStoredManagementKey(currentSwitchId);
+	const apiKey = getActiveManagementKey(currentSwitchId) || getStoredManagementKey(currentSwitchId);
 	if (!apiKey) {
 		manageStatus.textContent = 'Access key required.';
 		manageStatus.className = 'comment-status error';
@@ -1766,14 +2401,11 @@ async function submitManageAppearance() {
 			renderSwitchDetail(data.data);
 		}
 
-		// Single-use keys (from HA "Manage on website") are revoked by the server after first save.
-		setStoredManagementKey(currentSwitchId, '');
-		if (manageKeyInput) {
-			manageKeyInput.value = '';
-		}
-	resetManageMediaPickers(currentSwitchDetail || {});
+		resetManageMediaPickers(currentSwitchDetail || {});
+		updateAuthPanel(currentSwitchDetail || detail);
+		updateAuthGates(currentSwitchDetail || detail);
 
-		manageStatus.textContent = 'Saved. (This key is now invalid — generate a new link to edit again.)';
+		manageStatus.textContent = 'Saved.';
 		manageStatus.className = 'comment-status success';
 	} catch (error) {
 		console.error('Error saving appearance:', error);
@@ -1825,24 +2457,130 @@ function renderEvents(events) {
 	}).join('');
 }
 
+function renderToggleDialogActivity(detail) {
+	if (!toggleDialogEvents) return;
+	const events = (detail && Array.isArray(detail.events)) ? detail.events : [];
+	if (!events.length) {
+		toggleDialogEvents.innerHTML = '<li class="timeline-empty">No recent activity.</li>';
+		return;
+	}
+	const latest = events.slice(0, 4);
+	toggleDialogEvents.innerHTML = latest.map((event) => {
+		const timeText = event.timestamp ? formatTimeAgo(new Date(event.timestamp)) : 'Unknown time';
+		if (event.type === 'comment') {
+			return `
+				<li class="timeline-item">
+					<div class="timeline-dot comment"></div>
+					<div class="timeline-content">
+						<div class="timeline-head">
+							<span class="timeline-type">Comment</span>
+							<span class="timeline-time">${timeText}</span>
+						</div>
+						<p class="timeline-actor">${escapeHtml(event.actor || 'user')}</p>
+						<p>${escapeHtml(event.comment || '')}</p>
+					</div>
+				</li>
+			`;
+		}
+
+		const stateLabel = event.state ? 'turned ON' : 'turned OFF';
+		const actor = event.actor || 'user';
+		const via = event.viaApiKey ? 'via API key' : 'via personal key';
+		return `
+			<li class="timeline-item">
+				<div class="timeline-dot state ${event.state ? 'on' : 'off'}"></div>
+				<div class="timeline-content">
+					<div class="timeline-head">
+						<span class="timeline-type">State</span>
+						<span class="timeline-time">${timeText}</span>
+					</div>
+					<p class="timeline-actor">${escapeHtml(actor)} ${stateLabel} (${via})</p>
+				</div>
+			</li>
+		`;
+	}).join('');
+}
+
 async function submitComment() {
 	if (!currentSwitchId) {
 		return;
 	}
-	const key = (commentKeyInput.value || '').trim();
+	if (!hasAccessKey(currentSwitchId)) {
+		openAuthDialog(false);
+		return;
+	}
 	const comment = (commentTextInput.value || '').trim();
-	if (!key || !comment) {
-		commentStatus.textContent = 'Key and comment are required.';
+	if (!comment) {
+		commentStatus.textContent = 'Comment is required.';
 		return;
 	}
 
+	const commentKey = resolveCommentAccessKey(currentSwitchId);
+	if (!commentKey) {
+		commentStatus.textContent = 'Access key is required.';
+		return;
+	}
+
+	const requestedState = commentStateSelect ? String(commentStateSelect.value || '').trim() : '';
+	const wantsStateChange = requestedState === 'on' || requestedState === 'off';
+	if (wantsStateChange) {
+		const commentKeyValue = getActiveApiKey(currentSwitchId);
+		const managementKey = getActiveManagementKey(currentSwitchId);
+		const toggleKey = managementKey || commentKeyValue;
+		if (!toggleKey) {
+			commentStatus.textContent = 'Access key required to toggle.';
+			return;
+		}
+		commentStatus.textContent = 'Applying state change...';
+		commentStatus.className = 'comment-status';
+
+		const detail = await ensureCurrentSwitchDetail(currentSwitchId);
+		const currentState = (detail && typeof detail.state === 'boolean') ? detail.state : null;
+		if (currentState == null) {
+			commentStatus.textContent = 'Current state unavailable.';
+			commentStatus.className = 'comment-status error';
+			return;
+		}
+		const targetState = requestedState === 'on';
+		if (currentState !== targetState) {
+			try {
+				await toggleSwitchWithAccessKey(currentSwitchId, toggleKey);
+			} catch (error) {
+				if (managementKey && commentKeyValue && managementKey !== commentKeyValue) {
+					try {
+						await toggleSwitchWithAccessKey(currentSwitchId, commentKeyValue);
+					} catch (fallbackError) {
+						console.error('Failed to toggle during comment:', fallbackError);
+						let message = fallbackError.message || 'Failed to toggle.';
+						if (/insufficient permissions/i.test(message)) {
+							message = 'Key missing toggle permission. Use a key with toggle access.';
+						}
+						commentStatus.textContent = message;
+						commentStatus.className = 'comment-status error';
+						return;
+					}
+				} else {
+					console.error('Failed to toggle during comment:', error);
+					let message = error.message || 'Failed to toggle.';
+					if (/insufficient permissions/i.test(message)) {
+						message = 'Key missing toggle permission. Use a key with toggle access.';
+					}
+					commentStatus.textContent = message;
+					commentStatus.className = 'comment-status error';
+					return;
+				}
+			}
+		}
+	}
+
 	commentStatus.textContent = 'Posting...';
+	commentStatus.className = 'comment-status';
 	try {
 		const response = await fetch(`${API_BASE_URL}/v2/switch/${currentSwitchId}/comment`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				'X-Api-Key': key
+				'X-Api-Key': commentKey
 			},
 			body: JSON.stringify({ comment })
 		});
@@ -1853,11 +2591,21 @@ async function submitComment() {
 		}
 
 		commentStatus.textContent = 'Posted.';
+		commentStatus.className = 'comment-status success';
 		commentTextInput.value = '';
+		if (commentStateSelect) commentStateSelect.value = '';
 		await openSwitchDetails(currentSwitchId, true);
 	} catch (error) {
 		console.error('Failed to post comment:', error);
-		commentStatus.textContent = 'Failed to post comment.';
+		let message = 'Failed to post comment.';
+		if (error && error.message) {
+			message = error.message;
+		}
+		if (/insufficient permissions/i.test(message)) {
+			message = 'Key missing comment permission. Use a key with comment access.';
+		}
+		commentStatus.textContent = message;
+		commentStatus.className = 'comment-status error';
 	}
 }
 
@@ -1870,8 +2618,12 @@ function closeDetail() {
 	if (document?.body) {
 		document.body.classList.remove('view-switch');
 	}
+	updateNavSwitchStatus(null);
 	clearSwitchQuery();
 	ensureRealtimeSubscriptions();
+	updateCommentStateVisibility();
+	closeToggleDialog();
+	closeAuthDialog();
 }
 
 function filterByCategory(encodedCategory) {

@@ -6,7 +6,7 @@
 
 **VomeSync** is a Home Assistant custom integration that enables public remote switch sharing between Home Assistant instances worldwide. Create virtual switches that others can monitor or toggle, perfect for community events, multi-property synchronisation, or sharing non-sensitive device states.
 
-> **⚠️ Important Warning**: Public mode shares switch states globally. **Never use for sensitive devices** like locks, alarms, or security systems. All public switches can be viewed and toggled by anyone with the UID.
+> **⚠️ Important Warning**: Public mode shares switch state and activity globally. **Never use for sensitive devices** like locks, alarms, or security systems. Anyone with the UID can view it; toggling requires an access key.
 
 ## Features
 

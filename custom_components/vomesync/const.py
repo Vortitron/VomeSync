@@ -11,6 +11,8 @@ CONF_SWITCHES = "switches"
 CONF_SUBSCRIPTIONS = "subscriptions"
 CONF_AUTH_MODE = "auth_mode"
 CONF_CRYPTO_SEED = "crypto_seed"
+CONF_GENERATE_NEW_KEY = "generate_new_key"
+CONF_USE_DEFAULT_URLS = "use_default_urls"
 
 AUTH_MODE_CRYPTO = "crypto"
 

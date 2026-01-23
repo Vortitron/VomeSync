@@ -8,7 +8,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 import voluptuous as vol
 
-from .const import DOMAIN
+from .const import DOMAIN, CONF_SWITCH_UID
 from .coordinator import VomeSyncCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,6 +44,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	
 	# Setup platforms (entities will be created from coordinator data)
 	await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+	pending_uid = (entry.data or {}).get(CONF_SWITCH_UID)
+	if pending_uid:
+		uid = str(pending_uid).strip()
+		if uid:
+			ok = await coordinator.subscribe_to_switch(uid)
+			if ok:
+				_LOGGER.info("Initial switch subscribed from setup (uid=%s)", uid)
+			else:
+				_LOGGER.warning(
+					"Initial switch UID could not be subscribed; add via options flow (uid=%s)",
+					uid,
+				)
+		new_data = dict(entry.data)
+		new_data.pop(CONF_SWITCH_UID, None)
+		hass.config_entries.async_update_entry(entry, data=new_data)
 	
 	_register_services(hass)
 	

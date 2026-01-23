@@ -630,8 +630,8 @@ describe('API Integration Tests', () => {
 			expect(response.body.data.link).toBe('https://example.com');
 		});
 
-		test('manage-on-website keys should be single-use', async () => {
-			const websiteKey = await createV2AccessKey(app, publicUid, owner, ownerPubKeyB64, ['metadata'], 'website_once:test');
+		test('manage-on-website keys can be reused for metadata updates', async () => {
+			const websiteKey = await createV2AccessKey(app, publicUid, owner, ownerPubKeyB64, ['metadata'], 'website_session:test');
 
 			// First use should succeed
 			await request(app)
@@ -640,12 +640,12 @@ describe('API Integration Tests', () => {
 				.send({ iconUrl: 'https://8.8.8.8/icon.png' })
 				.expect(200);
 
-			// Second use should be rejected (revoked after first save)
+			// Second use should also succeed
 			await request(app)
 				.post(`/api/v2/switch/${publicUid}/metadata`)
 				.set('X-Api-Key', websiteKey)
 				.send({ iconUrl: 'https://8.8.8.8/icon2.png' })
-				.expect(401);
+				.expect(200);
 		});
 
 		test('toggle should record user count and timeline', async () => {

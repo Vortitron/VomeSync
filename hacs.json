@@ -1,6 +1,6 @@
 {
 	"name": "VomeSync - Remote Shared Switches",
-	"content_in_root": true,
+	"content_in_root": false,
 	"render_readme": true,
 	"domains": ["vomesync"],
 	"homeassistant": "2024.1.0",

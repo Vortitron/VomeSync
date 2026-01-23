@@ -21,6 +21,8 @@ from .const import (
 	CONF_WEBSOCKET_URL,
 	CONF_AUTH_MODE,
 	CONF_CRYPTO_SEED,
+	CONF_GENERATE_NEW_KEY,
+	CONF_USE_DEFAULT_URLS,
 	AUTH_MODE_CRYPTO,
 	DEFAULT_SERVER_URL,
 	DEFAULT_WEBSOCKET_URL,
@@ -42,6 +44,16 @@ from .crypto import generate_master_seed_b64url, owner_pubkey_b64url
 _LOGGER = logging.getLogger(__name__)
 
 
+def _normalise_uid(raw_uid: Any) -> str:
+	"""Normalise a UID string."""
+	return str(raw_uid or "").strip()
+
+
+def _is_valid_uid(uid: str) -> bool:
+	"""Lightweight UID validation (avoid empty/whitespace only)."""
+	return bool(uid) and " " not in uid
+
+
 class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 	"""Handle a config flow for VomeSync."""
 
@@ -54,6 +66,10 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 		self._crypto_seed: Optional[str] = None
 		self._server_url: str = DEFAULT_SERVER_URL
 		self._websocket_url: str = DEFAULT_WEBSOCKET_URL
+		self._generate_new_key: bool = True
+		self._use_default_urls: bool = True
+		self._initial_switch_uid: Optional[str] = None
+		self._pending_switch_uid: str = ""
 
 	@staticmethod
 	def _derive_websocket_url(server_url: str) -> str:
@@ -72,41 +88,121 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 			ws_base = f"ws://{base}"
 		return f"{ws_base}/ws"
 
+	def _build_user_schema(self, show_advanced: bool) -> vol.Schema:
+		"""Build the user step schema, optionally showing advanced fields."""
+		schema = {
+			vol.Optional(CONF_SWITCH_UID, default=self._pending_switch_uid): str,
+			vol.Optional(CONF_GENERATE_NEW_KEY, default=self._generate_new_key): cv.boolean,
+			vol.Optional(CONF_USE_DEFAULT_URLS, default=self._use_default_urls): cv.boolean,
+		}
+
+		if show_advanced or not self._generate_new_key:
+			schema[vol.Optional(CONF_CRYPTO_SEED, default=self._crypto_seed or "")] = str
+
+		if show_advanced or not self._use_default_urls:
+			schema[vol.Optional(CONF_SERVER_URL, default=self._server_url)] = str
+			schema[vol.Optional(CONF_WEBSOCKET_URL, default=self._websocket_url)] = str
+
+		return vol.Schema(schema)
+
 	async def async_step_user(
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:
 		"""Handle the initial step."""
 		errors = {}
+		show_advanced = False
 
 		if user_input is not None:
-			self._server_url = user_input.get(CONF_SERVER_URL, DEFAULT_SERVER_URL)
-			if user_input.get(CONF_WEBSOCKET_URL):
-				self._websocket_url = user_input[CONF_WEBSOCKET_URL]
-			else:
+			self._generate_new_key = bool(user_input.get(CONF_GENERATE_NEW_KEY, True))
+			self._use_default_urls = bool(user_input.get(CONF_USE_DEFAULT_URLS, True))
+			show_advanced = (not self._generate_new_key) or (not self._use_default_urls)
+
+			self._pending_switch_uid = _normalise_uid(user_input.get(CONF_SWITCH_UID, ""))
+			self._initial_switch_uid = None
+
+			if self._use_default_urls:
+				self._server_url = DEFAULT_SERVER_URL
 				self._websocket_url = self._derive_websocket_url(self._server_url)
-			
-			# Keypair mode is the only supported mode (the integration never launched with personal keys).
-			self._auth_mode = AUTH_MODE_CRYPTO
-			self._crypto_seed = user_input.get(CONF_CRYPTO_SEED) or generate_master_seed_b64url()
-			self._personal_key = ""
-			return await self._create_entry()
+
+			needs_crypto_input = not self._generate_new_key
+			needs_url_input = not self._use_default_urls
+			has_crypto_input = CONF_CRYPTO_SEED in user_input
+			has_url_input = CONF_SERVER_URL in user_input or CONF_WEBSOCKET_URL in user_input
+
+			if needs_crypto_input and not has_crypto_input:
+				return self.async_show_form(
+					step_id="user",
+					data_schema=self._build_user_schema(True),
+					errors=errors,
+					description_placeholders={
+						"warning": "⚠️ Public mode is NOT private — anyone with the UID can view switch state and activity. Toggling requires an access key.",
+						"keypair_hint": "Untick generate key to enter an existing signing key.",
+						"websocket_info": "Default URLs use: " + self._derive_websocket_url(DEFAULT_SERVER_URL)
+					}
+				)
+
+			if needs_url_input and not has_url_input:
+				return self.async_show_form(
+					step_id="user",
+					data_schema=self._build_user_schema(True),
+					errors=errors,
+					description_placeholders={
+						"warning": "⚠️ Public mode is NOT private — anyone with the UID can view switch state and activity. Toggling requires an access key.",
+						"keypair_hint": "Untick generate key to enter an existing signing key.",
+						"websocket_info": "Default URLs use: " + self._derive_websocket_url(DEFAULT_SERVER_URL)
+					}
+				)
+
+			if self._use_default_urls:
+				self._server_url = DEFAULT_SERVER_URL
+				self._websocket_url = self._derive_websocket_url(self._server_url)
+			else:
+				self._server_url = str(user_input.get(CONF_SERVER_URL, "")).strip()
+				if not self._server_url:
+					errors[CONF_SERVER_URL] = "missing_server_url"
+				if user_input.get(CONF_WEBSOCKET_URL):
+					self._websocket_url = user_input[CONF_WEBSOCKET_URL]
+				else:
+					self._websocket_url = self._derive_websocket_url(self._server_url or DEFAULT_SERVER_URL)
+
+			if self._generate_new_key:
+				self._crypto_seed = generate_master_seed_b64url()
+			else:
+				self._crypto_seed = str(user_input.get(CONF_CRYPTO_SEED, "")).strip()
+				if not self._crypto_seed:
+					errors[CONF_CRYPTO_SEED] = "missing_signing_key"
+
+			if self._pending_switch_uid:
+				if not _is_valid_uid(self._pending_switch_uid):
+					errors[CONF_SWITCH_UID] = "invalid_uid"
+				elif not errors.get(CONF_SERVER_URL):
+					client = VomeSyncAPIClient(self._server_url)
+					try:
+						status = await client.get_switch_status(self._pending_switch_uid)
+					finally:
+						await client.close()
+					if not status:
+						errors[CONF_SWITCH_UID] = "switch_not_found"
+					else:
+						self._initial_switch_uid = self._pending_switch_uid
+
+			if not errors:
+				# Keypair mode is the only supported mode (the integration never launched with personal keys).
+				self._auth_mode = AUTH_MODE_CRYPTO
+				self._personal_key = ""
+				return await self._create_entry()
 		else:
 			# First load: keep websocket URL in sync with the server URL
 			self._websocket_url = self._derive_websocket_url(self._server_url)
 
-		data_schema = vol.Schema({
-			vol.Optional(CONF_SERVER_URL, default=self._server_url): str,
-			vol.Optional(CONF_CRYPTO_SEED): str,
-		})
-
 		return self.async_show_form(
 			step_id="user",
-			data_schema=data_schema,
+			data_schema=self._build_user_schema(show_advanced),
 			errors=errors,
 			description_placeholders={
-				"warning": "⚠️ Public mode is NOT private - anyone with UID can view/toggle switches. Use only for non-sensitive devices.",
-				"keypair_hint": "Leave the signing key empty to generate one. Keep it safe if you want to migrate servers/instances later.",
-				"websocket_info": "WebSocket URL will be automatically set to: " + self._derive_websocket_url(self._server_url)
+				"warning": "⚠️ Public mode is NOT private — anyone with the UID can view switch state and activity. Toggling requires an access key.",
+				"keypair_hint": "Keep your signing key safe if you want to migrate servers later.",
+				"websocket_info": "Default URLs use: " + self._derive_websocket_url(DEFAULT_SERVER_URL)
 			}
 		)
 
@@ -130,22 +226,26 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 		try:
 			if unique:
 				await self.async_set_unique_id(unique)
-				self._abort_if_unique_id_configured()
+			self._abort_if_unique_id_configured()
 		except TypeError:
 			_LOGGER.debug("Skipping unique_id setup (context not mutable in test environment)")
 
 		# Ensure websocket URL stored matches server_url if user left it blank
 		websocket_url = self._websocket_url or self._derive_websocket_url(self._server_url)
 
+		data = {
+			CONF_PERSONAL_KEY: self._personal_key or "",
+			CONF_SERVER_URL: self._server_url,
+			CONF_WEBSOCKET_URL: websocket_url,
+			CONF_AUTH_MODE: self._auth_mode,
+			CONF_CRYPTO_SEED: self._crypto_seed or "",
+		}
+		if self._initial_switch_uid:
+			data[CONF_SWITCH_UID] = self._initial_switch_uid
+
 		return self.async_create_entry(
 			title=title,
-			data={
-				CONF_PERSONAL_KEY: self._personal_key or "",
-				CONF_SERVER_URL: self._server_url,
-				CONF_WEBSOCKET_URL: websocket_url,
-				CONF_AUTH_MODE: self._auth_mode,
-				CONF_CRYPTO_SEED: self._crypto_seed or "",
-			}
+			data=data
 		)
 
 	@staticmethod
@@ -360,7 +460,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		except Exception as ex:
 			_LOGGER.error("Failed to fetch switches for import: %s", ex)
 			return self.async_abort(reason="api_error")
-	
+
 	async def async_step_create_switch(
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:
@@ -428,7 +528,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			data_schema=data_schema,
 			errors=errors,
 			description_placeholders={
-				"warning": "⚠️ If you enable 'publicize', this switch will be listed publicly and anyone can toggle it!"
+				"warning": "⚠️ If you enable 'publicize', this switch will be listed publicly and anyone can view it. Toggling requires an access key."
 			}
 		)
 
@@ -440,7 +540,9 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 
 		if user_input is not None:
 			try:
-				uid = user_input[CONF_SWITCH_UID]
+				uid = _normalise_uid(user_input.get(CONF_SWITCH_UID))
+				if not _is_valid_uid(uid):
+					raise ValueError("invalid uid")
 				
 				# Get coordinator
 				coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
@@ -813,25 +915,20 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		):
 			return self.async_abort(reason="crypto_required")
 
-		# On submit, best-effort revoke the key (if unused) and return to the switch action menu
+		# On submit, optionally regenerate the key, otherwise return to the action menu
 		if user_input is not None:
-			try:
-				api_key = self._step_data.pop("manage_on_website_key", None)
-				if api_key:
-					coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
-					await coordinator.revoke_v2_access_key(selected_uid, api_key)
-			except Exception as ex:  # noqa: BLE001
-				_LOGGER.debug("Manage-on-website key revoke skipped (non-fatal): %s", ex)
-			return self._show_manage_switch_action_menu(selected_uid, selected_name, is_owner)
+			if user_input.get("regenerate"):
+				self._step_data.pop("manage_on_website_key", None)
+			else:
+				return self._show_manage_switch_action_menu(selected_uid, selected_name, is_owner)
 
 		coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
 		server_url = (self._config_entry.data.get(CONF_SERVER_URL, "") or "").rstrip("/")
 
 		created = await coordinator.create_v2_access_key(
 			selected_uid,
-			# Single-use key: consumed by the website on first successful save.
-			name=f"website_once:{selected_name}" if selected_name else "website_once",
-			permissions=["metadata"],
+			name=f"website_session:{selected_name}" if selected_name else "website_session",
+			permissions=["metadata", "toggle", "comment"],
 		)
 		api_key = created.get("apiKey", "") if isinstance(created, dict) else ""
 		self._step_data["manage_on_website_key"] = api_key
@@ -842,15 +939,17 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		info = (
 			f"{link_md}\n\n"
 			f"`{management_url}`\n\n"
+			f"Access key:\n`{api_key}`\n\n"
 			"Tip: the key is stored in the URL fragment (#…), so it is not sent to the server in requests.\n\n"
-			"This link is **single-use**: after you save once, the key is automatically revoked.\n"
-			"If you need to edit again, generate a new link from Home Assistant.\n\n"
-			"Press **Submit** to return to the menu and revoke the key (if it hasn't already been used)."
+			"This key grants **metadata, toggle, and comment** permissions for this switch.\n"
+			"Tick **Regenerate** and submit to issue a new key.\n"
 		)
 
 		return self.async_show_form(
 			step_id="manage_on_website",
-			data_schema=vol.Schema({}),
+			data_schema=vol.Schema({
+				vol.Optional("regenerate", default=False): cv.boolean,
+			}),
 			description_placeholders={"info": info}
 		)
 

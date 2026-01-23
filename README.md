@@ -2,7 +2,7 @@
 
 **VomeSync** is a Home Assistant add-on and server-based service that enables users to create and share virtual switches, allowing one Home Assistant instance to toggle a switch in another, either publicly or (in future) privately. Designed for the global Home Assistant community (1M+ users in 2025), VomeSync offers a unique, user-friendly way to sync smart home devices or create community-driven events (e.g., "Flash porch lights for a local festival"). This project is hosted under [vome.io](https://vome.io), a brand for innovative IoT solutions.
 
-> **Warning**: Public mode shares switch states globally via a unique identifier (UID). **Do not use for sensitive devices** (e.g., locks, alarms). Private mode is planned for secure, user-controlled syncing.
+> **Warning**: Public mode shares switch state and activity globally via a unique identifier (UID); toggling requires an access key. **Do not use for sensitive devices** (e.g., locks, alarms). Private mode is planned for secure, user-controlled syncing.
 
 ## Project Overview
 
@@ -103,12 +103,14 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - Real-time updates via WebSocket (`/ws?uid=<uid>`)
   - Optional entity linking (turn local entities on/off when VomeSync changes)
   - v2 switch management: edit metadata including `iconUrl`/`bannerUrl` for nicer public pages
-  - Manage on website: generates a single-use, fragment-based URL for editing `link`/`iconUrl`/`bannerUrl` on the website (auto-revokes after first successful save)
+  - Manage on website: generates a session, fragment-based URL for editing `link`/`iconUrl`/`bannerUrl` on the website (regenerate in HA when needed)
   - v2 delegation: create/list/revoke per-switch access keys (scoped permissions like toggle/comment)
 
 ## Installation
 
 ### Via HACS (Recommended)
+
+[![Add to Home Assistant](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration)
 
 1. Open Home Assistant and go to **HACS** → **Integrations**
 2. Click the **+** button and search for **"VomeSync"**
@@ -123,6 +125,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
 2. Restart Home Assistant
 3. Go to **Settings** → **Devices & Services** → **Add Integration**
 4. Search for **VomeSync** and follow the setup wizard
+5. If adding this repository manually in HACS, ensure the category is **Integration** (manifest lives in `custom_components/vomesync`).
 
 ## User Flow
 1. **Install Integration**:
@@ -166,7 +169,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - **Keypair (v2)**: Ed25519 signing key stays local to Home Assistant; server only sees public keys and signatures.
   - **Personal keys (v1)** still exist on the server for non-HA clients, but the HA integration uses keypair authentication.
 - **Public Mode**: Treat as global/public; only store user-provided metadata (description/location/category/link) and activity events; do not include personal data.
-- **Warnings**: Add-on UI clearly states: "Public mode is NOT private—use for non-sensitive events only."
+- **Warnings**: Add-on UI warns that public mode is not private and is intended for non-sensitive events only.
 - **GDPR**: Consent via checkbox, data deletion via API (POST /delete-key).
 - **Ops runbook**: See `docs/OPERATIONS.md` for the pre-beta checklist, backups, restore drills, and incident response.
 

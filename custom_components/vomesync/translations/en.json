@@ -3,10 +3,14 @@
 		"step": {
 			"user": {
 				"title": "Set up VomeSync",
-				"description": "Set up VomeSync using **keypair authentication**. This uses a locally stored signing key so you can migrate servers later without changing UIDs.\n\nWebSocket URL will be automatically set to `/ws` on the same server.\n\n⚠️ Public mode is NOT private — anyone with the UID can view/toggle the switch.",
+				"description": "Set up VomeSync using **keypair authentication**. This uses a locally stored signing key so you can migrate servers later without changing UIDs.\n\nIf you already have a switch UID, paste it below to subscribe immediately.\n\nUse **Default URLs** for sync.vome.io, or untick to edit server + WebSocket URLs. Use **Generate new user key** to create a fresh signing key, or untick to paste an existing one.\n\n⚠️ Public mode is NOT private — anyone with the UID can view switch state and activity. Toggling requires an access key.",
 				"data": {
+					"uid": "Switch UID (optional)",
+					"generate_new_key": "Generate new user key",
+					"use_default_urls": "Default URLs (sync.vome.io)",
 					"server_url": "Server URL",
-					"crypto_seed": "Signing key (private) — leave blank to generate"
+					"websocket_url": "WebSocket URL (optional)",
+					"crypto_seed": "Signing key (private)"
 				}
 			},
 			"generate_key": {
@@ -21,7 +25,9 @@
 			"invalid_key": "The personal key is invalid.",
 			"generate_key_failed": "Could not generate a personal key. Check network access to the server.",
 			"switch_not_found": "Switch UID not found.",
-			"invalid_uid": "UID must be a valid switch UID."
+			"invalid_uid": "UID must be a valid switch UID.",
+			"missing_signing_key": "Enter your signing key or tick Generate new user key.",
+			"missing_server_url": "Enter a server URL or tick Default URLs."
 		}
 	},
 	"options": {
@@ -55,7 +61,7 @@
 			},
 			"create_switch": {
 				"title": "Create a switch",
-				"description": "Create a switch owned by you. Publicise will list it publicly so anyone can toggle it.",
+				"description": "Create a switch owned by you. Publicise will list it publicly so anyone can view it.",
 				"data": {
 					"name": "Name",
 					"description": "Description",
@@ -100,7 +106,8 @@
 				"description": "{info}",
 				"data": {
 					"website_management_url": "Website management URL",
-					"access_key": "Access key (copy and save)"
+					"access_key": "Access key (copy and save)",
+					"regenerate": "Regenerate access key"
 				}
 			},
 			"access_keys": {

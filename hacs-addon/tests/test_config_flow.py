@@ -11,6 +11,8 @@ from custom_components.vomesync.config_flow import (
 from custom_components.vomesync.const import (
 	CONF_SERVER_URL,
 	CONF_WEBSOCKET_URL,
+	CONF_GENERATE_NEW_KEY,
+	CONF_USE_DEFAULT_URLS,
 	CONF_SWITCH_NAME,
 	CONF_SWITCH_DESCRIPTION,
 	CONF_SWITCH_LOCATION,
@@ -33,6 +35,8 @@ async def test_config_flow_derives_websocket_url(hass):
 
 	# Test HTTP -> WS
 	result = await flow.async_step_user({
+		CONF_USE_DEFAULT_URLS: False,
+		CONF_GENERATE_NEW_KEY: True,
 		CONF_SERVER_URL: "http://example.com:3000",
 	})
 
@@ -43,6 +47,8 @@ async def test_config_flow_derives_websocket_url(hass):
 	flow2 = VomeSyncConfigFlow()
 	flow2.hass = hass
 	result2 = await flow2.async_step_user({
+		CONF_USE_DEFAULT_URLS: False,
+		CONF_GENERATE_NEW_KEY: True,
 		CONF_SERVER_URL: "https://secure.example.com",
 	})
 
@@ -57,11 +63,37 @@ async def test_config_flow_with_existing_personal_key(hass):
 	flow.hass = hass
 
 	result = await flow.async_step_user({
+		CONF_USE_DEFAULT_URLS: False,
+		CONF_GENERATE_NEW_KEY: True,
 		CONF_SERVER_URL: "https://test.com",
 	})
 
 	assert result["type"] == FlowResultType.CREATE_ENTRY
 	assert result["data"][CONF_SERVER_URL] == "https://test.com"
+
+
+@pytest.mark.asyncio
+async def test_config_flow_accepts_initial_switch_uid(hass):
+	"""Test optional switch UID on initial setup."""
+	flow = VomeSyncConfigFlow()
+	flow.hass = hass
+
+	with patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.get_switch_status",
+		new=AsyncMock(return_value={"uid": "vs_test123"}),
+	), patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.close",
+		new=AsyncMock(),
+	):
+		result = await flow.async_step_user({
+			CONF_USE_DEFAULT_URLS: False,
+			CONF_GENERATE_NEW_KEY: True,
+			CONF_SERVER_URL: "https://test.com",
+			CONF_SWITCH_UID: "vs_test123",
+		})
+
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+	assert result["data"][CONF_SWITCH_UID] == "vs_test123"
 
 
 @pytest.mark.asyncio
@@ -317,15 +349,15 @@ async def test_options_flow_manage_on_website_creates_link(hass, config_entry):
 	result = await flow.async_step_manage_on_website(None)
 	assert result["type"] == FlowResultType.FORM
 	assert result["step_id"] == "manage_on_website"
-	assert result["data_schema"].schema == {}
+	assert "regenerate" in result["data_schema"].schema
 	info = result["description_placeholders"]["info"]
 	assert "https://test-server.com/switch/vs_test_uid" in info
 	assert "#accessKey=" in info
 
 
 @pytest.mark.asyncio
-async def test_options_flow_manage_on_website_submit_revokes_key_and_returns_menu(hass, config_entry):
-	"""Submitting manage-on-website should revoke the unused key and return to the switch action menu."""
+async def test_options_flow_manage_on_website_submit_returns_menu(hass, config_entry):
+	"""Submitting manage-on-website should return to the switch action menu."""
 	config_entry.data = {
 		**(config_entry.data or {}),
 		"auth_mode": "crypto",
@@ -335,7 +367,6 @@ async def test_options_flow_manage_on_website_submit_revokes_key_and_returns_men
 
 	mock_coordinator = MagicMock()
 	mock_coordinator.create_v2_access_key = AsyncMock(return_value={"apiKey": "key-123"})
-	mock_coordinator.revoke_v2_access_key = AsyncMock(return_value=True)
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
 
 	flow = VomeSyncOptionsFlow(config_entry)
@@ -350,10 +381,9 @@ async def test_options_flow_manage_on_website_submit_revokes_key_and_returns_men
 	await flow.async_step_manage_on_website(None)
 
 	# Submit step (revokes key + returns to menu)
-	result = await flow.async_step_manage_on_website({})
+	result = await flow.async_step_manage_on_website({"regenerate": False})
 	assert result["type"] == FlowResultType.MENU
 	assert result["step_id"] == "manage_switch_action"
-	mock_coordinator.revoke_v2_access_key.assert_called_once_with("vs_test_uid", "key-123")
 
 
 @pytest.mark.asyncio

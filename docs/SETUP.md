@@ -252,13 +252,16 @@ VomeSync persists switch directory data in a Docker volume. If you accidentally 
    - Settings → Devices & Services
    - Add Integration → Search "VomeSync"
 
-2. **Generate personal key:**
-   - Choose "Generate new key" during setup
-   - Or provide existing key
+2. **Configure defaults (optional):**
+   - Leave **Generate new user key** ticked to create a signing key automatically
+   - Leave **Default URLs** ticked to use sync.vome.io (WebSocket auto-derives)
+   - Untick either option to enter a signing key or custom server/WebSocket URLs
+   - Optional: paste a switch UID to subscribe immediately
 
-3. **Create switches:**
+3. **Create or subscribe switches:**
    - Integration settings → Configure
    - Create Switch or Subscribe to Switch
+   - Manage on website links generate a session key (metadata/toggle/comment) for the web UI; regenerate in HA if needed
 
 ## Configuration
 

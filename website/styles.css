@@ -129,6 +129,33 @@ body {
 	gap: 0.75rem;
 }
 
+.nav-switch-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.35rem 0.75rem;
+	border-radius: 9999px;
+	border: 1px solid var(--border);
+	background: rgba(255, 255, 255, 0.04);
+	color: var(--text-secondary);
+	font-size: 0.85rem;
+	max-width: 420px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+.nav-switch-status.on {
+	border-color: rgba(34, 197, 94, 0.4);
+	color: #bbf7d0;
+}
+
+.nav-switch-status.off {
+	border-color: rgba(239, 68, 68, 0.4);
+	color: #fecaca;
+}
+
 .nav-links .btn {
 	font-size: 0.875rem;
 	padding: 0.5rem 1rem;
@@ -255,6 +282,13 @@ body {
 	justify-content: center;
 	gap: 1rem;
 	flex-wrap: wrap;
+	position: relative;
+	z-index: 3;
+}
+
+.hero-buttons .btn {
+	position: relative;
+	z-index: 1;
 }
 
 .hero-buttons-switch {
@@ -271,6 +305,14 @@ body.view-switch .hero-buttons-switch {
 
 .hero-status-btn {
 	cursor: default;
+}
+
+.hero-status-btn.is-interactive {
+	cursor: pointer;
+}
+
+.hero-status-btn.is-interactive:hover {
+	border-color: var(--primary);
 }
 
 .hero-status-btn.status-on {
@@ -904,6 +946,10 @@ body.view-switch .intro {
 	border: 1px solid var(--border);
 }
 
+.auth-panel {
+	margin-bottom: 1.5rem;
+}
+
 .manage-panel {
 	margin-top: 1rem;
 	scroll-margin-top: 84px;
@@ -1040,6 +1086,38 @@ body.modal-open {
 	box-shadow: var(--shadow-xl);
 }
 
+#toggleDialog .ha-dialog-card input,
+#toggleDialog .ha-dialog-card select,
+#authDialog .ha-dialog-card input,
+#authDialog .ha-dialog-card select,
+#hacsDialog .ha-dialog-card input {
+	width: 100%;
+	padding: 0.65rem 0.75rem;
+	border-radius: var(--radius);
+	border: 1px solid var(--border);
+	background: var(--bg-secondary);
+	color: var(--text-primary);
+	font-size: 0.95rem;
+	margin: 0.5rem 0 0.75rem;
+}
+
+.ha-dialog-badge {
+	margin: 0.75rem 0 1rem;
+	display: flex;
+	justify-content: flex-start;
+}
+
+.ha-dialog-badge a {
+	display: inline-flex;
+	align-items: center;
+}
+
+.ha-dialog-badge img {
+	height: 42px;
+	width: auto;
+	display: block;
+}
+
 .ha-dialog-code {
 	display: flex;
 	gap: 0.75rem;
@@ -1107,7 +1185,8 @@ body.modal-open {
 }
 
 .comment-form input,
-.comment-form textarea {
+.comment-form textarea,
+.comment-form select {
 	width: 100%;
 	padding: 0.75rem;
 	border: 1px solid var(--border);
@@ -1121,6 +1200,83 @@ body.modal-open {
 .comment-form textarea {
 	resize: vertical;
 	min-height: 100px;
+}
+
+.toggle-dialog-row {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	margin: 1rem 0;
+}
+
+.toggle-switch {
+	position: relative;
+	display: inline-block;
+	width: 64px;
+	height: 36px;
+}
+
+.toggle-switch input {
+	opacity: 0;
+	width: 0;
+	height: 0;
+}
+
+.toggle-slider {
+	position: absolute;
+	inset: 0;
+	cursor: pointer;
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border);
+	border-radius: 9999px;
+	transition: var(--transition);
+}
+
+.toggle-slider::before {
+	content: '';
+	position: absolute;
+	height: 26px;
+	width: 26px;
+	left: 4px;
+	top: 4px;
+	background: white;
+	border-radius: 50%;
+	transition: var(--transition);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+	background: linear-gradient(135deg, rgba(34, 197, 94, 0.6), rgba(16, 185, 129, 0.8));
+	border-color: rgba(34, 197, 94, 0.6);
+	box-shadow: 0 0 18px rgba(34, 197, 94, 0.4);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+	transform: translateX(28px);
+}
+
+.toggle-switch-large {
+	width: 84px;
+	height: 44px;
+}
+
+.toggle-switch-large .toggle-slider::before {
+	height: 34px;
+	width: 34px;
+	top: 4px;
+	left: 5px;
+}
+
+.toggle-switch-large input:checked + .toggle-slider::before {
+	transform: translateX(36px);
+}
+
+.toggle-dialog-activity h4 {
+	margin: 0.75rem 0 0.5rem;
+	font-size: 0.95rem;
+}
+
+.comment-note {
+	margin: -0.5rem 0 1rem;
 }
 
 .comment-status {

@@ -753,17 +753,6 @@ router.post('/v2/switch/:uid/metadata',
 				return res.status(404).json({ success: false, error: 'Switch not found' });
 			}
 
-			// Single-use website management keys: revoke after first successful save.
-			try {
-				const keyData = req.v2AccessKey;
-				const name = (keyData && typeof keyData.name === 'string') ? keyData.name : '';
-				if (name.startsWith('website_once:') && req.apiKeyId && keyData && keyData.ownerId) {
-					await redisClient.revokeV2AccessKey(keyData.ownerId, uid, req.apiKeyId);
-				}
-			} catch (revokeErr) {
-				logger.warn(`Failed to revoke single-use website key for ${uid}:`, revokeErr);
-			}
-
 			return res.json({
 				success: true,
 				data: sanitizePrivateSwitchData(updated)
