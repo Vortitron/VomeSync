@@ -23,6 +23,7 @@ from custom_components.vomesync.const import (
 	CONF_SWITCH_BANNER_URL,
 	CONF_CAPTCHA_TOKEN,
 	CONF_SWITCH_UID,
+	CONF_ACCESS_KEY,
 	DOMAIN,
 )
 
@@ -189,10 +190,11 @@ async def test_options_flow_subscribe_switch_auto_imports(hass, config_entry):
 
 	result = await flow.async_step_subscribe_switch({
 		CONF_SWITCH_UID: "remote-uid-456",
+		CONF_ACCESS_KEY: "access-123",
 	})
 
 	assert result["type"] == FlowResultType.CREATE_ENTRY
-	mock_coordinator.subscribe_to_switch.assert_called_once_with("remote-uid-456")
+	mock_coordinator.subscribe_to_switch.assert_called_once_with("remote-uid-456", access_key="access-123")
 
 
 @pytest.mark.asyncio

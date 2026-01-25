@@ -13,6 +13,7 @@ CONF_AUTH_MODE = "auth_mode"
 CONF_CRYPTO_SEED = "crypto_seed"
 CONF_GENERATE_NEW_KEY = "generate_new_key"
 CONF_USE_DEFAULT_URLS = "use_default_urls"
+CONF_ACCESS_KEY = "access_key"
 
 AUTH_MODE_CRYPTO = "crypto"
 
@@ -57,6 +58,7 @@ API_V2_UPDATE_SWITCH = "/api/v2/switch/{uid}"
 API_V2_ACCESS_KEYS_CREATE = "/api/v2/switch/{uid}/access-keys"
 API_V2_ACCESS_KEYS_LIST = "/api/v2/switch/{uid}/access-keys/list"
 API_V2_ACCESS_KEYS_REVOKE = "/api/v2/switch/{uid}/access-keys/revoke"
+API_V2_TOGGLE = "/api/v2/switch/{uid}/toggle"
 
 # WebSocket message types
 WS_MSG_STATE_UPDATE = "state_update"

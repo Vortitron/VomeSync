@@ -9,6 +9,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers import config_validation as cv, entity_platform
 
@@ -65,9 +66,29 @@ async def async_setup_entry(
 	)
 	
 	# Create entities for each imported switch
+	entity_reg = None
+	try:
+		entity_reg = er.async_get(hass)
+	except KeyError:
+		entity_reg = None
+
 	for uid, switch_info in imported_switches.items():
 		name = switch_info.get("name", f"Switch {uid[:8]}")
 		is_owner = switch_info.get("is_owner", False)
+		has_access_key = bool(str(switch_info.get("access_key", "") or "").strip())
+		if not is_owner:
+			if not has_access_key:
+				if entity_reg:
+					entity_id = entity_reg.async_get_entity_id("switch", DOMAIN, f"vomesync_{uid}")
+					if entity_id:
+						entry = entity_reg.async_get(entity_id)
+						if entry and entry.disabled_by != er.RegistryEntryDisabler.INTEGRATION:
+							entity_reg.async_update_entity(
+								entity_id,
+								disabled_by=er.RegistryEntryDisabler.INTEGRATION
+							)
+							_LOGGER.info("Disabled switch entity for subscribed UID: %s", uid)
+				continue
 		
 		_LOGGER.debug(
 			"Creating entity from cache: name='%s', uid='%s', owner=%s",
@@ -274,10 +295,26 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 
 		return attributes
 
+	def _get_access_key(self) -> Optional[str]:
+		"""Return delegated access key for a subscribed switch, if any."""
+		method = getattr(self.coordinator, "get_subscription_access_key", None)
+		if callable(method):
+			try:
+				return method(self._uid)
+			except Exception:  # noqa: BLE001
+				return None
+		return None
+
 	async def async_turn_on(self, **kwargs: Any) -> None:
 		"""Turn the switch on."""
 		if not self._is_owner:
-			_LOGGER.warning("Cannot toggle switch %s - not owner", self._uid)
+			access_key = self._get_access_key()
+			if not access_key:
+				_LOGGER.warning("Cannot toggle switch %s - no access key", self._uid)
+				return
+			success = await self.coordinator.toggle_switch_with_access_key(self._uid, access_key, desired_state=True)
+			if not success:
+				_LOGGER.error("Failed to turn on switch %s via access key", self._uid)
 			return
 
 		params = self._extract_params_from_kwargs(kwargs)
@@ -288,7 +325,13 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 	async def async_turn_off(self, **kwargs: Any) -> None:
 		"""Turn the switch off."""
 		if not self._is_owner:
-			_LOGGER.warning("Cannot toggle switch %s - not owner", self._uid)
+			access_key = self._get_access_key()
+			if not access_key:
+				_LOGGER.warning("Cannot toggle switch %s - no access key", self._uid)
+				return
+			success = await self.coordinator.toggle_switch_with_access_key(self._uid, access_key, desired_state=False)
+			if not success:
+				_LOGGER.error("Failed to turn off switch %s via access key", self._uid)
 			return
 
 		success = await self.coordinator.set_switch_state(self._uid, False, params=None)
@@ -335,8 +378,14 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 	async def async_toggle(self, **kwargs: Any) -> None:
 		"""Toggle the switch."""
 		if not self._is_owner:
-			_LOGGER.warning("Cannot toggle switch %s - not owner", self._uid)
-			raise PermissionError("Only owners can toggle this switch")
+			access_key = self._get_access_key()
+			if not access_key:
+				_LOGGER.warning("Cannot toggle switch %s - no access key", self._uid)
+				raise PermissionError("Access key required to toggle this switch")
+			success = await self.coordinator.toggle_switch_with_access_key(self._uid, access_key)
+			if not success:
+				_LOGGER.error("Failed to toggle switch %s via access key", self._uid)
+			return
 
 		target = not bool(self.is_on)
 		params = self._extract_params_from_kwargs(kwargs) if target else None

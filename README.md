@@ -6,6 +6,8 @@
 
 > **Warning**: Public mode shares switch state and activity globally via a unique identifier (UID); toggling requires an access key. **Do not use for sensitive devices** (e.g., locks, alarms). Private mode is planned for secure, user-controlled syncing.
 
+Security audit: see `docs/SECURITY_AUDIT.html`.
+
 ## Project Overview
 
 VomeSync consists of four main components:
@@ -107,6 +109,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - v2 switch management: edit metadata including `iconUrl`/`bannerUrl` for nicer public pages
   - Manage on website: generates a session, fragment-based URL for editing `link`/`iconUrl`/`bannerUrl` on the website (regenerate in HA when needed)
   - v2 delegation: create/list/revoke per-switch access keys (scoped permissions like toggle/comment)
+  - Subscriptions are read-only by default; add a delegated access key in HA to enable toggling
 
 ## Installation
 

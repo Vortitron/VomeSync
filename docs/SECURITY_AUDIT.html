@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>VomeSync Security Audit</title>
+	<style>
+		body {
+			font-family: Arial, sans-serif;
+			margin: 2rem auto;
+			max-width: 1000px;
+			padding: 0 1.5rem;
+			line-height: 1.6;
+			color: #0f172a;
+		}
+		h1, h2, h3 {
+			line-height: 1.2;
+		}
+		.meta {
+			color: #475569;
+			font-size: 0.95rem;
+		}
+		.notice {
+			background: #f8fafc;
+			border: 1px solid #e2e8f0;
+			border-radius: 8px;
+			padding: 1rem 1.25rem;
+			margin: 1rem 0 1.5rem;
+		}
+		code {
+			background: #f1f5f9;
+			padding: 0.1rem 0.3rem;
+			border-radius: 4px;
+		}
+		details {
+			border: 1px solid #e2e8f0;
+			border-radius: 8px;
+			padding: 0.6rem 1rem;
+			margin: 0.75rem 0;
+			background: #ffffff;
+		}
+		summary {
+			font-weight: 600;
+			cursor: pointer;
+		}
+		ul {
+			margin: 0.5rem 0 0.75rem;
+		}
+		hr {
+			border: none;
+			border-top: 1px solid #e2e8f0;
+			margin: 1.5rem 0;
+		}
+	</style>
+</head>
+<body>
+	<h1>VomeSync Security Audit</h1>
+	<p class="meta">Generated: 2026-01-25</p>
+	<div class="notice">
+		<strong>Scope:</strong> Home Assistant integration access control (owner vs subscription),
+		delegated access keys, and toggle permissions. This audit focuses on preventing
+		unauthorised toggling and ensuring that authorised toggles propagate correctly.
+	</div>
+
+	<h2 id="toc">Contents</h2>
+	<ul>
+		<li><a href="#summary">Summary</a></li>
+		<li><a href="#threats">Threat Model</a></li>
+		<li><a href="#controls">Security Controls</a></li>
+		<li><a href="#tests">Security Tests</a></li>
+		<li><a href="#residual">Residual Risks</a></li>
+		<li><a href="#recommendations">Recommendations</a></li>
+	</ul>
+
+	<hr>
+
+	<h2 id="summary">Summary</h2>
+	<p>
+		Access control for toggle operations is now enforced in two layers:
+		owner-only signed state changes and delegated access keys for subscriptions.
+		Subscribed switches are read-only by default (sensor entities), and
+		only become controllable when a valid access key is provided.
+	</p>
+
+	<h2 id="threats">Threat Model</h2>
+	<details>
+		<summary>Unauthorised toggle via subscription</summary>
+		<ul>
+			<li>Risk: A subscriber could toggle without permission.</li>
+			<li>Mitigation: Subscriptions create sensors only (read-only) unless access key exists.</li>
+			<li>Mitigation: Coordinator rejects non-owner state changes.</li>
+		</ul>
+	</details>
+	<details>
+		<summary>Key misuse or wrong permissions</summary>
+		<ul>
+			<li>Risk: Access keys without toggle permission could be used.</li>
+			<li>Mitigation: Server enforces <code>requireV2AccessKey('toggle')</code> for toggle endpoint.</li>
+			<li>Mitigation: Access-key toggles fail if server rejects key/permission.</li>
+		</ul>
+	</details>
+	<details>
+		<summary>State desynchronisation across owners/subscribers</summary>
+		<ul>
+			<li>Risk: Toggle by one party does not propagate.</li>
+			<li>Mitigation: WebSocket broadcasts and local state updates on toggle response.</li>
+			<li>Mitigation: Subscriptions maintain WebSocket connections per UID.</li>
+		</ul>
+	</details>
+
+	<h2 id="controls">Security Controls</h2>
+	<details>
+		<summary>Owner-only write path</summary>
+		<ul>
+			<li>Owner state changes use signed v2 endpoint: <code>/api/v2/switch/:uid/state</code>.</li>
+			<li>HA coordinator refuses non-owner state changes.</li>
+		</ul>
+	</details>
+	<details>
+		<summary>Delegated access keys for subscriptions</summary>
+		<ul>
+			<li>Non-owner toggles use <code>/api/v2/switch/:uid/toggle</code> with <code>X-Api-Key</code>.</li>
+			<li>HA allows subscription toggling only when an access key is stored.</li>
+			<li>Subscriptions without access keys are sensors (read-only).</li>
+		</ul>
+	</details>
+	<details>
+		<summary>Entity safeguards</summary>
+		<ul>
+			<li>Switch entities are created only for owners or subscriptions with access keys.</li>
+			<li>Existing subscription switch entities are disabled if no access key exists.</li>
+		</ul>
+	</details>
+
+	<h2 id="tests">Security Tests</h2>
+	<details>
+		<summary>Home Assistant integration tests</summary>
+		<ul>
+			<li><code>hacs-addon/tests/test_switch.py::test_switch_toggle_denied_for_non_owners</code></li>
+			<li><code>hacs-addon/tests/test_switch.py::test_switch_turn_on_with_access_key</code></li>
+			<li><code>hacs-addon/tests/test_switch.py::test_switch_created_for_subscription_with_access_key</code></li>
+			<li><code>hacs-addon/tests/test_sensor.py::test_sensor_created_from_imported_cache_for_subscriptions</code></li>
+			<li><code>hacs-addon/tests/test_sensor.py::test_sensor_skips_subscription_with_access_key</code></li>
+			<li><code>hacs-addon/tests/test_coordinator.py::test_coordinator_toggle_with_access_key_updates_subscription</code></li>
+			<li><code>hacs-addon/tests/test_coordinator.py::test_coordinator_rate_limits_toggle</code></li>
+		</ul>
+	</details>
+	<details>
+		<summary>Webserver enforcement</summary>
+		<ul>
+			<li>V2 toggle endpoint requires delegated access key with <code>toggle</code> permission.</li>
+			<li>Owner state endpoint requires valid signed payload and nonce.</li>
+		</ul>
+	</details>
+
+	<h2 id="residual">Residual Risks</h2>
+	<details>
+		<summary>Access key storage in HA</summary>
+		<ul>
+			<li>Access keys are stored in HA config options; protect Home Assistant backups and storage.</li>
+		</ul>
+	</details>
+	<details>
+		<summary>Access key revocation</summary>
+		<ul>
+			<li>Revoked keys will cause toggles to fail; UI will remain but actions are denied server-side.</li>
+		</ul>
+	</details>
+
+	<h2 id="recommendations">Recommendations</h2>
+	<details>
+		<summary>Operational guidance</summary>
+		<ul>
+			<li>Encourage users to back up signing keys via the new integration menu.</li>
+			<li>Document access key revocation and its impact on HA entities.</li>
+			<li>Keep Redis and HA storage protected; treat keys as secrets.</li>
+		</ul>
+	</details>
+</body>
+</html>
+

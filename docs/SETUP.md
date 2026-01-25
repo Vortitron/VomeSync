@@ -261,6 +261,7 @@ VomeSync persists switch directory data in a Docker volume. If you accidentally 
 3. **Create or subscribe switches:**
    - Integration settings → Configure
    - Create Switch or Subscribe to Switch
+   - Optional: provide an access key when subscribing to enable toggling from this HA
    - Manage on website links generate a session key (metadata/toggle/comment) for the web UI; regenerate in HA if needed
 
 ## Configuration

@@ -37,8 +37,8 @@ async def test_switch_created_from_imported_cache(hass, config_entry):
 	with patch("custom_components.vomesync.switch.VomeSyncCoordinator", return_value=mock_coordinator):
 		await async_setup_entry(hass, config_entry, mock_add_entities)
 
-	# Verify 2 entities were created from cache
-	assert len(added_entities) == 2
+	# Verify only owner entities are created from cache
+	assert len(added_entities) == 1
 	
 	# Verify first entity (owner)
 	entity1 = added_entities[0]
@@ -46,11 +46,41 @@ async def test_switch_created_from_imported_cache(hass, config_entry):
 	assert entity1._is_owner == True
 	assert entity1._uid == "uid-1"
 	
-	# Verify second entity (subscription)
-	entity2 = added_entities[1]
-	assert entity2._name == "Test Switch 2"
-	assert entity2._is_owner == False
-	assert entity2._uid == "uid-2"
+	assert all(entity._is_owner for entity in added_entities)
+
+
+@pytest.mark.asyncio
+async def test_switch_created_for_subscription_with_access_key(hass, config_entry):
+	"""Subscribed switch with access key should create a switch entity."""
+	config_entry.options = {
+		"imported_switches": {
+			"uid-sub": {
+				"name": "Remote Switch",
+				"is_owner": False,
+				"access_key": "access-123",
+				"cached_data": {"state": False},
+			},
+		}
+	}
+
+	mock_coordinator = MagicMock()
+	mock_coordinator.switches = {}
+	mock_coordinator.subscriptions = {}
+	mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+	mock_coordinator.async_add_listener = MagicMock()
+
+	added_entities = []
+
+	def mock_add_entities(entities):
+		added_entities.extend(entities)
+
+	with patch("custom_components.vomesync.switch.VomeSyncCoordinator", return_value=mock_coordinator):
+		await async_setup_entry(hass, config_entry, mock_add_entities)
+
+	assert len(added_entities) == 1
+	entity = added_entities[0]
+	assert entity._uid == "uid-sub"
+	assert entity._is_owner == False
 
 
 @pytest.mark.asyncio
@@ -167,6 +197,28 @@ async def test_switch_toggle_denied_for_non_owners(hass, config_entry):
 	with pytest.raises(Exception):
 		await switch.async_toggle()
 
+
+@pytest.mark.asyncio
+async def test_switch_turn_on_with_access_key(hass, config_entry):
+	"""Subscribed switch should toggle when access key is present."""
+	mock_coordinator = MagicMock()
+	mock_coordinator.subscriptions = {"test-uid": {"state": False}}
+	mock_coordinator.switches = {}
+	mock_coordinator.last_update_success = True
+	mock_coordinator.get_subscription_access_key = MagicMock(return_value="access-123")
+	mock_coordinator.toggle_switch_with_access_key = AsyncMock(return_value=True)
+
+	switch = VomeSyncSwitch(
+		coordinator=mock_coordinator,
+		uid="test-uid",
+		name="Subscribed Switch",
+		is_owner=False,
+		config_entry=config_entry
+	)
+
+	await switch.async_turn_on()
+
+	mock_coordinator.toggle_switch_with_access_key.assert_called_once_with("test-uid", "access-123", desired_state=True)
 
 @pytest.mark.asyncio
 async def test_switch_extra_attributes_include_linked_entities(hass, config_entry):

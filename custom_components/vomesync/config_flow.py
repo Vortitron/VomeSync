@@ -23,6 +23,7 @@ from .const import (
 	CONF_CRYPTO_SEED,
 	CONF_GENERATE_NEW_KEY,
 	CONF_USE_DEFAULT_URLS,
+	CONF_ACCESS_KEY,
 	AUTH_MODE_CRYPTO,
 	DEFAULT_SERVER_URL,
 	DEFAULT_WEBSOCKET_URL,
@@ -350,6 +351,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 	) -> FlowResult:
 		"""Secondary menu to reduce clutter."""
 		menu_options = [
+			"backup_signing_key",
 			"import_switches",
 			"manage_api_keys",
 			"connect_website",
@@ -358,6 +360,30 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			"edit_connection",
 		]
 		return self.async_show_menu(step_id="more", menu_options=menu_options)
+
+	async def async_step_backup_signing_key(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Show the signing key for backup."""
+		if not self._crypto_enabled():
+			return self.async_abort(reason="crypto_required")
+		
+		if user_input is not None:
+			return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+		
+		signing_key = self._config_entry.data.get(CONF_CRYPTO_SEED, "")
+		server_url = self._config_entry.data.get(CONF_SERVER_URL, "")
+		description = (
+			"Save this signing key somewhere safe. You need it to migrate or restore your VomeSync switches.\n\n"
+			f"Server: `{server_url}`\n\n"
+			f"Signing key:\n`{signing_key}`"
+		)
+		
+		return self.async_show_form(
+			step_id="backup_signing_key",
+			data_schema=vol.Schema({}),
+			description_placeholders={"info": description},
+		)
 
 	async def async_step_import_switches(
 		self, user_input: Optional[Dict[str, Any]] = None
@@ -543,12 +569,13 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 				uid = _normalise_uid(user_input.get(CONF_SWITCH_UID))
 				if not _is_valid_uid(uid):
 					raise ValueError("invalid uid")
+				access_key = str(user_input.get(CONF_ACCESS_KEY, "") or "").strip()
 				
 				# Get coordinator
 				coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
 				
 				# Subscribe via coordinator (handles API check + dynamic entity addition)
-				success = await coordinator.subscribe_to_switch(uid)
+				success = await coordinator.subscribe_to_switch(uid, access_key=access_key)
 				
 				if success:
 					# IMPORTANT: return current options so the options flow doesn't overwrite them with {}
@@ -565,6 +592,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 
 		data_schema = vol.Schema({
 			vol.Required(CONF_SWITCH_UID): str,
+			vol.Optional(CONF_ACCESS_KEY, default=""): str,
 		})
 
 		return self.async_show_form(
@@ -572,7 +600,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			data_schema=data_schema,
 			errors=errors,
 			description_placeholders={
-				"uid_info": "Enter the UID of the switch you want to subscribe to. You can find public switches at sync.vome.io"
+				"uid_info": "Enter the UID of the switch you want to subscribe to. Optional access keys allow toggling. You can find public switches at sync.vome.io"
 			}
 		)
 
@@ -807,6 +835,20 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		is_owner = self._step_data.get("is_owner", False)
 		
 		if user_input is not None:
+			if not is_owner:
+				options = dict(self._config_entry.options or {})
+				imported_switches = options.get("imported_switches", {}) or {}
+				info = dict(imported_switches.get(selected_uid, {}))
+				access_key = str(user_input.get(CONF_ACCESS_KEY, "") or "").strip()
+				if access_key:
+					info["access_key"] = access_key
+				else:
+					info.pop("access_key", None)
+				if info:
+					imported_switches[selected_uid] = info
+					options["imported_switches"] = imported_switches
+					await self._async_update_entry_options(options)
+					await self.hass.config_entries.async_reload(self._config_entry.entry_id)
 			return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
 		
 		# Get coordinator
@@ -889,7 +931,17 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			elif entity_id:
 				device_settings_note = f"\n\n**Entity:** Search for `{entity_id}` in Settings → Devices & Services"
 			
-			description = f"""**{selected_name}** (Subscribed - read-only){device_settings_note}"""
+			current_access_key = ""
+			options = self._config_entry.options or {}
+			info = (options.get("imported_switches", {}) or {}).get(selected_uid, {})
+			if isinstance(info, dict):
+				current_access_key = str(info.get("access_key", "") or "")
+			
+			schema_fields[vol.Optional(CONF_ACCESS_KEY, default=current_access_key)] = str
+			
+			description = f"""**{selected_name}** (Subscribed){device_settings_note}
+
+Provide an access key to enable toggling from this Home Assistant instance."""
 		
 		return self.async_show_form(
 			step_id="view_switch",

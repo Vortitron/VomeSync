@@ -109,6 +109,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		
 		# Callback for dynamically adding switch entities (set by switch platform)
 		self.async_add_switch_entities = None
+		self.async_add_sensor_entities = None
 		
 		# Entity name mapping (uid -> friendly_name)
 		self.entity_names: Dict[str, str] = {}
@@ -307,6 +308,48 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		current = bool(self.get_switch_data(uid) and self.get_switch_data(uid).get("state", False))
 		return await self.set_switch_state(uid, not current)
 
+	async def toggle_switch_with_access_key(
+		self,
+		uid: str,
+		access_key: str,
+		desired_state: Optional[bool] = None,
+	) -> bool:
+		"""Toggle a switch via a delegated access key (non-owner)."""
+		if not uid or not access_key:
+			return False
+		if self.is_switch_owner(uid):
+			_LOGGER.warning("Refusing access-key toggle for owner switch %s", uid)
+			return False
+
+		current = bool(self.get_switch_data(uid) and self.get_switch_data(uid).get("state", False))
+		if desired_state is not None and current == bool(desired_state):
+			return True
+
+		current_time = time.time()
+		last_toggle = self._last_toggle_time.get(uid, 0)
+		if current_time - last_toggle < self._toggle_cooldown:
+			_LOGGER.warning(
+				"Rate limit: Skipping access-key toggle for %s (%.1fs since last toggle, cooldown: %.1fs)",
+				uid, current_time - last_toggle, self._toggle_cooldown
+			)
+			return False
+
+		self._last_toggle_time[uid] = current_time
+		try:
+			result = await self.api_client.toggle_switch_with_access_key(uid, access_key)
+			timestamp = result.get("timestamp", current_time)
+			new_state = result.get("state", not current)
+			if uid in self.subscriptions:
+				self.subscriptions[uid]["state"] = new_state
+				self.subscriptions[uid]["lastToggled"] = timestamp
+				if "toggleCount" in result:
+					self.subscriptions[uid]["toggleCount"] = result["toggleCount"]
+			self.async_update_listeners()
+			return True
+		except VomeSyncAPIError as ex:
+			_LOGGER.error("Failed to toggle switch via access key %s: %s", uid, ex)
+			return False
+
 	def _get_crypto_index_for_uid(self, uid: str) -> Optional[int]:
 		"""Resolve crypto index for a v2-owned switch."""
 		switch_data = self.switches.get(uid) or {}
@@ -325,6 +368,10 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 	async def set_switch_state(self, uid: str, state: bool, params: Optional[Dict[str, Any]] = None) -> bool:
 		"""Set a switch state (v2 signed endpoint)."""
 		import time
+
+		if not self.is_switch_owner(uid):
+			_LOGGER.warning("Refusing to set state for %s: not owner", uid)
+			return False
 		
 		# Rate limiting to prevent API spam
 		current_time = time.time()
@@ -685,7 +732,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			_LOGGER.error("Failed to revoke v2 access key uid=%s: %s", uid, ex)
 			return False
 
-	async def subscribe_to_switch(self, uid: str) -> bool:
+	async def subscribe_to_switch(self, uid: str, access_key: Optional[str] = None) -> bool:
 		"""Subscribe to an existing switch."""
 		try:
 			# Check if switch exists
@@ -705,6 +752,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				"name": name,
 				"is_owner": False
 			}
+			access_key = str(access_key or "").strip() or None
 			
 			# Automatically import this subscription (add to local cache)
 			options = dict(self.config_entry.options or {})
@@ -732,6 +780,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 						"name": imported_switches.get(uid, {}).get("name", name),
 						"is_owner": False,
 						"cached_data": self.subscriptions[uid],
+						**({"access_key": access_key} if access_key else {}),
 					}
 					options["imported_switches"] = imported_switches
 					await self._async_update_entry_options(options)
@@ -744,7 +793,8 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			imported_switches[uid] = {
 				"name": name,
 				"is_owner": False,
-				"cached_data": self.subscriptions[uid]
+				"cached_data": self.subscriptions[uid],
+				**({"access_key": access_key} if access_key else {}),
 			}
 			options["imported_switches"] = imported_switches
 			
@@ -754,15 +804,20 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			# Establish WebSocket connection
 			await self._ensure_websocket_connection(uid)
 			
-			# Dynamically add the new switch entity
-			if self.async_add_switch_entities:
+			if access_key and self.async_add_switch_entities:
 				from .switch import VomeSyncSwitch
 				entity = VomeSyncSwitch(self, uid, name, False, self.config_entry)
 				self.async_add_switch_entities([entity])
 				self.entity_names[uid] = name
-				_LOGGER.info("Dynamically added subscription entity: %s (uid=%s)", name, uid)
+				_LOGGER.info("Dynamically added subscription switch with access key: %s (uid=%s)", name, uid)
+			elif self.async_add_sensor_entities:
+				from .sensor import VomeSyncSensor
+				entity = VomeSyncSensor(self, uid, name)
+				self.async_add_sensor_entities([entity])
+				self.entity_names[uid] = name
+				_LOGGER.info("Dynamically added subscription sensor: %s (uid=%s)", name, uid)
 			else:
-				_LOGGER.warning("Cannot add entity dynamically - async_add_switch_entities not available")
+				_LOGGER.warning("Cannot add subscription entity dynamically; add_entities callbacks not available")
 			
 			# Trigger a coordinator update to refresh all entities
 			self.async_update_listeners()
@@ -834,6 +889,17 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		"""Check if user owns the switch."""
 		switch_data = self.get_switch_data(uid)
 		return bool(switch_data and switch_data.get("is_owner", False))
+
+	def get_subscription_access_key(self, uid: str) -> Optional[str]:
+		"""Return stored access key for a subscribed switch, if any."""
+		if not isinstance(uid, str) or not uid:
+			return None
+		options = self.config_entry.options or {}
+		info = (options.get(_OPT_IMPORTED_SWITCHES, {}) or {}).get(uid, {})
+		if isinstance(info, dict):
+			key = str(info.get("access_key", "") or "").strip()
+			return key or None
+		return None
 
 	@property
 	def personal_key(self) -> str:
@@ -1183,8 +1249,8 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 
 	async def async_add_imported_entities(self) -> None:
 		"""Dynamically add entities for imported switches without reloading the entry."""
-		if not self.async_add_switch_entities:
-			_LOGGER.warning("Cannot add imported entities dynamically; async_add_switch_entities not set")
+		if not self.async_add_switch_entities and not self.async_add_sensor_entities:
+			_LOGGER.warning("Cannot add imported entities dynamically; add_entities callbacks not set")
 			return
 		
 		options = self.config_entry.options or {}
@@ -1194,14 +1260,17 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			return
 		
 		from .switch import VomeSyncSwitch  # local import to avoid circular
+		from .sensor import VomeSyncSensor
 		
-		new_entities = []
+		new_switches = []
+		new_sensors = []
 		for uid, info in imported_switches.items():
 			if uid in self.entity_names:
 				continue
 			
 			name = info.get("name", f"Switch {uid[:8]}")
 			is_owner = info.get("is_owner", False)
+			has_access_key = bool(str(info.get("access_key", "") or "").strip())
 			
 			# Ensure websocket connection if possible
 			try:
@@ -1209,13 +1278,23 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			except Exception as ex:  # noqa: BLE001
 				_LOGGER.debug("WebSocket ensure failed for %s (non-fatal during add): %s", uid, ex)
 			
-			entity = VomeSyncSwitch(self, uid, name, is_owner, self.config_entry)
-			new_entities.append(entity)
+			if is_owner or has_access_key:
+				new_switches.append(VomeSyncSwitch(self, uid, name, is_owner, self.config_entry))
+			else:
+				new_sensors.append(VomeSyncSensor(self, uid, name))
 			self.entity_names[uid] = name
 		
-		if new_entities:
-			self.async_add_switch_entities(new_entities)
-			_LOGGER.info("Dynamically added %d imported switch entities", len(new_entities))
+		if new_switches and self.async_add_switch_entities:
+			self.async_add_switch_entities(new_switches)
+			_LOGGER.info("Dynamically added %d owned switch entities", len(new_switches))
+		elif new_switches:
+			_LOGGER.warning("Cannot add owned switch entities dynamically; async_add_switch_entities not set")
+		
+		if new_sensors and self.async_add_sensor_entities:
+			self.async_add_sensor_entities(new_sensors)
+			_LOGGER.info("Dynamically added %d subscription sensor entities", len(new_sensors))
+		elif new_sensors:
+			_LOGGER.warning("Cannot add subscription sensors dynamically; async_add_sensor_entities not set")
 
 	@property
 	def server_url(self) -> str:

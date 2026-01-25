@@ -38,6 +38,9 @@ async def async_setup_entry(
 		_LOGGER.warning("Coordinator not found during sensor setup; skipping sensor entities")
 		return
 	
+	# Store the add_entities callback in the coordinator for dynamic entity addition
+	coordinator.async_add_sensor_entities = async_add_entities
+	
 	# Create sensor entities for subscribed switches (read-only monitoring)
 	entities = []
 	
@@ -47,6 +50,8 @@ async def async_setup_entry(
 	# Create sensors for imported switches where is_owner is False
 	for uid, info in imported_switches.items():
 		if info.get("is_owner", False):
+			continue
+		if str(info.get("access_key", "") or "").strip():
 			continue
 		name = info.get("name", f"Switch {uid[:8]}")
 		entity = VomeSyncSensor(coordinator, uid, name)

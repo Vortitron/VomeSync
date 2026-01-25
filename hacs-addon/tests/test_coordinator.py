@@ -182,7 +182,7 @@ async def test_coordinator_rate_limits_toggle(hass, config_entry):
 
 	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
 		coordinator = VomeSyncCoordinator(hass, config_entry)
-		coordinator.switches = {"test-uid": {"state": False}}
+		coordinator.switches = {"test-uid": {"state": False, "is_owner": True}}
 
 		# First toggle should succeed
 		result1 = await coordinator.toggle_switch("test-uid")
@@ -199,6 +199,28 @@ async def test_coordinator_rate_limits_toggle(hass, config_entry):
 		result3 = await coordinator.toggle_switch("test-uid")
 		assert result3 == True
 		assert mock_api.toggle_switch.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_coordinator_toggle_with_access_key_updates_subscription(hass, config_entry):
+	"""Access-key toggles should update subscription state."""
+	mock_api = AsyncMock()
+	mock_api.toggle_switch_with_access_key.return_value = {
+		"uid": "sub-uid",
+		"state": True,
+		"timestamp": 1234567890,
+		"toggleCount": 4,
+	}
+
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.subscriptions = {"sub-uid": {"state": False, "is_owner": False}}
+
+		result = await coordinator.toggle_switch_with_access_key("sub-uid", "access-123", desired_state=True)
+
+	assert result is True
+	assert coordinator.subscriptions["sub-uid"]["state"] is True
+	assert coordinator.subscriptions["sub-uid"]["toggleCount"] == 4
 
 
 @pytest.mark.asyncio

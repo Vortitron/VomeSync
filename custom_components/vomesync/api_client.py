@@ -19,6 +19,7 @@ from .const import (
 	API_V2_ACCESS_KEYS_CREATE,
 	API_V2_ACCESS_KEYS_LIST,
 	API_V2_ACCESS_KEYS_REVOKE,
+	API_V2_TOGGLE,
 	AUTH_MODE_CRYPTO,
 )
 
@@ -84,13 +85,14 @@ class VomeSyncAPIClient:
 		endpoint: str,
 		data: Optional[Dict[str, Any]] = None,
 		require_auth: bool = False,
+		extra_headers: Optional[Dict[str, str]] = None,
 	) -> Dict[str, Any]:
 		"""Make an API request."""
 		url = f"{self.server_url}{endpoint}"
 		
 		session = await self._get_session()
 		
-		headers = {}
+		headers: Dict[str, str] = {}
 		if require_auth and self.personal_key:
 			headers["X-Personal-Key"] = self.personal_key
 		
@@ -98,6 +100,9 @@ class VomeSyncAPIClient:
 			if data is None:
 				data = {}
 			data["personalKey"] = self.personal_key
+		
+		if extra_headers:
+			headers.update(extra_headers)
 
 		try:
 			_LOGGER.debug("Making %s request to %s", method, endpoint)
@@ -310,6 +315,17 @@ class VomeSyncAPIClient:
 		"""Toggle a switch."""
 		endpoint = API_TOGGLE_SWITCH.format(uid=uid)
 		return await self._make_request("POST", endpoint, {}, require_auth=True)
+
+	async def toggle_switch_with_access_key(self, uid: str, access_key: str) -> Dict[str, Any]:
+		"""Toggle a v2 switch using a delegated access key."""
+		endpoint = API_V2_TOGGLE.format(uid=uid)
+		return await self._make_request(
+			"POST",
+			endpoint,
+			{},
+			require_auth=False,
+			extra_headers={"X-Api-Key": access_key},
+		)
 
 	async def set_switch_state_v2(
 		self,

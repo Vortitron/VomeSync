@@ -3,7 +3,7 @@
 		"step": {
 			"user": {
 				"title": "Set up VomeSync",
-				"description": "VomeSync uses **keypair authentication** using a locally stored signing key.\n\nUse **Generate new user key** to create a fresh signing key, or untick to paste an existing one after submit.\n\n⚠️ Anyone with the UID can view switch state and activity in Public mode.",
+				"description": "VomeSync uses **keypair authentication** with a locally stored signing key.\n\nUse **Generate new user key** to create a fresh signing key, or untick to paste an existing one after submit. After setup, back up the signing key from **More → Backup signing key**.\n\n⚠️ Anyone with the UID can view switch state and activity in Public mode.",
 				"data": {
 					"uid": "Switch UID (optional)",
 					"generate_new_key": "Generate new user key",
@@ -44,6 +44,7 @@
 			"more": {
 				"title": "More",
 				"menu_options": {
+					"backup_signing_key": "🔐 Backup signing key",
 					"import_switches": "⬇️ Import switches from API",
 					"manage_api_keys": "🔑 Manage API keys (legacy)",
 					"connect_website": "🌐 Connect to website (legacy)",
@@ -51,6 +52,10 @@
 					"cleanup_orphaned_devices": "🧹 Clean up orphaned devices",
 					"edit_connection": "⚙️ Edit connection URLs"
 				}
+			},
+			"backup_signing_key": {
+				"title": "Backup signing key",
+				"description": "{info}"
 			},
 			"import_switches": {
 				"title": "Import switches",
@@ -78,7 +83,8 @@
 				"title": "Subscribe to a switch",
 				"description": "Enter a switch UID to subscribe to. The name will be fetched automatically, and you can rename the entity afterwards in Home Assistant.\n\nYou can find public UIDs at sync.vome.io.",
 				"data": {
-					"uid": "Switch UID"
+					"uid": "Switch UID",
+					"access_key": "Access key (optional, enables toggling)"
 				}
 			},
 			"manage_switches": {
@@ -162,7 +168,8 @@
 					"website_url": "Website URL",
 					"websocket_url": "WebSocket URL",
 					"webhook_url": "Webhook URL",
-					"curl_command": "curl command"
+					"curl_command": "curl command",
+					"access_key": "Access key (optional)"
 				}
 			},
 			"edit_switch": {
