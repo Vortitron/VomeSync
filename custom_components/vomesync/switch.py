@@ -9,7 +9,6 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers import config_validation as cv, entity_platform
 
@@ -66,29 +65,9 @@ async def async_setup_entry(
 	)
 	
 	# Create entities for each imported switch
-	entity_reg = None
-	try:
-		entity_reg = er.async_get(hass)
-	except KeyError:
-		entity_reg = None
-
 	for uid, switch_info in imported_switches.items():
 		name = switch_info.get("name", f"Switch {uid[:8]}")
 		is_owner = switch_info.get("is_owner", False)
-		has_access_key = bool(str(switch_info.get("access_key", "") or "").strip())
-		if not is_owner:
-			if not has_access_key:
-				if entity_reg:
-					entity_id = entity_reg.async_get_entity_id("switch", DOMAIN, f"vomesync_{uid}")
-					if entity_id:
-						entry = entity_reg.async_get(entity_id)
-						if entry and entry.disabled_by != er.RegistryEntryDisabler.INTEGRATION:
-							entity_reg.async_update_entity(
-								entity_id,
-								disabled_by=er.RegistryEntryDisabler.INTEGRATION
-							)
-							_LOGGER.info("Disabled switch entity for subscribed UID: %s", uid)
-				continue
 		
 		_LOGGER.debug(
 			"Creating entity from cache: name='%s', uid='%s', owner=%s",

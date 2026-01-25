@@ -187,6 +187,60 @@ router.post('/generate-key',
 	}
 );
 
+// Allocate a globally unique switch name (Northern Sami words)
+router.get('/next-switch-name',
+	authManager.rateLimit('next_switch_name', 60, 60000), // 60 per minute
+	async (req, res) => {
+		try {
+			const name = await redisClient.allocateSwitchName();
+			const count = await redisClient.getAllocatedSwitchNameCount();
+
+			return res.json({
+				success: true,
+				data: {
+					name,
+					allocatedCount: count
+				}
+			});
+		} catch (error) {
+			logger.error('Error allocating switch name:', error);
+			res.status(500).json({
+				success: false,
+				error: 'Failed to allocate switch name'
+			});
+		}
+	}
+);
+
+// Release a switch name (called when a switch is deleted)
+router.post('/release-switch-name',
+	authManager.rateLimit('release_switch_name', 30, 60000),
+	async (req, res) => {
+		try {
+			const { name } = req.body || {};
+			if (!name || typeof name !== 'string') {
+				return res.status(400).json({
+					success: false,
+					error: 'Missing or invalid name parameter'
+				});
+			}
+
+			const released = await redisClient.releaseSwitchName(name);
+
+			return res.json({
+				success: true,
+				data: { released }
+			});
+		} catch (error) {
+			logger.error('Error releasing switch name:', error);
+			res.status(500).json({
+				success: false,
+				error: 'Failed to release switch name'
+			});
+		}
+	}
+);
+
 // V2: Create switch (deterministic UID derived from switch pubkey, signed by owner + switch)
 router.post('/v2/switch',
 	authManager.rateLimit('v2_create_switch', 30, 3600000),

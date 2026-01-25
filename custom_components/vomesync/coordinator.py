@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api_client import VomeSyncAPIClient, VomeSyncAPIError
 from .websocket_client import VomeSyncWebSocketClient
+from .log_utils import log_throttled
 from .const import (
 	DOMAIN,
 	CONF_PERSONAL_KEY,
@@ -128,6 +129,8 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		# Rate limiting for toggle requests (prevent API spam)
 		self._last_toggle_time: Dict[str, float] = {}
 		self._toggle_cooldown = _TOGGLE_COOLDOWN_SECONDS
+		self._warning_throttle: Dict[str, float] = {}
+		self._last_owned_switch_count: Optional[int] = None
 
 	async def _async_update_data(self) -> Dict[str, Any]:
 		"""Fetch data from API."""
@@ -174,8 +177,9 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				# Ensure WebSocket connection for owned switches
 				if uid not in self._websocket_connections:
 					await self._ensure_websocket_connection(uid)
-			
-			if not switches_data:
+
+			owned_count = len(switches_data)
+			if owned_count == 0 and (self._last_owned_switch_count is None or self._last_owned_switch_count > 0):
 				_LOGGER.warning("No owned switches returned from API; entities may appear unavailable")
 			
 			# Get status for subscribed switches.
@@ -217,8 +221,18 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					if self._websocket_connections.get(uid) is not True:
 						await self._ensure_websocket_connection(uid)
 				else:
-					_LOGGER.warning("Imported subscription %s (uid=%s) returned no status from API", name, uid)
+					log_throttled(
+						_LOGGER.warning,
+						self._warning_throttle,
+						f"sub_status_missing:{uid}",
+						600,
+						"Imported subscription %s (uid=%s) returned no status from API",
+						name,
+						uid
+					)
 			
+			self._last_owned_switch_count = owned_count
+
 			# Store current data
 			self.switches = switches_data
 			self.subscriptions = subscriptions_data
@@ -265,7 +279,15 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				self._websocket_connections[uid] = True
 				_LOGGER.debug("Established WebSocket connection for switch %s", uid)
 			except Exception as ex:
-				_LOGGER.warning("Failed to establish WebSocket connection for %s: %s", uid, ex)
+				log_throttled(
+					_LOGGER.warning,
+					self._warning_throttle,
+					f"ws_connect_failed:{uid}",
+					600,
+					"Failed to establish WebSocket connection for %s: %s",
+					uid,
+					ex
+				)
 				self._websocket_connections[uid] = False
 
 	async def _handle_websocket_message(self, uid: Any, message: Optional[Dict[str, Any]] = None) -> None:
@@ -276,7 +298,14 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			uid = message.get("uid")
 		
 		if message is None or uid is None:
-			_LOGGER.warning("Received malformed WebSocket message: %s", message)
+			log_throttled(
+				_LOGGER.warning,
+				self._warning_throttle,
+				"ws_message_malformed",
+				600,
+				"Received malformed WebSocket message: %s",
+				message
+			)
 			return
 		
 		message_type = message.get("type")
@@ -301,7 +330,15 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			_LOGGER.debug("WebSocket state update for %s: %s", uid, message["state"])
 			
 		elif message_type == "error":
-			_LOGGER.warning("WebSocket error for %s: %s", uid, message.get("message"))
+			log_throttled(
+				_LOGGER.warning,
+				self._warning_throttle,
+				f"ws_error:{uid}",
+				600,
+				"WebSocket error for %s: %s",
+				uid,
+				message.get("message")
+			)
 
 	async def toggle_switch(self, uid: str) -> bool:
 		"""Toggle a switch with rate limiting."""

@@ -144,6 +144,15 @@ class VomeSyncAPIClient:
 		data = {"consent": True}
 		return await self._make_request("POST", API_GENERATE_KEY, data)
 
+	async def get_next_switch_name(self) -> str:
+		"""Get a globally unique switch name from the server."""
+		try:
+			result = await self._make_request("GET", "/api/next-switch-name")
+			return result.get("name", "VomeSync Switch")
+		except VomeSyncAPIError:
+			# Fallback if server doesn't support this endpoint yet
+			return "VomeSync Switch"
+
 	async def validate_personal_key(self, personal_key: str) -> bool:
 		"""Validate a personal key by making an authenticated request."""
 		previous_key = self.personal_key

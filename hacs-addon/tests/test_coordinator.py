@@ -224,6 +224,24 @@ async def test_coordinator_toggle_with_access_key_updates_subscription(hass, con
 
 
 @pytest.mark.asyncio
+async def test_set_switch_state_denies_non_owner(hass, config_entry):
+	"""Non-owners should not set state via owner endpoints."""
+	mock_api = AsyncMock()
+	mock_api.set_switch_state_v2 = AsyncMock()
+	mock_api.toggle_switch = AsyncMock()
+
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.subscriptions = {"sub-uid": {"state": False, "is_owner": False}}
+
+		result = await coordinator.set_switch_state("sub-uid", True)
+
+	assert result is False
+	assert mock_api.set_switch_state_v2.call_count == 0
+	assert mock_api.toggle_switch.call_count == 0
+
+
+@pytest.mark.asyncio
 async def test_coordinator_set_switch_state_crypto_does_not_call_legacy_toggle(hass, config_entry):
 	"""Keypair/v2 set_switch_state must not call the legacy toggle endpoint."""
 	config_entry.data = {

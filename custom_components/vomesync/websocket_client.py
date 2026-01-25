@@ -14,6 +14,7 @@ from .const import (
 	WS_MSG_SUBSCRIBE,
 	WEBSOCKET_RECONNECT_DELAY,
 )
+from .log_utils import log_throttled
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class VomeSyncWebSocketClient:
 		self.connection_tasks: Dict[str, asyncio.Task] = {}
 		self.reconnect_attempts: Dict[str, int] = {}
 		self._shutdown = False
+		self._warning_throttle: Dict[str, float] = {}
 
 	async def subscribe(self, uid: str) -> None:
 		"""Subscribe to a switch's updates."""
@@ -79,7 +81,15 @@ class VomeSyncWebSocketClient:
 			except asyncio.CancelledError:
 				break
 			except Exception as ex:
-				_LOGGER.warning("WebSocket connection failed for %s: %s", uid, ex)
+				log_throttled(
+					_LOGGER.warning,
+					self._warning_throttle,
+					f"ws_connect_failed:{uid}",
+					600,
+					"WebSocket connection failed for %s: %s",
+					uid,
+					ex
+				)
 			
 			if not self._shutdown:
 				# Exponential backoff: 5s, 10s, 20s, 40s, max 60s
@@ -128,7 +138,15 @@ class VomeSyncWebSocketClient:
 						data = json.loads(message)
 						await self._handle_message(uid, data)
 					except json.JSONDecodeError as ex:
-						_LOGGER.warning("Invalid JSON from WebSocket %s: %s", uid, ex)
+						log_throttled(
+							_LOGGER.warning,
+							self._warning_throttle,
+							f"ws_invalid_json:{uid}",
+							600,
+							"Invalid JSON from WebSocket %s: %s",
+							uid,
+							ex
+						)
 					except Exception as ex:
 						_LOGGER.error("Error handling WebSocket message for %s: %s", uid, ex)
 				
@@ -160,7 +178,15 @@ class VomeSyncWebSocketClient:
 			await self._call_message_handler(uid, message)
 			
 		elif message_type == WS_MSG_ERROR:
-			_LOGGER.warning("WebSocket error for %s: %s", uid, message.get("message"))
+			log_throttled(
+				_LOGGER.warning,
+				self._warning_throttle,
+				f"ws_error:{uid}",
+				600,
+				"WebSocket error for %s: %s",
+				uid,
+				message.get("message")
+			)
 			await self._call_message_handler(uid, message)
 			
 		elif message_type == WS_MSG_PING:

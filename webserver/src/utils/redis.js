@@ -1215,6 +1215,60 @@ class RedisClient {
 		}
 		return data.profileUrl || '';
 	}
+
+	// ── Switch name allocation (globally unique Sami words) ─────────────────
+
+	_switchNamesKey() {
+		return 'switch_names:allocated';
+	}
+
+	_switchNameCounterKey() {
+		return 'switch_names:counter';
+	}
+
+	async allocateSwitchName() {
+		// eslint-disable-next-line global-require
+		const { getWordList, formatSwitchName } = require('./switch_names');
+		const words = getWordList();
+
+		// First pass: find an unused base word
+		for (const word of words) {
+			const baseName = formatSwitchName(word);
+			const added = await this.client.sAdd(this._switchNamesKey(), baseName.toLowerCase());
+			if (added === 1) {
+				return baseName;
+			}
+		}
+
+		// All base words used — increment global counter and append suffix
+		const counter = await this.client.incr(this._switchNameCounterKey());
+		const suffix = Math.ceil(counter / words.length) + 1;
+		const wordIndex = (counter - 1) % words.length;
+		const word = words[wordIndex];
+		const suffixedName = formatSwitchName(word, suffix);
+
+		await this.client.sAdd(this._switchNamesKey(), suffixedName.toLowerCase());
+		return suffixedName;
+	}
+
+	async releaseSwitchName(name) {
+		if (!name || typeof name !== 'string') {
+			return false;
+		}
+		const removed = await this.client.sRem(this._switchNamesKey(), name.toLowerCase());
+		return removed === 1;
+	}
+
+	async isSwitchNameAllocated(name) {
+		if (!name || typeof name !== 'string') {
+			return false;
+		}
+		return await this.client.sIsMember(this._switchNamesKey(), name.toLowerCase());
+	}
+
+	async getAllocatedSwitchNameCount() {
+		return await this.client.sCard(this._switchNamesKey());
+	}
 }
 
 module.exports = new RedisClient();

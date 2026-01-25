@@ -8,6 +8,7 @@ from pathlib import Path
 
 GITHUB_ISSUES_URL = "https://github.com/Vortitron/VomeSync/issues"
 X_PROFILE_URL = "https://x.com/VomeHome"
+SECURITY_AUDIT_PATH = "/security.html"
 FORBIDDEN_SUBSTRINGS = (
 	"mailto:",
 	"support@vome.io",
@@ -38,6 +39,7 @@ def test_website_footer_support_uses_github() -> None:
 
 	assert GITHUB_ISSUES_URL in content
 	assert X_PROFILE_URL in content
+	assert SECURITY_AUDIT_PATH in content
 	_assert_no_forbidden_substrings(content, path=path)
 
 
@@ -47,6 +49,15 @@ def test_website_privacy_contact_uses_github() -> None:
 	content = _read_text(path)
 
 	assert GITHUB_ISSUES_URL in content
+	_assert_no_forbidden_substrings(content, path=path)
+
+
+def test_security_audit_page_exists() -> None:
+	"""Security audit page should be present and avoid forbidden contact links."""
+	path = _repo_root() / "website" / "security.html"
+	content = _read_text(path)
+
+	assert "<title>VomeSync Security Audit</title>" in content
 	_assert_no_forbidden_substrings(content, path=path)
 
 

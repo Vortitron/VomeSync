@@ -37,16 +37,23 @@ async def test_switch_created_from_imported_cache(hass, config_entry):
 	with patch("custom_components.vomesync.switch.VomeSyncCoordinator", return_value=mock_coordinator):
 		await async_setup_entry(hass, config_entry, mock_add_entities)
 
-	# Verify only owner entities are created from cache
-	assert len(added_entities) == 1
+	# Verify owner + subscription entities are created from cache
+	assert len(added_entities) == 2
 	
-	# Verify first entity (owner)
-	entity1 = added_entities[0]
-	assert entity1._name == "Test Switch 1"
-	assert entity1._is_owner == True
-	assert entity1._uid == "uid-1"
+	entity_by_uid = {entity._uid: entity for entity in added_entities}
+	assert "uid-1" in entity_by_uid
+	assert "uid-2" in entity_by_uid
 	
-	assert all(entity._is_owner for entity in added_entities)
+	owner_entity = entity_by_uid["uid-1"]
+	sub_entity = entity_by_uid["uid-2"]
+	
+	assert owner_entity._name == "Test Switch 1"
+	assert owner_entity._is_owner == True
+	assert owner_entity._uid == "uid-1"
+	
+	assert sub_entity._name == "Test Switch 2"
+	assert sub_entity._is_owner == False
+	assert sub_entity._uid == "uid-2"
 
 
 @pytest.mark.asyncio

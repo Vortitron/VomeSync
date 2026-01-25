@@ -1046,4 +1046,81 @@ describe('Security and validation', () => {
 			expect(response.headers['x-ratelimit-remaining']).toBeDefined();
 		});
 	});
+
+	describe('GET /api/next-switch-name', () => {
+		test('should return a globally unique Sami name', async () => {
+			const response = await request(app)
+				.get('/api/next-switch-name')
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.data.name).toBeDefined();
+			expect(response.body.data.name).toMatch(/^VomeSync /);
+			expect(response.body.data.allocatedCount).toBeGreaterThanOrEqual(1);
+		});
+
+		test('should return different names on consecutive calls', async () => {
+			const response1 = await request(app)
+				.get('/api/next-switch-name')
+				.expect(200);
+
+			const response2 = await request(app)
+				.get('/api/next-switch-name')
+				.expect(200);
+
+			expect(response1.body.data.name).not.toBe(response2.body.data.name);
+		});
+
+		test('should handle many allocations gracefully', async () => {
+			// Allocate several names and ensure they're all unique
+			const names = new Set();
+			for (let i = 0; i < 10; i += 1) {
+				// eslint-disable-next-line no-await-in-loop
+				const response = await request(app)
+					.get('/api/next-switch-name')
+					.expect(200);
+				names.add(response.body.data.name);
+			}
+			// All 10 names should be unique
+			expect(names.size).toBe(10);
+		});
+	});
+
+	describe('POST /api/release-switch-name', () => {
+		test('should release an allocated name', async () => {
+			// First allocate a name
+			const allocResponse = await request(app)
+				.get('/api/next-switch-name')
+				.expect(200);
+			const name = allocResponse.body.data.name;
+
+			// Release it
+			const releaseResponse = await request(app)
+				.post('/api/release-switch-name')
+				.send({ name })
+				.expect(200);
+
+			expect(releaseResponse.body.success).toBe(true);
+			expect(releaseResponse.body.data.released).toBe(true);
+		});
+
+		test('should return false for non-existent name', async () => {
+			const response = await request(app)
+				.post('/api/release-switch-name')
+				.send({ name: 'VomeSync NonExistentWord' })
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.data.released).toBe(false);
+		});
+
+		test('should reject missing name parameter', async () => {
+			const response = await request(app)
+				.post('/api/release-switch-name')
+				.send({})
+				.expect(400);
+
+			expect(response.body.success).toBe(false);
+		});
+	});
 });

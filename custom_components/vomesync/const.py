@@ -32,6 +32,7 @@ CONF_SWITCH_LINK = "link"
 CONF_SWITCH_ICON_URL = "icon_url"
 CONF_SWITCH_BANNER_URL = "banner_url"
 CONF_CAPTCHA_TOKEN = "captcha_token"
+CONF_SWITCH_ADVANCED = "advanced_fields"
 
 # Categories
 SWITCH_CATEGORIES = [

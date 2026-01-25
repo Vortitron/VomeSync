@@ -66,13 +66,20 @@
 			},
 			"create_switch": {
 				"title": "Create a switch",
-				"description": "Create a switch owned by you. Publicise will list it publicly so anyone can view it.",
+				"description": "Create a switch owned by you.\n\n{warning}",
 				"data": {
 					"name": "Name",
-					"description": "Description",
-					"location": "Location",
+					"description": "Description (optional)",
+					"location": "Location (optional, think opsec: city only)",
 					"category": "Category",
 					"publicize": "Publicise (list publicly)",
+					"advanced_fields": "Add optional website fields (link/icon/banner)"
+				}
+			},
+			"create_switch_advanced": {
+				"title": "Create a switch (website fields)",
+				"description": "{info}",
+				"data": {
 					"link": "Link (optional)",
 					"icon_url": "Icon URL (optional)",
 					"banner_url": "Banner URL (optional)",

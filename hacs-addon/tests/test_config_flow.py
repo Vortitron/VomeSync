@@ -24,6 +24,7 @@ from custom_components.vomesync.const import (
 	CONF_CAPTCHA_TOKEN,
 	CONF_SWITCH_UID,
 	CONF_ACCESS_KEY,
+	CONF_SWITCH_ADVANCED,
 	DOMAIN,
 )
 
@@ -154,6 +155,7 @@ async def test_options_flow_create_switch_auto_imports(hass, config_entry):
 		CONF_SWITCH_LOCATION: "Test City",
 		CONF_SWITCH_CATEGORY: "Home",
 		CONF_SWITCH_PUBLICIZE: False,
+		CONF_SWITCH_ADVANCED: False,
 	})
 
 	assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -161,13 +163,94 @@ async def test_options_flow_create_switch_auto_imports(hass, config_entry):
 
 
 @pytest.mark.asyncio
-async def test_options_flow_create_switch_schema_includes_theming_fields(hass, config_entry):
-	"""Create-switch form should expose link/icon/banner fields."""
+async def test_options_flow_create_switch_schema_has_advanced_toggle(hass, config_entry):
+	"""Create-switch form should expose advanced toggle only."""
 	flow = VomeSyncOptionsFlow(config_entry)
 	flow.hass = hass
 
 	result = await flow.async_step_create_switch(None)
 	assert result["type"] == FlowResultType.FORM
+	schema = result["data_schema"].schema
+	assert CONF_SWITCH_ADVANCED in schema
+	assert CONF_SWITCH_LINK not in schema
+	assert CONF_SWITCH_ICON_URL not in schema
+	assert CONF_SWITCH_BANNER_URL not in schema
+	assert CONF_CAPTCHA_TOKEN not in schema
+
+
+@pytest.mark.asyncio
+async def test_options_flow_create_switch_fetches_name_from_server(hass, config_entry):
+	"""Create-switch form should fetch a globally unique name from the server."""
+	mock_api = MagicMock()
+	mock_api.get_next_switch_name = AsyncMock(return_value="VomeSync Čuovga")
+
+	mock_coordinator = MagicMock()
+	mock_coordinator.api_client = mock_api
+
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_create_switch(None)
+	assert result["type"] == FlowResultType.FORM
+	schema = result["data_schema"].schema
+
+	# Find the default value for the name field
+	name_key = None
+	for key in schema:
+		if hasattr(key, "schema") and key.schema == CONF_SWITCH_NAME:
+			name_key = key
+			break
+
+	assert name_key is not None
+	assert name_key.default is not None
+	default_name = name_key.default() if callable(name_key.default) else name_key.default
+	assert default_name == "VomeSync Čuovga"
+	mock_api.get_next_switch_name.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_options_flow_create_switch_falls_back_to_numbered_name(hass, config_entry):
+	"""Create-switch form should fall back to numbered name if server fails."""
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	# No coordinator in hass.data means server call fails
+
+	result = await flow.async_step_create_switch(None)
+	assert result["type"] == FlowResultType.FORM
+	schema = result["data_schema"].schema
+
+	# Find the default value for the name field
+	name_key = None
+	for key in schema:
+		if hasattr(key, "schema") and key.schema == CONF_SWITCH_NAME:
+			name_key = key
+			break
+
+	assert name_key is not None
+	assert name_key.default is not None
+	default_name = name_key.default() if callable(name_key.default) else name_key.default
+	# Should be a numbered fallback like "VomeSync Switch 1"
+	assert default_name.startswith("VomeSync Switch ")
+
+
+@pytest.mark.asyncio
+async def test_options_flow_create_switch_advanced_schema_includes_theming_fields(hass, config_entry):
+	"""Advanced create-switch step should expose link/icon/banner fields."""
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_create_switch({
+		CONF_SWITCH_NAME: "My New Switch",
+		CONF_SWITCH_DESCRIPTION: "",
+		CONF_SWITCH_LOCATION: "",
+		CONF_SWITCH_CATEGORY: "Other",
+		CONF_SWITCH_PUBLICIZE: False,
+		CONF_SWITCH_ADVANCED: True,
+	})
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "create_switch_advanced"
 	schema = result["data_schema"].schema
 	assert CONF_SWITCH_LINK in schema
 	assert CONF_SWITCH_ICON_URL in schema

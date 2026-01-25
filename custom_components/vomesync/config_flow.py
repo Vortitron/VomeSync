@@ -37,6 +37,7 @@ from .const import (
 	CONF_SWITCH_ICON_URL,
 	CONF_SWITCH_BANNER_URL,
 	CONF_CAPTCHA_TOKEN,
+	CONF_SWITCH_ADVANCED,
 	SWITCH_CATEGORIES,
 )
 
@@ -293,6 +294,114 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			and self._config_entry.data.get(CONF_CRYPTO_SEED)
 		)
 
+	def _default_location_hint(self) -> str:
+		"""Best-effort default location using HA config name."""
+		location = getattr(self.hass.config, "location_name", "") if self.hass else ""
+		if not isinstance(location, str):
+			return ""
+		location = location.strip()
+		if not location:
+			return ""
+		if location.lower() in {"home", "house"}:
+			return ""
+		return location
+
+	def _generate_switch_name_fallback(self) -> str:
+		"""Generate a numbered fallback name when server is unreachable."""
+		# Count existing switches to generate a unique number
+		options = self._config_entry.options or {}
+		existing_count = len(options.get("imported_switches", {}))
+		return f"VomeSync Switch {existing_count + 1}"
+
+	async def _fetch_next_switch_name(self) -> str:
+		"""Fetch a globally unique switch name from the server."""
+		try:
+			coordinator = self.hass.data.get(DOMAIN, {}).get(self._config_entry.entry_id)
+			if coordinator and hasattr(coordinator, "api_client"):
+				name = await coordinator.api_client.get_next_switch_name()
+				if name:
+					return name
+		except Exception as ex:
+			_LOGGER.debug("Failed to fetch switch name from server: %s", ex)
+		# Fallback to numbered name
+		return self._generate_switch_name_fallback()
+
+	def _build_create_switch_schema(self, default_name: str = "VomeSync Switch") -> vol.Schema:
+		"""Base create-switch schema."""
+		default_location = self._default_location_hint()
+		return vol.Schema({
+			vol.Required(CONF_SWITCH_NAME, default=default_name): str,
+			vol.Optional(CONF_SWITCH_DESCRIPTION, default=""): str,
+			vol.Optional(CONF_SWITCH_LOCATION, default=default_location): str,
+			vol.Optional(CONF_SWITCH_CATEGORY, default="Other"): selector({
+				"select": {
+					"options": SWITCH_CATEGORIES,
+					"mode": "dropdown",
+				}
+			}),
+			vol.Optional(CONF_SWITCH_PUBLICIZE, default=False): bool,
+			vol.Optional(CONF_SWITCH_ADVANCED, default=False): cv.boolean,
+		})
+
+	def _build_create_switch_advanced_schema(self) -> vol.Schema:
+		"""Advanced metadata fields for create-switch."""
+		return vol.Schema({
+			vol.Optional(CONF_SWITCH_LINK, default=""): str,
+			vol.Optional(CONF_SWITCH_ICON_URL, default=""): str,
+			vol.Optional(CONF_SWITCH_BANNER_URL, default=""): str,
+			# Ensure this renders as a normal text field (not a password box)
+			vol.Optional(CONF_CAPTCHA_TOKEN, default=""): selector({"text": {"type": "text"}}),
+		})
+
+	async def _create_switch_from_data(
+		self,
+		base_data: Dict[str, Any],
+		advanced_data: Optional[Dict[str, Any]] = None,
+	) -> FlowResult:
+		"""Create switch from base + advanced data."""
+		errors: Dict[str, str] = {}
+		try:
+			coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+			payload = dict(base_data or {})
+			payload.update(advanced_data or {})
+			switch_name = payload[CONF_SWITCH_NAME]
+			uid = await coordinator.create_switch(
+				name=switch_name,
+				description=payload.get(CONF_SWITCH_DESCRIPTION, ""),
+				location=payload.get(CONF_SWITCH_LOCATION, ""),
+				category=payload.get(CONF_SWITCH_CATEGORY, "Other"),
+				publicize=payload.get(CONF_SWITCH_PUBLICIZE, False),
+				link=payload.get(CONF_SWITCH_LINK, ""),
+				icon_url=(payload.get(CONF_SWITCH_ICON_URL) or None),
+				banner_url=(payload.get(CONF_SWITCH_BANNER_URL) or None),
+				captcha_token=payload.get(CONF_CAPTCHA_TOKEN, ""),
+			)
+			if uid:
+				return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+			errors["base"] = "create_failed"
+		except VomeSyncAPIError as ex:
+			_LOGGER.error(
+				"Failed to create switch (server=%s, websocket=%s): %s",
+				self._config_entry.data[CONF_SERVER_URL],
+				self._config_entry.data[CONF_WEBSOCKET_URL],
+				ex
+			)
+			errors["base"] = "create_failed"
+		except Exception as ex:
+			_LOGGER.error("Failed to create switch (unexpected): %s", ex)
+			errors["base"] = "create_failed"
+
+		# On error, preserve the name they entered
+		attempted_name = base_data.get(CONF_SWITCH_NAME) or self._generate_switch_name_fallback()
+		return self.async_show_form(
+			step_id="create_switch",
+			data_schema=self._build_create_switch_schema(attempted_name),
+			errors=errors,
+			description_placeholders={
+				"warning": "⚠️ If you enable 'publicise', this switch will be listed publicly and anyone can view it. Toggling requires an access key."
+			}
+		)
+
 	def _build_manage_switch_actions(self, uid: str, is_owner: bool) -> list[str]:
 		actions = ["view_switch", "link_entities"]
 		if is_owner:
@@ -491,70 +600,44 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:
 		"""Create a new switch."""
-		errors = {}
-
 		if user_input is not None:
-			try:
-				# Get coordinator
-				coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
-				
-				# Create switch via coordinator (handles API call + dynamic entity addition)
-				switch_name = user_input[CONF_SWITCH_NAME]
-				uid = await coordinator.create_switch(
-					name=switch_name,
-					description=user_input.get(CONF_SWITCH_DESCRIPTION, ""),
-					location=user_input.get(CONF_SWITCH_LOCATION, ""),
-					category=user_input.get(CONF_SWITCH_CATEGORY, "Other"),
-					publicize=user_input.get(CONF_SWITCH_PUBLICIZE, False),
-					link=user_input.get(CONF_SWITCH_LINK, ""),
-					icon_url=(user_input.get(CONF_SWITCH_ICON_URL) or None),
-					banner_url=(user_input.get(CONF_SWITCH_BANNER_URL) or None),
-					captcha_token=user_input.get(CONF_CAPTCHA_TOKEN, ""),
-				)
-				
-				if uid:
-					# IMPORTANT: return current options so the options flow doesn't overwrite them with {}
-					# Coordinator already updated options (imported cache) and added the entity dynamically.
-					return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
-				else:
-					errors["base"] = "create_failed"
-				
-			except VomeSyncAPIError as ex:
-				_LOGGER.error(
-					"Failed to create switch (server=%s, websocket=%s): %s",
-					self._config_entry.data[CONF_SERVER_URL],
-					self._config_entry.data[CONF_WEBSOCKET_URL],
-					ex
-				)
-				errors["base"] = "create_failed"
-			except Exception as ex:
-				_LOGGER.error("Failed to create switch (unexpected): %s", ex)
-				errors["base"] = "create_failed"
+			base_data = dict(user_input)
+			advanced = bool(base_data.pop(CONF_SWITCH_ADVANCED, False))
+			if advanced:
+				self._step_data["create_switch_base"] = base_data
+				return await self.async_step_create_switch_advanced()
+			return await self._create_switch_from_data(base_data)
 
-		data_schema = vol.Schema({
-			vol.Required(CONF_SWITCH_NAME): str,
-			vol.Optional(CONF_SWITCH_DESCRIPTION, default=""): str,
-			vol.Optional(CONF_SWITCH_LOCATION, default=""): str,
-			vol.Optional(CONF_SWITCH_CATEGORY, default="Other"): selector({
-				"select": {
-					"options": SWITCH_CATEGORIES,
-					"mode": "dropdown",
-				}
-			}),
-			vol.Optional(CONF_SWITCH_PUBLICIZE, default=False): bool,
-			vol.Optional(CONF_SWITCH_LINK, default=""): str,
-			vol.Optional(CONF_SWITCH_ICON_URL, default=""): str,
-			vol.Optional(CONF_SWITCH_BANNER_URL, default=""): str,
-			# Ensure this renders as a normal text field (not a password box)
-			vol.Optional(CONF_CAPTCHA_TOKEN, default=""): selector({"text": {"type": "text"}}),
-		})
+		# Fetch a globally unique name from the server
+		default_name = await self._fetch_next_switch_name()
 
 		return self.async_show_form(
 			step_id="create_switch",
-			data_schema=data_schema,
-			errors=errors,
+			data_schema=self._build_create_switch_schema(default_name),
+			errors={},
 			description_placeholders={
-				"warning": "⚠️ If you enable 'publicize', this switch will be listed publicly and anyone can view it. Toggling requires an access key."
+				"warning": "⚠️ If you enable 'publicise', this switch will be listed publicly and anyone can view it. Toggling requires an access key."
+			}
+		)
+
+	async def async_step_create_switch_advanced(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Advanced fields for creating a switch."""
+		base_data = self._step_data.get("create_switch_base")
+		if not isinstance(base_data, dict):
+			return await self.async_step_create_switch()
+
+		if user_input is not None:
+			self._step_data.pop("create_switch_base", None)
+			return await self._create_switch_from_data(base_data, user_input)
+
+		return self.async_show_form(
+			step_id="create_switch_advanced",
+			data_schema=self._build_create_switch_advanced_schema(),
+			errors={},
+			description_placeholders={
+				"info": "Optional website fields. Leave blank to skip."
 			}
 		)
 
