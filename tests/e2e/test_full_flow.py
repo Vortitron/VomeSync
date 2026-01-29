@@ -93,6 +93,8 @@ class VomeSyncE2ETest:
             f"{self.api_base_url}/api/generate-key",
             json={"consent": True}
         ) as response:
+            if response.status == 410:
+                pytest.skip("Legacy personal-key endpoints are disabled on this server")
             assert response.status == 200
             data = await response.json()
             assert data["success"] is True
@@ -189,6 +191,41 @@ class VomeSyncE2ETest:
             assert response.status == 200
             data = await response.json()
             assert data["success"] is True
+            result = data["data"]
+            result["_owner_priv"] = owner_priv
+            result["_switch_priv"] = switch_priv
+            result["_owner_pub_b64"] = owner_pub_b64
+            result["_switch_pub_b64"] = switch_pub_b64
+            return result
+
+    async def set_switch_state_v2(self, uid: str, switch_priv: Ed25519PrivateKey, state: bool, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        """Set switch state via v2 signed endpoint."""
+        ts = int(time.time() * 1000)
+        nonce = f"n-{ts}-{uuid.uuid4().hex}"
+        canonical = _stable_json_stringify({
+            "v": 2,
+            "action": "set_state",
+            "uid": uid,
+            "ts": ts,
+            "nonce": nonce,
+            "state": bool(state),
+            "params": params or {},
+        })
+        sig_switch = _b64url_no_pad(switch_priv.sign(canonical.encode("utf-8")))
+
+        async with self.session.post(
+            f"{self.api_base_url}/api/v2/switch/{uid}/state",
+            json={
+                "ts": ts,
+                "nonce": nonce,
+                "sigSwitch": sig_switch,
+                "state": bool(state),
+                "params": params or {},
+            },
+        ) as response:
+            assert response.status == 200
+            data = await response.json()
+            assert data["success"] is True
             return data["data"]
     
     async def toggle_switch(self, personal_key: str, uid: str) -> Dict:
@@ -250,18 +287,14 @@ async def e2e_test():
 @pytest.mark.asyncio
 async def test_complete_switch_lifecycle(e2e_test):
     """Test complete switch lifecycle from creation to deletion."""
-    # Generate personal key
-    personal_key = await e2e_test.generate_personal_key()
-    assert len(personal_key) > 0
-    
-    # Create switch
+    # Create v2 switch
     switch_config = {
         "description": "E2E Test Switch",
         "location": "Test City",
         "category": "Test",
         "publicize": False
     }
-    switch_data = await e2e_test.create_switch(personal_key, switch_config)
+    switch_data = await e2e_test.create_switch_v2(switch_config)
     
     assert switch_data["uid"]
     assert switch_data["description"] == "E2E Test Switch"
@@ -273,7 +306,11 @@ async def test_complete_switch_lifecycle(e2e_test):
     assert status["state"] is False
     
     # Toggle switch
-    toggle_result = await e2e_test.toggle_switch(personal_key, switch_data["uid"])
+    toggle_result = await e2e_test.set_switch_state_v2(
+        switch_data["uid"],
+        switch_data["_switch_priv"],
+        True,
+    )
     assert toggle_result["uid"] == switch_data["uid"]
     assert toggle_result["state"] is True
     
@@ -285,14 +322,13 @@ async def test_complete_switch_lifecycle(e2e_test):
 @pytest.mark.asyncio
 async def test_websocket_real_time_updates(e2e_test):
     """Test WebSocket real-time updates."""
-    # Generate personal key and create switch
-    personal_key = await e2e_test.generate_personal_key()
+    # Create v2 switch
     switch_config = {
         "description": "WebSocket Test Switch",
         "category": "Test",
         "publicize": False
     }
-    switch_data = await e2e_test.create_switch(personal_key, switch_config)
+    switch_data = await e2e_test.create_switch_v2(switch_config)
     uid = switch_data["uid"]
     
     # Connect WebSocket
@@ -306,7 +342,7 @@ async def test_websocket_real_time_updates(e2e_test):
         assert initial_message["state"] is False
         
         # Toggle switch via API
-        await e2e_test.toggle_switch(personal_key, uid)
+        await e2e_test.set_switch_state_v2(uid, switch_data["_switch_priv"], True)
         
         # Should receive update via WebSocket
         update_message = await e2e_test.wait_for_websocket_message(websocket)
@@ -321,14 +357,13 @@ async def test_websocket_real_time_updates(e2e_test):
 @pytest.mark.asyncio
 async def test_multiple_websocket_subscribers(e2e_test):
     """Test multiple WebSocket clients receiving updates."""
-    # Generate personal key and create switch
-    personal_key = await e2e_test.generate_personal_key()
+    # Create v2 switch
     switch_config = {
         "description": "Multi-Subscriber Test",
         "category": "Test",
         "publicize": False
     }
-    switch_data = await e2e_test.create_switch(personal_key, switch_config)
+    switch_data = await e2e_test.create_switch_v2(switch_config)
     uid = switch_data["uid"]
     
     # Connect multiple WebSocket clients
@@ -345,7 +380,7 @@ async def test_multiple_websocket_subscribers(e2e_test):
             assert initial_message["type"] == "state_update"
         
         # Toggle switch
-        await e2e_test.toggle_switch(personal_key, uid)
+        await e2e_test.set_switch_state_v2(uid, switch_data["_switch_priv"], True)
         
         # All clients should receive update
         for ws in websockets_list:
@@ -395,10 +430,9 @@ async def test_public_switch_discovery(e2e_test):
 @pytest.mark.asyncio
 async def test_websocket_ping_pong(e2e_test):
     """Test WebSocket ping/pong functionality."""
-    # Generate personal key and create switch
-    personal_key = await e2e_test.generate_personal_key()
+    # Create v2 switch
     switch_config = {"description": "Ping Test", "category": "Test"}
-    switch_data = await e2e_test.create_switch(personal_key, switch_config)
+    switch_data = await e2e_test.create_switch_v2(switch_config)
     
     # Connect WebSocket
     websocket = await e2e_test.connect_websocket(switch_data["uid"])
@@ -427,12 +461,10 @@ async def test_websocket_ping_pong(e2e_test):
 async def test_websocket_subscribe_unsubscribe(e2e_test):
     """Test WebSocket subscription management."""
     # Create two switches
-    personal_key = await e2e_test.generate_personal_key()
-    
-    switch1_data = await e2e_test.create_switch(personal_key, {
+    switch1_data = await e2e_test.create_switch_v2({
         "description": "Switch 1", "category": "Test"
     })
-    switch2_data = await e2e_test.create_switch(personal_key, {
+    switch2_data = await e2e_test.create_switch_v2({
         "description": "Switch 2", "category": "Test"
     })
     
@@ -456,7 +488,7 @@ async def test_websocket_subscribe_unsubscribe(e2e_test):
         assert switch2_message["uid"] == switch2_data["uid"]
         
         # Toggle second switch
-        await e2e_test.toggle_switch(personal_key, switch2_data["uid"])
+        await e2e_test.set_switch_state_v2(switch2_data["uid"], switch2_data["_switch_priv"], True)
         
         # Should receive update for second switch
         update_message = await e2e_test.wait_for_websocket_message(websocket)
@@ -470,16 +502,19 @@ async def test_websocket_subscribe_unsubscribe(e2e_test):
 @pytest.mark.asyncio
 async def test_error_handling(e2e_test):
     """Test error handling in various scenarios."""
-    personal_key = await e2e_test.generate_personal_key()
-    
-    # Test toggle non-existent switch
-    fake_uid = str(uuid.uuid4())
+    # Test set-state on non-existent switch
+    fake_uid = "vs_aaaaaaaaaaaaaaaaaaaaaaaaaa"
     async with e2e_test.session.post(
-        f"{e2e_test.api_base_url}/api/toggle/{fake_uid}",
-        json={},
-        headers={"X-Personal-Key": personal_key}
+        f"{e2e_test.api_base_url}/api/v2/switch/{fake_uid}/state",
+        json={
+            "ts": int(time.time() * 1000),
+            "nonce": f"n-{uuid.uuid4().hex}",
+            "sigSwitch": "test",
+            "state": True,
+            "params": {},
+        },
     ) as response:
-        assert response.status == 401  # Unauthorized - switch not found
+        assert response.status == 404  # Not found
     
     # Test get status of non-existent switch
     async with e2e_test.session.get(
@@ -540,37 +575,28 @@ async def test_rate_limiting(e2e_test):
 @pytest.mark.asyncio
 async def test_authentication_required_endpoints(e2e_test):
     """Test that authentication-required endpoints properly reject unauthorized requests."""
-    # Test create switch without auth
-    async with e2e_test.session.post(
-        f"{e2e_test.api_base_url}/api/create-switch",
-        json={"description": "Test"}
-    ) as response:
-        assert response.status == 401
-    
-    # Test my switches without auth  
-    async with e2e_test.session.get(
-        f"{e2e_test.api_base_url}/api/my-switches"
-    ) as response:
-        assert response.status == 401
-    
-    # Create a switch to test toggle
-    personal_key = await e2e_test.generate_personal_key()
-    switch_data = await e2e_test.create_switch(personal_key, {
+    switch_data = await e2e_test.create_switch_v2({
         "description": "Auth Test", "category": "Test"
     })
-    
-    # Test toggle without auth
+
+    # Toggle access-key endpoint without key
     async with e2e_test.session.post(
-        f"{e2e_test.api_base_url}/api/toggle/{switch_data['uid']}",
+        f"{e2e_test.api_base_url}/api/v2/switch/{switch_data['uid']}/toggle",
         json={}
     ) as response:
         assert response.status == 401
-    
-    # Test toggle with wrong auth
+
+    # Comment endpoint without key
     async with e2e_test.session.post(
-        f"{e2e_test.api_base_url}/api/toggle/{switch_data['uid']}",
-        json={},
-        headers={"X-Personal-Key": str(uuid.uuid4())}
+        f"{e2e_test.api_base_url}/api/v2/switch/{switch_data['uid']}/comment",
+        json={"comment": "hi"}
+    ) as response:
+        assert response.status == 401
+
+    # Metadata endpoint without key
+    async with e2e_test.session.post(
+        f"{e2e_test.api_base_url}/api/v2/switch/{switch_data['uid']}/metadata",
+        json={"description": "Test"}
     ) as response:
         assert response.status == 401
 
