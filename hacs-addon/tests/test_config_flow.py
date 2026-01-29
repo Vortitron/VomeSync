@@ -1,3 +1,4 @@
+# flake8: noqa
 """Tests for VomeSync config and options flows."""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -25,6 +26,7 @@ from custom_components.vomesync.const import (
 	CONF_SWITCH_UID,
 	CONF_ACCESS_KEY,
 	CONF_SWITCH_ADVANCED,
+	CONF_SHOW_SIGNING_KEY_AFTER,
 	DOMAIN,
 )
 
@@ -139,6 +141,7 @@ async def test_options_flow_import_switches(hass, config_entry):
 @pytest.mark.asyncio
 async def test_options_flow_create_switch_auto_imports(hass, config_entry):
 	"""Test creating a switch automatically imports it."""
+	config_entry.options = {**(config_entry.options or {}), "signing_key_backup_confirmed": True}
 	mock_coordinator = MagicMock()
 	mock_coordinator.create_switch = AsyncMock(return_value="new-uid-123")
 	mock_coordinator.switches = {}
@@ -163,8 +166,47 @@ async def test_options_flow_create_switch_auto_imports(hass, config_entry):
 
 
 @pytest.mark.asyncio
+async def test_options_flow_create_switch_show_signing_key_after(hass, config_entry):
+	"""Create-switch should show signing key after submit when requested."""
+	config_entry.options = {**(config_entry.options or {}), "signing_key_backup_confirmed": True}
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+
+	mock_coordinator = MagicMock()
+	mock_coordinator.create_switch = AsyncMock(return_value="new-uid-123")
+	mock_coordinator.switches = {}
+
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+	hass.config_entries = MagicMock()
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_create_switch({
+		CONF_SWITCH_NAME: "My New Switch",
+		CONF_SWITCH_DESCRIPTION: "Test switch",
+		CONF_SWITCH_LOCATION: "Test City",
+		CONF_SWITCH_CATEGORY: "Home",
+		CONF_SWITCH_PUBLICIZE: False,
+		CONF_SWITCH_ADVANCED: False,
+		CONF_SHOW_SIGNING_KEY_AFTER: True,
+	})
+
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "post_create_signing_key"
+	mock_coordinator.create_switch.assert_called_once()
+
+	result = await flow.async_step_post_create_signing_key({})
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
+@pytest.mark.asyncio
 async def test_options_flow_create_switch_schema_has_advanced_toggle(hass, config_entry):
 	"""Create-switch form should expose advanced toggle only."""
+	config_entry.options = {**(config_entry.options or {}), "signing_key_backup_confirmed": True}
 	flow = VomeSyncOptionsFlow(config_entry)
 	flow.hass = hass
 
@@ -181,6 +223,7 @@ async def test_options_flow_create_switch_schema_has_advanced_toggle(hass, confi
 @pytest.mark.asyncio
 async def test_options_flow_create_switch_fetches_name_from_server(hass, config_entry):
 	"""Create-switch form should fetch a globally unique name from the server."""
+	config_entry.options = {**(config_entry.options or {}), "signing_key_backup_confirmed": True}
 	mock_api = MagicMock()
 	mock_api.get_next_switch_name = AsyncMock(return_value="VomeSync Čuovga")
 
@@ -213,6 +256,7 @@ async def test_options_flow_create_switch_fetches_name_from_server(hass, config_
 @pytest.mark.asyncio
 async def test_options_flow_create_switch_falls_back_to_numbered_name(hass, config_entry):
 	"""Create-switch form should fall back to numbered name if server fails."""
+	config_entry.options = {**(config_entry.options or {}), "signing_key_backup_confirmed": True}
 	flow = VomeSyncOptionsFlow(config_entry)
 	flow.hass = hass
 	# No coordinator in hass.data means server call fails
@@ -238,6 +282,7 @@ async def test_options_flow_create_switch_falls_back_to_numbered_name(hass, conf
 @pytest.mark.asyncio
 async def test_options_flow_create_switch_advanced_schema_includes_theming_fields(hass, config_entry):
 	"""Advanced create-switch step should expose link/icon/banner fields."""
+	config_entry.options = {**(config_entry.options or {}), "signing_key_backup_confirmed": True}
 	flow = VomeSyncOptionsFlow(config_entry)
 	flow.hass = hass
 
@@ -256,6 +301,35 @@ async def test_options_flow_create_switch_advanced_schema_includes_theming_field
 	assert CONF_SWITCH_ICON_URL in schema
 	assert CONF_SWITCH_BANNER_URL in schema
 	assert CONF_CAPTCHA_TOKEN in schema
+
+
+@pytest.mark.asyncio
+async def test_options_flow_create_switch_requires_backup_confirmation(hass, config_entry):
+	"""Create-switch should require signing key backup confirmation once."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+	hass.config_entries = MagicMock()
+	def _update_entry(entry, options=None):
+		entry.options = options or {}
+	hass.config_entries.async_update_entry = MagicMock(side_effect=_update_entry)
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_create_switch(None)
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "confirm_backup_signing_key"
+
+	result = await flow.async_step_reveal_signing_key(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "reveal_signing_key"
+
+	result = await flow.async_step_reveal_signing_key({"confirmed": True})
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "create_switch"
 
 
 @pytest.mark.asyncio
@@ -435,9 +509,13 @@ async def test_options_flow_manage_on_website_creates_link(hass, config_entry):
 	assert result["type"] == FlowResultType.FORM
 	assert result["step_id"] == "manage_on_website"
 	assert "regenerate" in result["data_schema"].schema
+	assert "stay_logged_in" in result["data_schema"].schema
 	info = result["description_placeholders"]["info"]
 	assert "https://test-server.com/switch/vs_test_uid" in info
 	assert "#accessKey=" in info
+	mock_coordinator.create_v2_access_key.assert_called_once()
+	_, kwargs = mock_coordinator.create_v2_access_key.call_args
+	assert kwargs.get("ttl_seconds") == 4 * 60 * 60
 
 
 @pytest.mark.asyncio
@@ -469,6 +547,44 @@ async def test_options_flow_manage_on_website_submit_returns_menu(hass, config_e
 	result = await flow.async_step_manage_on_website({"regenerate": False})
 	assert result["type"] == FlowResultType.MENU
 	assert result["step_id"] == "manage_switch_action"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_manage_on_website_stay_logged_in_uses_long_ttl(hass, config_entry):
+	"""Stay logged in should create a longer-lived key and add remember params."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+		"server_url": "https://test-server.com",
+	}
+
+	mock_coordinator = MagicMock()
+	mock_coordinator.create_v2_access_key = AsyncMock(return_value={"apiKey": "key-123"})
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "vs_test_uid",
+		"selected_name": "My v2 Switch",
+		"is_owner": True,
+	}
+
+	# Initial key (default ttl)
+	await flow.async_step_manage_on_website(None)
+
+	# Regenerate with stay logged in
+	result = await flow.async_step_manage_on_website({
+		"regenerate": True,
+		"stay_logged_in": True,
+	})
+	assert result["type"] == FlowResultType.FORM
+	info = result["description_placeholders"]["info"]
+	assert "remember=1" in info
+	assert "ttlSeconds=" in info
+	_, kwargs = mock_coordinator.create_v2_access_key.call_args
+	assert kwargs.get("ttl_seconds") == 30 * 24 * 60 * 60
 
 
 @pytest.mark.asyncio
@@ -582,6 +698,7 @@ async def test_options_flow_link_entities(hass, config_entry):
 	flow._step_data = {
 		"selected_uid": "switch-uid",
 		"selected_name": "Test Switch",
+		"is_owner": True,
 	}
 
 	with patch("custom_components.vomesync.config_flow.er.async_get", return_value=mock_entity_reg):
@@ -612,6 +729,48 @@ async def test_options_flow_link_entities(hass, config_entry):
 	assert cfg["mode"] == "master"
 	assert cfg["master"] == "light.living_room"
 	assert cfg["direction"] == "both"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_link_entities_listen_only_hides_direction(hass, config_entry):
+	"""Listen-only switches should not show direction options."""
+	mock_entity_reg = MagicMock()
+	mock_entity_reg.entities.values.return_value = [
+		MagicMock(
+			domain="light",
+			entity_id="light.kitchen",
+			config_entry_id="other-entry",
+			original_name="Kitchen Light"
+		),
+	]
+
+	mock_coordinator = MagicMock()
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+	hass.config_entries = MagicMock()
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "switch-uid",
+		"selected_name": "Test Switch",
+		"is_owner": False,
+		"has_access_key": False,
+	}
+
+	with patch("custom_components.vomesync.config_flow.er.async_get", return_value=mock_entity_reg):
+		result = await flow.async_step_link_entities(None)
+		assert result["type"] == FlowResultType.FORM
+		schema = result["data_schema"].schema
+		assert "direction" not in [field.schema for field in schema]
+
+		result = await flow.async_step_link_entities({
+			"entities": ["light.kitchen"],
+		})
+
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+	options = result["data"]
+	cfg = options["linked_entities"]["switch-uid"]
+	assert cfg["direction"] == "switch_to_entities"
 
 
 @pytest.mark.asyncio

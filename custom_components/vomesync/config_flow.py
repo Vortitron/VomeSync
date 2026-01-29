@@ -38,12 +38,16 @@ from .const import (
 	CONF_SWITCH_BANNER_URL,
 	CONF_CAPTCHA_TOKEN,
 	CONF_SWITCH_ADVANCED,
+	CONF_SHOW_SIGNING_KEY_AFTER,
 	SWITCH_CATEGORIES,
 )
 
 from .crypto import generate_master_seed_b64url, owner_pubkey_b64url
 
 _LOGGER = logging.getLogger(__name__)
+
+_WEBSITE_SESSION_DEFAULT_TTL_SECONDS = 4 * 60 * 60
+_WEBSITE_SESSION_STAY_TTL_SECONDS = 30 * 24 * 60 * 60
 
 
 def _normalise_uid(raw_uid: Any) -> str:
@@ -326,6 +330,21 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		# Fallback to numbered name
 		return self._generate_switch_name_fallback()
 
+	def _is_signing_key_backup_confirmed(self) -> bool:
+		"""Check whether the user confirmed backing up their signing key."""
+		options = self._config_entry.options or {}
+		return bool(options.get("signing_key_backup_confirmed"))
+
+	def _signing_key_description(self) -> str:
+		"""Build the signing key backup description."""
+		signing_key = self._config_entry.data.get(CONF_CRYPTO_SEED, "")
+		server_url = self._config_entry.data.get(CONF_SERVER_URL, "")
+		return (
+			"Back up your signing key and keep it safe.\n\n"
+			f"Server: `{server_url}`\n\n"
+			f"Signing key:\n`{signing_key}`"
+		)
+
 	def _build_create_switch_schema(self, default_name: str = "VomeSync Switch") -> vol.Schema:
 		"""Base create-switch schema."""
 		default_location = self._default_location_hint()
@@ -341,6 +360,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			}),
 			vol.Optional(CONF_SWITCH_PUBLICIZE, default=False): bool,
 			vol.Optional(CONF_SWITCH_ADVANCED, default=False): cv.boolean,
+			vol.Optional(CONF_SHOW_SIGNING_KEY_AFTER, default=False): cv.boolean,
 		})
 
 	def _build_create_switch_advanced_schema(self) -> vol.Schema:
@@ -357,6 +377,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		self,
 		base_data: Dict[str, Any],
 		advanced_data: Optional[Dict[str, Any]] = None,
+		show_signing_key_after: bool = False,
 	) -> FlowResult:
 		"""Create switch from base + advanced data."""
 		errors: Dict[str, str] = {}
@@ -377,6 +398,8 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 				captcha_token=payload.get(CONF_CAPTCHA_TOKEN, ""),
 			)
 			if uid:
+				if show_signing_key_after and self._crypto_enabled():
+					return await self.async_step_post_create_signing_key()
 				return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
 			errors["base"] = "create_failed"
 		except VomeSyncAPIError as ex:
@@ -396,10 +419,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		return self.async_show_form(
 			step_id="create_switch",
 			data_schema=self._build_create_switch_schema(attempted_name),
-			errors=errors,
-			description_placeholders={
-				"warning": "⚠️ If you enable 'publicise', this switch will be listed publicly and anyone can view it. Toggling requires an access key."
-			}
+			errors=errors
 		)
 
 	def _build_manage_switch_actions(self, uid: str, is_owner: bool) -> list[str]:
@@ -462,13 +482,18 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		menu_options = [
 			"backup_signing_key",
 			"import_switches",
-			"manage_api_keys",
-			"connect_website",
 			"reannounce_owned_switches",
 			"cleanup_orphaned_devices",
 			"edit_connection",
+			"back",
 		]
 		return self.async_show_menu(step_id="more", menu_options=menu_options)
+
+	async def async_step_back(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Return to the main options menu."""
+		return await self.async_step_init()
 
 	async def async_step_backup_signing_key(
 		self, user_input: Optional[Dict[str, Any]] = None
@@ -600,13 +625,18 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:
 		"""Create a new switch."""
+		if user_input is None and self._crypto_enabled() and not self._is_signing_key_backup_confirmed():
+			return await self.async_step_confirm_backup_signing_key()
+
 		if user_input is not None:
 			base_data = dict(user_input)
 			advanced = bool(base_data.pop(CONF_SWITCH_ADVANCED, False))
+			show_signing_key_after = bool(base_data.pop(CONF_SHOW_SIGNING_KEY_AFTER, False))
 			if advanced:
 				self._step_data["create_switch_base"] = base_data
+				self._step_data["create_switch_show_signing_key_after"] = show_signing_key_after
 				return await self.async_step_create_switch_advanced()
-			return await self._create_switch_from_data(base_data)
+			return await self._create_switch_from_data(base_data, show_signing_key_after=show_signing_key_after)
 
 		# Fetch a globally unique name from the server
 		default_name = await self._fetch_next_switch_name()
@@ -614,10 +644,75 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		return self.async_show_form(
 			step_id="create_switch",
 			data_schema=self._build_create_switch_schema(default_name),
-			errors={},
-			description_placeholders={
-				"warning": "⚠️ If you enable 'publicise', this switch will be listed publicly and anyone can view it. Toggling requires an access key."
-			}
+			errors={}
+		)
+
+	async def async_step_confirm_backup_signing_key(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Prompt for signing key backup before first switch creation."""
+		if not self._crypto_enabled():
+			return self.async_abort(reason="crypto_required")
+
+		return self.async_show_menu(
+			step_id="confirm_backup_signing_key",
+			menu_options=["reveal_signing_key", "confirm_backup_signing_key_done"]
+		)
+
+	async def async_step_confirm_backup_signing_key_done(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Record confirmation and continue to switch creation."""
+		if not self._crypto_enabled():
+			return self.async_abort(reason="crypto_required")
+
+		options = dict(self._config_entry.options or {})
+		options["signing_key_backup_confirmed"] = True
+		await self._async_update_entry_options(options)
+		return await self.async_step_create_switch()
+
+	async def async_step_reveal_signing_key(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Show the signing key and require backup confirmation."""
+		if not self._crypto_enabled():
+			return self.async_abort(reason="crypto_required")
+
+		errors: Dict[str, str] = {}
+		if user_input is not None:
+			confirmed = bool(user_input.get("confirmed", False))
+			if confirmed:
+				options = dict(self._config_entry.options or {})
+				options["signing_key_backup_confirmed"] = True
+				await self._async_update_entry_options(options)
+				return await self.async_step_create_switch()
+			errors["base"] = "backup_required"
+
+		description = self._signing_key_description()
+
+		return self.async_show_form(
+			step_id="reveal_signing_key",
+			data_schema=vol.Schema({
+				vol.Optional("confirmed", default=False): cv.boolean,
+			}),
+			errors=errors,
+			description_placeholders={"info": description},
+		)
+
+	async def async_step_post_create_signing_key(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Show signing key after creating a switch (optional)."""
+		if not self._crypto_enabled():
+			return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+
+		if user_input is not None:
+			return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+
+		return self.async_show_form(
+			step_id="post_create_signing_key",
+			data_schema=vol.Schema({}),
+			description_placeholders={"info": self._signing_key_description()},
 		)
 
 	async def async_step_create_switch_advanced(
@@ -630,7 +725,12 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 
 		if user_input is not None:
 			self._step_data.pop("create_switch_base", None)
-			return await self._create_switch_from_data(base_data, user_input)
+			show_signing_key_after = bool(self._step_data.pop("create_switch_show_signing_key_after", False))
+			return await self._create_switch_from_data(
+				base_data,
+				user_input,
+				show_signing_key_after=show_signing_key_after
+			)
 
 		return self.async_show_form(
 			step_id="create_switch_advanced",
@@ -719,10 +819,12 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			switch_info = imported_switches.get(selected_uid, {})
 			selected_name = switch_info.get("name", selected_uid[:8])
 			is_owner = switch_info.get("is_owner", False)
+			has_access_key = bool(str(switch_info.get("access_key", "") or "").strip())
 			
 			self._step_data["selected_uid"] = selected_uid
 			self._step_data["selected_name"] = selected_name
 			self._step_data["is_owner"] = is_owner
+			self._step_data["has_access_key"] = has_access_key
 			return self._show_manage_switch_action_menu(selected_uid, selected_name, is_owner)
 		
 		return self.async_show_form(
@@ -1039,6 +1141,7 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 		selected_uid = self._step_data.get("selected_uid")
 		selected_name = self._step_data.get("selected_name", selected_uid)
 		is_owner = self._step_data.get("is_owner", False)
+		stay_default = bool(self._step_data.get("manage_on_website_stay_logged_in", False))
 
 		if not is_owner:
 			return self.async_abort(reason="not_owner")
@@ -1052,29 +1155,38 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 
 		# On submit, optionally regenerate the key, otherwise return to the action menu
 		if user_input is not None:
-			if user_input.get("regenerate"):
+			stay_logged_in = bool(user_input.get("stay_logged_in", stay_default))
+			if user_input.get("regenerate") or stay_logged_in != stay_default:
 				self._step_data.pop("manage_on_website_key", None)
+				self._step_data["manage_on_website_stay_logged_in"] = stay_logged_in
 			else:
 				return self._show_manage_switch_action_menu(selected_uid, selected_name, is_owner)
+		else:
+			stay_logged_in = stay_default
 
 		coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
 		server_url = (self._config_entry.data.get(CONF_SERVER_URL, "") or "").rstrip("/")
+		ttl_seconds = _WEBSITE_SESSION_STAY_TTL_SECONDS if stay_logged_in else _WEBSITE_SESSION_DEFAULT_TTL_SECONDS
+		ttl_label = "30 days" if stay_logged_in else "4 hours"
 
 		created = await coordinator.create_v2_access_key(
 			selected_uid,
 			name=f"website_session:{selected_name}" if selected_name else "website_session",
 			permissions=["metadata", "toggle", "comment"],
+			ttl_seconds=ttl_seconds,
 		)
 		api_key = created.get("apiKey", "") if isinstance(created, dict) else ""
 		self._step_data["manage_on_website_key"] = api_key
 		website_url = f"{server_url}/switch/{selected_uid}" if server_url else ""
-		management_url = f"{website_url}#accessKey={api_key}" if (website_url and api_key) else website_url
+		remember_suffix = f"&remember=1&ttlSeconds={ttl_seconds}" if stay_logged_in else ""
+		management_url = f"{website_url}#accessKey={api_key}{remember_suffix}" if (website_url and api_key) else website_url
 
 		link_md = f"[Open website management page]({management_url})" if management_url else ""
 		info = (
 			f"{link_md}\n\n"
 			f"`{management_url}`\n\n"
 			f"Access key:\n`{api_key}`\n\n"
+			f"Session duration: **{ttl_label}**\n\n"
 			"Tip: the key is stored in the URL fragment (#…), so it is not sent to the server in requests.\n\n"
 			"This key grants **metadata, toggle, and comment** permissions for this switch.\n"
 			"Tick **Regenerate** and submit to issue a new key.\n"
@@ -1084,6 +1196,7 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 			step_id="manage_on_website",
 			data_schema=vol.Schema({
 				vol.Optional("regenerate", default=False): cv.boolean,
+				vol.Optional("stay_logged_in", default=stay_logged_in): cv.boolean,
 			}),
 			description_placeholders={"info": info}
 		)

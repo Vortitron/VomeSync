@@ -40,6 +40,7 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - JWT_SECRET=${JWT_SECRET}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-https://sync.vome.io}
       - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-900000}
       - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-100}
@@ -118,6 +119,7 @@ services:
       - REDIS_PORT=6379
       - REDIS_PASSWORD=
       - JWT_SECRET=dev-secret-change-in-production
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
       - CORS_ORIGINS=http://localhost:8112,http://localhost:8123
       - RATE_LIMIT_WINDOW_MS=900000
       - RATE_LIMIT_MAX_REQUESTS=100

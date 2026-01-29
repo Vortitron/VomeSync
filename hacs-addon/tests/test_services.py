@@ -1,3 +1,4 @@
+# flake8: noqa
 """Tests for VomeSync integration services."""
 import pytest
 from unittest.mock import AsyncMock, MagicMock

@@ -20,9 +20,9 @@ from .const import (
 	ATTR_LAST_TOGGLED,
 	ATTR_IS_OWNER,
 	DEVICE_MANUFACTURER,
-	DEVICE_MODEL,
 )
 from .coordinator import VomeSyncCoordinator
+from .naming import format_device_model, format_device_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,9 +84,9 @@ class VomeSyncSensor(CoordinatorEntity[VomeSyncCoordinator], SensorEntity):
 		# Match the switch entity's device identifiers so the sensor groups under the same device.
 		self._attr_device_info = {
 			"identifiers": {(DOMAIN, uid)},
-			"name": f"VomeSync Switch ({name})",
+			"name": format_device_name(name),
 			"manufacturer": DEVICE_MANUFACTURER,
-			"model": DEVICE_MODEL,
+			"model": format_device_model(False),
 			"sw_version": "1.0.0",
 		}
 

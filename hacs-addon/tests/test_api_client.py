@@ -1,3 +1,4 @@
+# flake8: noqa
 """Tests for VomeSync API client."""
 import asyncio
 import json

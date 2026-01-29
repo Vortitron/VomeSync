@@ -1,3 +1,4 @@
+# flake8: noqa
 """Tests for VomeSync sensor platform."""
 import pytest
 from unittest.mock import MagicMock

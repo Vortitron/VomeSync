@@ -7,6 +7,12 @@
 > **Warning**: Public mode shares switch state and activity globally via a unique identifier (UID); toggling requires an access key. **Do not use for sensitive devices** (e.g., locks, alarms). Private mode is planned for secure, user-controlled syncing.
 
 Security audit: see `docs/SECURITY_AUDIT.html`.
+Architecture diagrams: see `docs/ARCHITECTURE.md`.
+Detailed architecture docs:
+- `docs/ARCHITECTURE_SERVER.md`
+- `docs/API.md`
+- `docs/ARCHITECTURE_INTEGRATION.md`
+- `docs/ARCHITECTURE_WEBSITE.md`
 
 ## Project Overview
 
@@ -165,8 +171,9 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
    - Copy UID to subscribe in their add-on.
 
 ## Monetization
-- **Free Tier**: Basic switch creation/subscription (1-2 switches, limited updates).
-- **Premium Tier**: €5-15/month via Gumroad for unlimited switches, analytics (e.g., trigger history), and future private mode.
+- **Free Tier**: Basic switch creation/subscription with limits (public switch count, toggle/update rate, and private switch slots).
+- **Premium Tier**: €5-15/month via Gumroad for higher limits, private switches, analytics (e.g., trigger history), and priority support.
+- **Premium Listings**: Paid featured placement in the public directory for community events or organisations.
 
 
 ## Privacy and Security
@@ -364,4 +371,4 @@ See `docs/DEV_NOTES.md` for local Home Assistant testing notes and helper script
 - Add-On: MIT License (open-source).
 - Server/Website: Proprietary, managed by [Your Name/Company].
 
-_Disclaimer: VomeSync is not liable for misuse of public switches. Consult a professional for tax or privacy advice._
+_Disclaimer: VomeSync is not liable for misuse of public switches. VomeSync is in Public Beta - Features may be changed to premium, changed functionality or removed with no notice._

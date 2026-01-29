@@ -1,3 +1,4 @@
+# flake8: noqa
 """Pytest configuration for VomeSync tests."""
 import asyncio
 import sys

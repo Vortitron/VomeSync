@@ -269,6 +269,7 @@ def build_v2_create_access_key_request(
 	uid: str,
 	name: Optional[str] = None,
 	permissions: Optional[list[str]] = None,
+	ttl_seconds: Optional[int] = None,
 	ts: Optional[int] = None,
 	nonce: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -289,6 +290,8 @@ def build_v2_create_access_key_request(
 		payload_obj["name"] = str(name)
 	if permissions is not None:
 		payload_obj["permissions"] = list(permissions)
+	if ttl_seconds is not None:
+		payload_obj["ttlSeconds"] = int(ttl_seconds)
 
 	payload = {
 		"v": 2,
@@ -312,6 +315,8 @@ def build_v2_create_access_key_request(
 		req["name"] = str(name)
 	if permissions is not None:
 		req["permissions"] = list(permissions)
+	if ttl_seconds is not None:
+		req["ttlSeconds"] = int(ttl_seconds)
 	return req
 
 

@@ -2,6 +2,8 @@
 
 Base URL: `https://sync.vome.io`
 
+This document is **public‑safe** and omits sensitive infrastructure details.
+
 ## Authentication
 
 Most endpoints require a personal key for authentication. Include it in:
@@ -38,7 +40,104 @@ Rate limit headers are included in responses:
 - `X-RateLimit-Remaining`: Requests remaining in window
 - `X-RateLimit-Reset`: When limit resets (ISO 8601)
 
+## Feature Flags (Public‑Safe)
+
+- `LEGACY_API_ENABLED=false` by default. Set to `true` to enable legacy v1 endpoints.
+- `SESSION_TOKENS_ENABLED=false` by default. Set to `true` to enable session token endpoints.
+- `SESSION_TOKEN_API_KEY_TTL_SECONDS` controls the short‑lived API key duration after token redemption.
+
+## Diagrams (Public‑Safe)
+
+### Create switch (v2)
+
+```mermaid
+sequenceDiagram
+	participant Owner
+	participant API
+	participant Redis
+
+	Owner->>API: Create switch (signed v2 request)
+	API->>Redis: Store switch metadata + ownership
+	API-->>Owner: UID + metadata
+```
+
+### Toggle using delegated access key
+
+```mermaid
+sequenceDiagram
+	participant Client
+	participant API
+	participant Redis
+	participant WS
+
+	Client->>API: Toggle (X‑Api‑Key)
+	API->>Redis: Update state + counters
+	API-->>WS: Publish state update
+	WS-->>Client: Real‑time updates
+```
+
+### Access key issuance (owner‑signed)
+
+```mermaid
+sequenceDiagram
+	participant Owner
+	participant API
+	participant Redis
+
+	Owner->>API: Create access key (signed v2 request)
+	API->>Redis: Store key metadata
+	API-->>Owner: Access key (shareable)
+```
+
+### Website session token (public‑safe view)
+
+```mermaid
+sequenceDiagram
+	participant Integration
+	participant API
+	participant Website
+
+	Integration->>API: Request short‑lived session token
+	Website->>API: Redeem token
+	API-->>Website: Web session API key
+```
+
 ## Endpoints
+
+## Endpoint Index (Summary)
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| POST | `/api/v2/switch` | Signed (v2) | Create v2 switch |
+| POST | `/api/v2/my-switches` | Signed (v2) | List owned switches |
+| POST | `/api/v2/switch/{uid}/state` | Signed (v2) | Set switch state + params |
+| POST | `/api/v2/switch/{uid}` | Signed (v2) | Update metadata |
+| POST | `/api/v2/switch/{uid}/access-keys` | Signed (v2) | Create access key |
+| POST | `/api/v2/switch/{uid}/access-keys/list` | Signed (v2) | List access keys |
+| POST | `/api/v2/switch/{uid}/access-keys/revoke` | Signed (v2) | Revoke access key |
+| POST | `/api/v2/switch/{uid}/toggle` | X‑Api‑Key | Toggle via access key |
+| POST | `/api/v2/switch/{uid}/metadata` | X‑Api‑Key | Update limited metadata |
+| POST | `/api/v2/switch/{uid}/comment` | X‑Api‑Key | Add comment |
+| POST | `/api/generate-key` | Public | Create personal key |
+| POST | `/api/create-switch` | Personal key | Create legacy switch |
+| POST | `/api/toggle/{uid}` | Personal key | Toggle legacy switch |
+| GET | `/api/status/{uid}` | Public | Public switch status |
+| GET | `/api/public-switches` | Public | Public directory (v2 only) |
+| GET | `/api/switch/{uid}` | Public | Public switch detail |
+| GET | `/api/categories` | Public | Category counts |
+| GET | `/api/my-switches` | Personal key | List owned legacy switches |
+| DELETE | `/api/switch/{uid}` | Personal key | Delete legacy switch |
+| POST | `/api/switch/{uid}/comment` | Personal / API key | Add comment |
+| GET | `/api-keys` | Personal key | List API keys |
+| POST | `/api-keys` | Personal key | Create API key |
+| DELETE | `/api-keys/{apiKey}` | Personal key | Revoke API key |
+| POST | `/profile/link` | Personal key | Set profile URL |
+| POST | `/session-token` | Personal key | Create web session token |
+| POST | `/session-token/redeem` | Public | Redeem session token |
+| GET | `/api/next-switch-name` | Public | Allocate unique switch name |
+| POST | `/api/release-switch-name` | Personal key (legacy) | Release switch name |
+| GET | `/api/health` | Public | Health status |
+| GET | `/api/stats` | Public | Server stats |
 
 ## V2 Endpoints (keypair identity)
 
@@ -126,7 +225,8 @@ Access keys are **server-generated API keys** scoped to a single v2 switch. Owne
   "nonce": "random-string",
   "sigOwner": "base64url-ed25519-signature",
   "name": "Friend",
-  "permissions": ["toggle", "comment", "metadata"]
+  "permissions": ["toggle", "comment", "metadata"],
+  "ttlSeconds": 14400
 }
 ```
 
@@ -148,6 +248,7 @@ Notes:
   - `toggle`: toggle via access key
   - `comment`: comment via access key
   - `metadata`: update non-publicising metadata via access key (icon/banner/link/etc)
+- `ttlSeconds` (optional) limits key lifetime; max 30 days.
 
 #### List access keys (v2)
 
@@ -200,6 +301,10 @@ Body (example):
 }
 ```
 
+Notes:
+- Supports **multipart/form-data** with `iconFile` and/or `bannerFile`.
+- All images are rehosted and converted to WebP by the server.
+
 ### Get My Switches (v2)
 
 List switches owned by the signing owner key.
@@ -235,6 +340,10 @@ Set a switch state and optionally pass parameters (e.g. light colour/brightness)
   }
 }
 ```
+
+## Legacy / classic endpoints (compat)
+
+These endpoints remain available for compatibility but are **disabled by default** unless `LEGACY_API_ENABLED=true` is set. V2 is recommended for new integrations.
 
 ### Generate Personal Key
 
@@ -383,6 +492,49 @@ List all public switches (**v2 only**). Legacy v1 UUID switches are not listed.
 }
 ```
 
+### Get Switch Detail
+
+Fetch a single public switch record with extended metadata.
+
+**GET** `/api/switch/{uid}`
+
+**Response (example):**
+```json
+{
+  "success": true,
+  "data": {
+    "uid": "vs_...",
+    "description": "Community Switch",
+    "location": "City",
+    "category": "Community",
+    "state": false,
+    "toggleCount": 12,
+    "iconUrl": "",
+    "bannerUrl": ""
+  }
+}
+```
+
+### Get Categories
+
+List category counts for the public directory.
+
+**GET** `/api/categories`
+
+**Response (example):**
+```json
+{
+  "success": true,
+  "data": {
+    "Community": 12,
+    "Personal": 4,
+    "Event": 2,
+    "Test": 1,
+    "Other": 3
+  }
+}
+```
+
 ### Get My Switches
 
 Get switches owned by the authenticated user.
@@ -419,6 +571,12 @@ X-Personal-Key: your-personal-key
 }
 ```
 
+### Add Comment (legacy)
+
+Post a comment against a switch (requires personal or API key).
+
+**POST** `/api/switch/{uid}/comment`
+
 ### Delete Switch
 
 Delete a switch (must be owner).
@@ -440,6 +598,105 @@ X-Personal-Key: your-personal-key
     "message": "Switch deleted successfully",
     "uid": "switch-uuid"
   }
+}
+```
+
+### API Keys (legacy)
+
+Create or manage API keys tied to a personal key.
+
+**GET** `/api-keys`  
+**POST** `/api-keys`  
+**DELETE** `/api-keys/{apiKey}`
+
+### Profile Link
+
+Store a profile URL for display alongside public switches.
+
+**POST** `/profile/link`
+
+### Session Token (website)
+
+Create and redeem a short‑lived token for the website. Disabled by default unless `SESSION_TOKENS_ENABLED=true`.
+
+**POST** `/session-token`  
+**POST** `/session-token/redeem`
+
+Notes:
+- Redeem returns a short‑lived API key with `expiresInSeconds`.
+- Duration is controlled by `SESSION_TOKEN_API_KEY_TTL_SECONDS`.
+
+### Admin Endpoints (Private)
+
+Admin endpoints require `ADMIN_API_KEY` and are intended for moderation only.
+
+**Authentication:** `X-Admin-Key: <key>` or `Authorization: Bearer <key>`
+
+**POST** `/api/admin/switch/{uid}/delist`  
+Delist a public switch (removes it from the directory).
+
+**POST** `/api/admin/switch/{uid}/delete`  
+Delete a switch and its metadata (media is removed).
+
+**POST** `/api/admin/blocks`  
+Block or unblock a key/owner.
+
+```json
+{
+  "action": "block",
+  "type": "uid",
+  "value": "vs_..."
+}
+```
+
+`type` can be `uid`, `owner`, `personal`, or `api`.
+
+**POST** `/api/admin/redirects`  
+Create or update a redirect for a switch.
+
+```json
+{
+  "fromUid": "vs_old",
+  "toUid": "vs_new",
+  "reason": "Compromised key"
+}
+```
+
+**DELETE** `/api/admin/redirects/{uid}`  
+Clear a redirect.
+
+### Switch Name Allocation
+
+Allocate or release a globally unique switch name.
+
+**GET** `/api/next-switch-name`  
+**POST** `/api/release-switch-name`
+
+#### Get next switch name
+
+**GET** `/api/next-switch-name`
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "name": "VomeSync Čuovga",
+    "allocatedCount": 123
+  }
+}
+```
+
+#### Release switch name
+
+**POST** `/api/release-switch-name`
+
+**Authentication:** Required (legacy personal key)
+
+**Request Body:**
+```json
+{
+  "name": "VomeSync Čuovga"
 }
 ```
 

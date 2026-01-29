@@ -5,6 +5,10 @@
 process.env.HCAPTCHA_SECRET = process.env.HCAPTCHA_SECRET || 'test-secret';
 process.env.HCAPTCHA_BYPASS_TOKEN = process.env.HCAPTCHA_BYPASS_TOKEN || 'bypass-me';
 process.env.HCAPTCHA_SITEKEY = process.env.HCAPTCHA_SITEKEY || 'test-sitekey';
+process.env.LEGACY_API_ENABLED = process.env.LEGACY_API_ENABLED || 'true';
+process.env.SESSION_TOKENS_ENABLED = process.env.SESSION_TOKENS_ENABLED || 'true';
+process.env.SESSION_TOKEN_API_KEY_TTL_SECONDS = process.env.SESSION_TOKEN_API_KEY_TTL_SECONDS || '900';
+process.env.ADMIN_API_KEY = process.env.ADMIN_API_KEY || 'test-admin-key';
 
 const request = require('supertest');
 const express = require('express');
@@ -1087,6 +1091,16 @@ describe('Security and validation', () => {
 	});
 
 	describe('POST /api/release-switch-name', () => {
+	let personalKey;
+
+	beforeEach(async () => {
+		const keyResponse = await request(app)
+			.post('/api/generate-key')
+			.send({ consent: true })
+			.expect(200);
+		personalKey = keyResponse.body.data.personalKey;
+	});
+
 		test('should release an allocated name', async () => {
 			// First allocate a name
 			const allocResponse = await request(app)
@@ -1097,6 +1111,7 @@ describe('Security and validation', () => {
 			// Release it
 			const releaseResponse = await request(app)
 				.post('/api/release-switch-name')
+			.set('X-Personal-Key', personalKey)
 				.send({ name })
 				.expect(200);
 
@@ -1107,6 +1122,7 @@ describe('Security and validation', () => {
 		test('should return false for non-existent name', async () => {
 			const response = await request(app)
 				.post('/api/release-switch-name')
+			.set('X-Personal-Key', personalKey)
 				.send({ name: 'VomeSync NonExistentWord' })
 				.expect(200);
 
@@ -1117,10 +1133,90 @@ describe('Security and validation', () => {
 		test('should reject missing name parameter', async () => {
 			const response = await request(app)
 				.post('/api/release-switch-name')
+			.set('X-Personal-Key', personalKey)
 				.send({})
 				.expect(400);
 
 			expect(response.body.success).toBe(false);
+		});
+	});
+
+	describe('Admin endpoints', () => {
+		const adminKey = 'test-admin-key';
+
+		test('should delist a public switch', async () => {
+			const created = await createV2PublicSwitch(app);
+
+			const listBefore = await request(app)
+				.get('/api/public-switches')
+				.expect(200);
+			expect(listBefore.body.data.count).toBeGreaterThanOrEqual(1);
+
+			await request(app)
+				.post(`/api/admin/switch/${created.uid}/delist`)
+				.set('X-Admin-Key', adminKey)
+				.expect(200);
+
+			const listAfter = await request(app)
+				.get('/api/public-switches')
+				.expect(200);
+			const uids = listAfter.body.data.switches.map((sw) => sw.uid);
+			expect(uids).not.toContain(created.uid);
+		});
+
+		test('should create and clear a redirect', async () => {
+			const oldSwitch = await createV2PublicSwitch(app, { description: 'Old switch' }, 1);
+			const newSwitch = await createV2PublicSwitch(app, { description: 'New switch' }, 2);
+
+			const createRedirect = await request(app)
+				.post('/api/admin/redirects')
+				.set('X-Admin-Key', adminKey)
+				.send({ fromUid: oldSwitch.uid, toUid: newSwitch.uid, reason: 'Migrated' })
+				.expect(200);
+			expect(createRedirect.body.success).toBe(true);
+
+			const detail = await request(app)
+				.get(`/api/switch/${oldSwitch.uid}`)
+				.expect(200);
+			expect(detail.body.data.redirect).toBe(true);
+			expect(detail.body.data.redirectTo).toBe(newSwitch.uid);
+
+			await request(app)
+				.delete(`/api/admin/redirects/${oldSwitch.uid}`)
+				.set('X-Admin-Key', adminKey)
+				.expect(200);
+		});
+
+		test('should block owner by uid', async () => {
+			const created = await createV2PublicSwitch(app, { description: 'Block test' }, 3);
+			const { owner, ownerPubKeyB64 } = created;
+			const ts = Date.now();
+			const nonce = `n-${Date.now()}-${Math.random().toString(16).slice(2)}-list`;
+			const canonical = stableJsonStringify({
+				v: 2,
+				action: 'list_access_keys',
+				uid: created.uid,
+				ownerPubKey: ownerPubKeyB64,
+				ts,
+				nonce
+			});
+			const sigOwner = global.testUtils.ed25519SignBase64Url(owner.privateKey, canonical);
+
+			await request(app)
+				.post('/api/admin/blocks')
+				.set('X-Admin-Key', adminKey)
+				.send({ action: 'block', type: 'uid', value: created.uid })
+				.expect(200);
+
+			await request(app)
+				.post(`/api/v2/switch/${created.uid}/access-keys/list`)
+				.send({
+					ownerPubKey: ownerPubKeyB64,
+					ts,
+					nonce,
+					sigOwner
+				})
+				.expect(403);
 		});
 	});
 });

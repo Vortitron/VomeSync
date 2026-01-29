@@ -88,6 +88,9 @@ const detailSection = document.getElementById('switchDetail');
 const detailTitle = document.getElementById('detailTitle');
 const detailIcon = document.getElementById('detailIcon');
 const detailLocation = document.getElementById('detailLocation');
+const redirectNotice = document.getElementById('redirectNotice');
+const redirectNoticeText = document.getElementById('redirectNoticeText');
+const redirectNoticeLink = document.getElementById('redirectNoticeLink');
 const detailCategory = document.getElementById('detailCategory');
 const detailUsers = document.getElementById('detailUsers');
 const detailToggles = document.getElementById('detailToggles');
@@ -138,6 +141,28 @@ const manageBannerEdit = document.getElementById('manageBannerEdit');
 const manageBannerReplaceBtn = document.getElementById('manageBannerReplaceBtn');
 const manageBannerRemoveBtn = document.getElementById('manageBannerRemoveBtn');
 const manageBannerCancelBtn = document.getElementById('manageBannerCancelBtn');
+
+// Admin tools
+const adminPanel = document.getElementById('adminPanel');
+const adminKeyInput = document.getElementById('adminKeyInput');
+const adminKeySaveBtn = document.getElementById('adminKeySaveBtn');
+const adminKeyForgetBtn = document.getElementById('adminKeyForgetBtn');
+const adminTools = document.getElementById('adminTools');
+const adminStatus = document.getElementById('adminStatus');
+const adminDelistForm = document.getElementById('adminDelistForm');
+const adminDelistUid = document.getElementById('adminDelistUid');
+const adminDeleteForm = document.getElementById('adminDeleteForm');
+const adminDeleteUid = document.getElementById('adminDeleteUid');
+const adminBlockForm = document.getElementById('adminBlockForm');
+const adminBlockType = document.getElementById('adminBlockType');
+const adminBlockValue = document.getElementById('adminBlockValue');
+const adminBlockAction = document.getElementById('adminBlockAction');
+const adminRedirectForm = document.getElementById('adminRedirectForm');
+const adminRedirectFrom = document.getElementById('adminRedirectFrom');
+const adminRedirectTo = document.getElementById('adminRedirectTo');
+const adminRedirectReason = document.getElementById('adminRedirectReason');
+const adminRedirectClearForm = document.getElementById('adminRedirectClearForm');
+const adminRedirectClearUid = document.getElementById('adminRedirectClearUid');
 
 // Quick view modal
 const quickView = document.getElementById('quickView');
@@ -313,7 +338,7 @@ function updateNavSwitchStatus(detail) {
 		return;
 	}
 	const info = detail || currentSwitchDetail || {};
-	const name = String(info.description || info.name || uid).trim() || 'Switch';
+	const name = getDisplaySwitchName(info.description || info.name || uid) || 'Switch';
 	const stateKnown = typeof info.state === 'boolean';
 	const isOn = stateKnown ? Boolean(info.state) : false;
 	const stateLabel = stateKnown ? (isOn ? 'ON' : 'OFF') : 'Unknown';
@@ -371,7 +396,7 @@ function setHeroForSwitch(detail) {
 	if (!detail) return;
 	if (!heroTitleEl || !heroSubtitleEl) return;
 
-	const title = String(detail.description || '').trim() || 'Switch';
+	const title = getDisplaySwitchName(detail.description) || 'Switch';
 	const subtitleBits = [];
 	const location = String(detail.location || '').trim();
 	if (location) subtitleBits.push(`📍 ${location}`);
@@ -395,30 +420,81 @@ function init() {
 	setupEventListeners();
 	initHeroObserver();
 	importManagementKeyFromHash();
+	updateAdminPanelVisibility();
 	loadAllData();
 	restoreSwitchFromQuery();
 }
 
 const MANAGEMENT_KEY_STORAGE_PREFIX = 'vomesync_manage_key:';
+const MANAGEMENT_KEY_PERSIST_PREFIX = 'vomesync_manage_key_persist:';
 const API_KEY_STORAGE_PREFIX = 'vomesync_api_key:';
+const API_KEY_PERSIST_PREFIX = 'vomesync_api_key_persist:';
+const ADMIN_KEY_STORAGE = 'vomesync_admin_key';
 let managementAutoscrollUid = null;
+let redirectNoticeTargetUid = '';
 
-function getStoredManagementKey(uid) {
+function readPersistentKey(prefix, uid) {
 	if (!uid) return '';
 	try {
-		return sessionStorage.getItem(`${MANAGEMENT_KEY_STORAGE_PREFIX}${uid}`) || '';
+		const raw = localStorage.getItem(`${prefix}${uid}`);
+		if (!raw) return '';
+		const data = JSON.parse(raw);
+		if (!data || typeof data !== 'object') return '';
+		if (data.expiresAt && Date.now() > data.expiresAt) {
+			localStorage.removeItem(`${prefix}${uid}`);
+			return '';
+		}
+		return String(data.key || '');
 	} catch {
 		return '';
 	}
 }
 
-function setStoredManagementKey(uid, apiKey) {
+function writePersistentKey(prefix, uid, key, expiresAt) {
+	if (!uid || !key) return;
+	try {
+		localStorage.setItem(`${prefix}${uid}`, JSON.stringify({
+			key,
+			expiresAt: Number.isFinite(expiresAt) ? expiresAt : 0
+		}));
+	} catch {
+		// ignore
+	}
+}
+
+function clearPersistentKey(prefix, uid) {
+	if (!uid) return;
+	try {
+		localStorage.removeItem(`${prefix}${uid}`);
+	} catch {
+		// ignore
+	}
+}
+
+function getStoredManagementKey(uid) {
+	if (!uid) return '';
+	try {
+		const sessionKey = sessionStorage.getItem(`${MANAGEMENT_KEY_STORAGE_PREFIX}${uid}`) || '';
+		if (sessionKey) return sessionKey;
+		return readPersistentKey(MANAGEMENT_KEY_PERSIST_PREFIX, uid) || '';
+	} catch {
+		return '';
+	}
+}
+
+function setStoredManagementKey(uid, apiKey, options = {}) {
 	if (!uid) return;
 	try {
 		if (!apiKey) {
 			sessionStorage.removeItem(`${MANAGEMENT_KEY_STORAGE_PREFIX}${uid}`);
+			clearPersistentKey(MANAGEMENT_KEY_PERSIST_PREFIX, uid);
 		} else {
 			sessionStorage.setItem(`${MANAGEMENT_KEY_STORAGE_PREFIX}${uid}`, apiKey);
+			if (options && options.persist) {
+				writePersistentKey(MANAGEMENT_KEY_PERSIST_PREFIX, uid, apiKey, options.expiresAt);
+			} else {
+				clearPersistentKey(MANAGEMENT_KEY_PERSIST_PREFIX, uid);
+			}
 		}
 	} catch {
 		// ignore (private mode, etc)
@@ -428,23 +504,101 @@ function setStoredManagementKey(uid, apiKey) {
 function getStoredApiKey(uid) {
 	if (!uid) return '';
 	try {
-		return sessionStorage.getItem(`${API_KEY_STORAGE_PREFIX}${uid}`) || '';
+		const sessionKey = sessionStorage.getItem(`${API_KEY_STORAGE_PREFIX}${uid}`) || '';
+		if (sessionKey) return sessionKey;
+		return readPersistentKey(API_KEY_PERSIST_PREFIX, uid) || '';
 	} catch {
 		return '';
 	}
 }
 
-function setStoredApiKey(uid, apiKey) {
+function setStoredApiKey(uid, apiKey, options = {}) {
 	if (!uid) return;
 	try {
 		if (!apiKey) {
 			sessionStorage.removeItem(`${API_KEY_STORAGE_PREFIX}${uid}`);
+			clearPersistentKey(API_KEY_PERSIST_PREFIX, uid);
 		} else {
 			sessionStorage.setItem(`${API_KEY_STORAGE_PREFIX}${uid}`, apiKey);
+			if (options && options.persist) {
+				writePersistentKey(API_KEY_PERSIST_PREFIX, uid, apiKey, options.expiresAt);
+			} else {
+				clearPersistentKey(API_KEY_PERSIST_PREFIX, uid);
+			}
 		}
 	} catch {
 		// ignore
 	}
+}
+
+function getStoredAdminKey() {
+	try {
+		return sessionStorage.getItem(ADMIN_KEY_STORAGE) || '';
+	} catch {
+		return '';
+	}
+}
+
+function setStoredAdminKey(value) {
+	try {
+		if (!value) {
+			sessionStorage.removeItem(ADMIN_KEY_STORAGE);
+		} else {
+			sessionStorage.setItem(ADMIN_KEY_STORAGE, value);
+		}
+	} catch {
+		// ignore
+	}
+}
+
+function shouldShowAdminPanel() {
+	const params = new URLSearchParams(window.location.search || '');
+	return params.get('admin') === '1' || Boolean(getStoredAdminKey());
+}
+
+function updateAdminPanelVisibility() {
+	if (!adminPanel) return;
+	const hasKey = Boolean(getStoredAdminKey());
+	const shouldShow = shouldShowAdminPanel();
+	adminPanel.classList.toggle('hidden', !shouldShow);
+	if (adminTools) adminTools.classList.toggle('hidden', !hasKey);
+	if (adminKeyInput && hasKey) adminKeyInput.value = '';
+}
+
+function setAdminStatus(message, isError = false) {
+	if (!adminStatus) return;
+	adminStatus.textContent = message || '';
+	adminStatus.classList.toggle('hidden', !message);
+	adminStatus.classList.toggle('success', Boolean(message) && !isError);
+	adminStatus.classList.toggle('error', Boolean(message) && isError);
+}
+
+async function adminRequest(path, options = {}) {
+	const adminKey = getStoredAdminKey();
+	if (!adminKey) {
+		throw new Error('Admin key required');
+	}
+
+	const response = await fetch(`${API_BASE_URL}${path}`, {
+		method: options.method || 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			'X-Admin-Key': adminKey
+		},
+		body: options.body ? JSON.stringify(options.body) : undefined
+	});
+
+	let data = {};
+	try {
+		data = await response.json();
+	} catch {
+		data = {};
+	}
+
+	if (!response.ok || !data.success) {
+		throw new Error(data.error || `HTTP ${response.status}`);
+	}
+	return data.data || {};
 }
 
 function getActiveManagementKey(uid) {
@@ -493,6 +647,37 @@ function updateCommentStateVisibility() {
 	}
 }
 
+function showRedirectNotice(fromUid, toUid, reason) {
+	if (!redirectNotice || !redirectNoticeText || !redirectNoticeLink) return;
+	const safeFrom = fromUid ? String(fromUid) : '';
+	const safeTo = toUid ? String(toUid) : '';
+	const reasonText = reason ? ` (${String(reason)})` : '';
+	redirectNoticeText.textContent = safeTo
+		? `This switch moved to ${safeTo}.${reasonText}`
+		: `This switch has been redirected.${reasonText}`;
+	redirectNoticeTargetUid = safeTo;
+	if (safeTo) {
+		redirectNoticeLink.href = buildSwitchPath(safeTo);
+		redirectNoticeLink.classList.remove('hidden');
+	} else {
+		redirectNoticeLink.href = '#';
+		redirectNoticeLink.classList.add('hidden');
+	}
+	redirectNotice.classList.remove('hidden');
+}
+
+function hideRedirectNotice() {
+	if (!redirectNotice) return;
+	redirectNotice.classList.add('hidden');
+	redirectNoticeTargetUid = '';
+	if (redirectNoticeLink) {
+		redirectNoticeLink.href = '#';
+	}
+	if (redirectNoticeText) {
+		redirectNoticeText.textContent = '';
+	}
+}
+
 async function detectManagementPermission(uid, key) {
 	if (!uid || !key) return { valid: false, error: 'Access key required.' };
 	try {
@@ -537,6 +722,9 @@ function importManagementKeyFromHash() {
 	if (!hash || hash.length < 2) return;
 	const params = new URLSearchParams(hash.slice(1));
 	const apiKey = String(params.get('accessKey') || '').trim();
+	const remember = String(params.get('remember') || '') === '1';
+	const ttlSecondsRaw = Number.parseInt(params.get('ttlSeconds') || '', 10);
+	const ttlSeconds = Number.isFinite(ttlSecondsRaw) && ttlSecondsRaw > 0 ? ttlSecondsRaw : 0;
 	if (!apiKey) return;
 
 	const uid = extractSwitchUidFromPathname(window.location.pathname);
@@ -553,10 +741,11 @@ function importManagementKeyFromHash() {
 			updateCommentStateVisibility();
 			return;
 		}
+		const expiresAt = remember && ttlSeconds ? Date.now() + (ttlSeconds * 1000) : 0;
 		if (result.isManagement) {
-			setStoredManagementKey(uid, apiKey);
+			setStoredManagementKey(uid, apiKey, { persist: remember, expiresAt });
 		} else {
-			setStoredApiKey(uid, apiKey);
+			setStoredApiKey(uid, apiKey, { persist: remember, expiresAt });
 		}
 		togglePermissionDeniedByUid[uid] = false;
 		setAuthStatus('Authenticated via website link.', false);
@@ -612,6 +801,14 @@ function setupEventListeners() {
 		});
 	}
 
+	if (redirectNoticeLink) {
+		redirectNoticeLink.addEventListener('click', (e) => {
+			if (!redirectNoticeTargetUid) return;
+			e.preventDefault();
+			openSwitchDetails(redirectNoticeTargetUid);
+		});
+	}
+
 	if (heroHaLink) {
 		heroHaLink.addEventListener('click', (e) => {
 			if (!currentSwitchId) return;
@@ -664,6 +861,128 @@ function setupEventListeners() {
 		manageForm.addEventListener('submit', async (e) => {
 			e.preventDefault();
 			await submitManageAppearance();
+		});
+	}
+
+	if (adminKeySaveBtn) {
+		adminKeySaveBtn.addEventListener('click', () => {
+			const key = adminKeyInput ? String(adminKeyInput.value || '').trim() : '';
+			if (!key) {
+				setAdminStatus('Admin key required.', true);
+				return;
+			}
+			setStoredAdminKey(key);
+			if (adminKeyInput) adminKeyInput.value = '';
+			setAdminStatus('Admin key saved.', false);
+			updateAdminPanelVisibility();
+		});
+	}
+
+	if (adminKeyForgetBtn) {
+		adminKeyForgetBtn.addEventListener('click', () => {
+			setStoredAdminKey('');
+			setAdminStatus('Admin key cleared.', false);
+			updateAdminPanelVisibility();
+		});
+	}
+
+	if (adminDelistForm) {
+		adminDelistForm.addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const uid = adminDelistUid ? String(adminDelistUid.value || '').trim() : '';
+			if (!uid) {
+				setAdminStatus('Switch UID required.', true);
+				return;
+			}
+			try {
+				await adminRequest(`/admin/switch/${encodeURIComponent(uid)}/delist`);
+				setAdminStatus(`Delisted ${uid}.`, false);
+			} catch (error) {
+				setAdminStatus(error.message || 'Failed to delist.', true);
+			}
+		});
+	}
+
+	if (adminDeleteForm) {
+		adminDeleteForm.addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const uid = adminDeleteUid ? String(adminDeleteUid.value || '').trim() : '';
+			if (!uid) {
+				setAdminStatus('Switch UID required.', true);
+				return;
+			}
+			if (!confirm(`Delete switch ${uid}? This cannot be undone.`)) {
+				return;
+			}
+			try {
+				await adminRequest(`/admin/switch/${encodeURIComponent(uid)}/delete`);
+				setAdminStatus(`Deleted ${uid}.`, false);
+			} catch (error) {
+				setAdminStatus(error.message || 'Failed to delete.', true);
+			}
+		});
+	}
+
+	if (adminBlockForm) {
+		adminBlockForm.addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const type = adminBlockType ? String(adminBlockType.value || '').trim() : '';
+			const value = adminBlockValue ? String(adminBlockValue.value || '').trim() : '';
+			const action = adminBlockAction ? String(adminBlockAction.value || '').trim() : 'block';
+			if (!type || !value) {
+				setAdminStatus('Block type and value required.', true);
+				return;
+			}
+			try {
+				await adminRequest('/admin/blocks', {
+					body: {
+						action,
+						type,
+						value
+					}
+				});
+				setAdminStatus(`${action === 'block' ? 'Blocked' : 'Unblocked'} ${type}.`, false);
+			} catch (error) {
+				setAdminStatus(error.message || 'Block update failed.', true);
+			}
+		});
+	}
+
+	if (adminRedirectForm) {
+		adminRedirectForm.addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const fromUid = adminRedirectFrom ? String(adminRedirectFrom.value || '').trim() : '';
+			const toUid = adminRedirectTo ? String(adminRedirectTo.value || '').trim() : '';
+			const reason = adminRedirectReason ? String(adminRedirectReason.value || '').trim() : '';
+			if (!fromUid || !toUid) {
+				setAdminStatus('Both UIDs are required for redirects.', true);
+				return;
+			}
+			try {
+				await adminRequest('/admin/redirects', {
+					body: { fromUid, toUid, reason }
+				});
+				setAdminStatus(`Redirected ${fromUid} → ${toUid}.`, false);
+			} catch (error) {
+				setAdminStatus(error.message || 'Redirect failed.', true);
+			}
+		});
+	}
+
+	if (adminRedirectClearForm) {
+		adminRedirectClearForm.addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const uid = adminRedirectClearUid ? String(adminRedirectClearUid.value || '').trim() : '';
+			if (!uid) {
+				setAdminStatus('Redirect UID required.', true);
+				return;
+			}
+			try {
+				await adminRequest(`/admin/redirects/${encodeURIComponent(uid)}`, { method: 'DELETE' });
+				setAdminStatus(`Cleared redirect for ${uid}.`, false);
+			} catch (error) {
+				setAdminStatus(error.message || 'Clear redirect failed.', true);
+			}
 		});
 	}
 
@@ -1019,7 +1338,7 @@ function updateSwitchCardElement(card, switchData) {
 
 	const descEl = card.querySelector('[data-field="description"]');
 	if (descEl) {
-		descEl.textContent = switchData.description || 'Untitled Switch';
+		descEl.textContent = getDisplaySwitchName(switchData.description) || 'Untitled Switch';
 	}
 
 	const stateEl = card.querySelector('[data-field="stateBadge"]');
@@ -1069,7 +1388,7 @@ function computeFilteredSwitches() {
 	const minUsers = userCountFilter.value ? parseInt(userCountFilter.value, 10) : null;
 
 	return allSwitches.filter((switchData) => {
-		const description = (switchData.description || '').toLowerCase();
+		const description = getDisplaySwitchName(switchData.description || '').toLowerCase();
 		const location = (switchData.location || '').toLowerCase();
 		const categoryValue = (switchData.category || '').toLowerCase();
 
@@ -1244,7 +1563,7 @@ function scheduleDetailRefresh(uid) {
 	}, 800);
 }
 
-async function refreshSwitchDetail(uid) {
+async function refreshSwitchDetail(uid, allowRedirect = true) {
 	if (!uid || uid !== currentSwitchId) return;
 	try {
 		const response = await fetch(`${API_BASE_URL}/switch/${uid}`);
@@ -1257,7 +1576,21 @@ async function refreshSwitchDetail(uid) {
 		}
 
 		const detail = data.data;
+		if (detail && detail.redirect) {
+			if (allowRedirect && detail.redirectTo) {
+				await openSwitchDetails(detail.redirectTo, true, {
+					allowRedirect: false,
+					redirectFrom: uid,
+					redirectReason: detail.redirectReason
+				});
+				return;
+			}
+			showRedirectNotice(uid, detail.redirectTo, detail.redirectReason);
+			return;
+		}
+
 		currentSwitchDetail = detail;
+		hideRedirectNotice();
 		updateHeroStatusButton(detail);
 
 		// Update activity + counts without resetting the manage panel inputs.
@@ -1311,7 +1644,7 @@ function updateDetailActivity(detail) {
 	if (detailLastChange) detailLastChange.textContent = detail.lastToggled ? formatTimeAgo(new Date(detail.lastToggled)) : 'Never';
 
 	// If the icon/banner/description changes, update visible pieces too
-	if (detailTitle) detailTitle.textContent = detail.description || 'Untitled switch';
+	if (detailTitle) detailTitle.textContent = getDisplaySwitchName(detail.description) || 'Untitled switch';
 	if (detailIcon) {
 		const icon = String(detail.iconUrl || '').trim();
 		if (icon) {
@@ -1836,7 +2169,7 @@ async function copyAndOpenHomeAssistant(uid, button, defaultLabel) {
 
 function renderQuickView(detail) {
 	if (!detail) return;
-	if (quickViewTitle) quickViewTitle.textContent = detail.description || 'Untitled switch';
+	if (quickViewTitle) quickViewTitle.textContent = getDisplaySwitchName(detail.description) || 'Untitled switch';
 	if (quickViewSubtitle) {
 		quickViewSubtitle.textContent = detail.location ? `📍 ${detail.location}` : '';
 	}
@@ -1972,7 +2305,7 @@ function createSwitchCard(switchData) {
 			<div class="switch-header">
 				<div class="switch-title">
 					${iconHtml}
-					<div class="switch-description" data-field="description">${escapeHtml(description || 'Untitled Switch')}</div>
+					<div class="switch-description" data-field="description">${escapeHtml(getDisplaySwitchName(description) || 'Untitled Switch')}</div>
 				</div>
 				<div class="switch-state ${stateText}" data-field="stateBadge">${stateLabel}</div>
 			</div>
@@ -2068,8 +2401,12 @@ function copyText(value, button, defaultLabel) {
 	});
 }
 
-async function openSwitchDetails(uid, fromPopState = false) {
+async function openSwitchDetails(uid, fromPopState = false, options = {}) {
 	try {
+		const allowRedirect = options.allowRedirect !== false;
+		const redirectFrom = options.redirectFrom || '';
+		const redirectReason = options.redirectReason || '';
+
 		if (document?.body) {
 			document.body.classList.add('view-switch');
 		}
@@ -2090,14 +2427,42 @@ async function openSwitchDetails(uid, fromPopState = false) {
 			throw new Error(data.error || 'Failed to load switch detail');
 		}
 
+		const detail = data.data || {};
+		if (detail.redirect) {
+			if (allowRedirect && detail.redirectTo) {
+				await openSwitchDetails(detail.redirectTo, fromPopState, {
+					allowRedirect: false,
+					redirectFrom: uid,
+					redirectReason: detail.redirectReason
+				});
+				return;
+			}
+			detailSection.classList.remove('hidden');
+			showRedirectNotice(uid, detail.redirectTo, detail.redirectReason);
+			if (!fromPopState) {
+				pushSwitchQuery(uid);
+			}
+			return;
+		}
+
+		if (redirectFrom) {
+			detail.redirectFrom = redirectFrom;
+			detail.redirectReason = redirectReason;
+		}
+
 		detailSection.classList.remove('hidden');
-		renderSwitchDetail(data.data);
+		renderSwitchDetail(detail);
 		ensureRealtimeSubscriptions();
 		if (!fromPopState) {
 			pushSwitchQuery(uid);
 		}
 	} catch (error) {
 		console.error('Error loading switch detail:', error);
+		if (options && options.redirectFrom) {
+			detailSection.classList.remove('hidden');
+			showRedirectNotice(options.redirectFrom, uid, options.redirectReason);
+			return;
+		}
 		alert('Unable to load switch details. Please try again.');
 		closeDetail();
 	}
@@ -2105,7 +2470,13 @@ async function openSwitchDetails(uid, fromPopState = false) {
 
 function renderSwitchDetail(detail) {
 	currentSwitchDetail = detail;
-	detailTitle.textContent = detail.description || 'Untitled switch';
+	updateAdminPanelVisibility();
+	if (detail && detail.redirectFrom) {
+		showRedirectNotice(detail.redirectFrom, detail.uid, detail.redirectReason);
+	} else {
+		hideRedirectNotice();
+	}
+	detailTitle.textContent = getDisplaySwitchName(detail.description) || 'Untitled switch';
 	if (detailIcon) {
 		const icon = String(detail.iconUrl || '').trim();
 		if (icon) {
@@ -2613,6 +2984,7 @@ function closeDetail() {
 	detailSection.classList.add('hidden');
 	currentSwitchId = null;
 	currentSwitchDetail = null;
+	hideRedirectNotice();
 	clearHeroBanner();
 	restoreHeroText();
 	if (document?.body) {
@@ -2694,6 +3066,20 @@ function formatTimeAgo(date) {
 	if (diffDays < 7) return `${diffDays}d ago`;
 
 	return date.toLocaleDateString();
+}
+
+function getDisplaySwitchName(rawName) {
+	const text = String(rawName || '').trim();
+	if (!text) return '';
+	let cleaned = text.replace(/^VomeSync(?:\s+Switch)?\s*[-:–—]\s*/i, '').trim();
+	if (cleaned && cleaned !== text) {
+		return cleaned;
+	}
+	if (/^VomeSync\s+/i.test(text)) {
+		cleaned = text.replace(/^VomeSync\s+/i, '').trim();
+		if (cleaned) return cleaned;
+	}
+	return text;
 }
 
 function escapeHtml(text) {

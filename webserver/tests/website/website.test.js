@@ -505,6 +505,84 @@ describe('Website SPA (v2 directory)', () => {
 		// Assert: autoscroll attempted
 		expect(managePanel.scrollIntoView).toHaveBeenCalled();
 	});
+
+	test('redirected switch detail follows redirect and shows notice', async () => {
+		const websiteRoot = path.resolve(__dirname, '../../../website');
+		const html = fs.readFileSync(path.join(websiteRoot, 'index.html'), 'utf8');
+		document.documentElement.innerHTML = html;
+
+		window.setInterval = jest.fn();
+		window.alert = jest.fn();
+
+		const oldUid = 'vs_75bz1byjrbv0jfmxv8dq27rp2w';
+		const newUid = 'vs_75bz1byjrbv0jfmxv8dq27rp2x';
+
+		const redirectResponse = {
+			success: true,
+			data: {
+				uid: oldUid,
+				redirect: true,
+				redirectTo: newUid,
+				redirectReason: 'Compromised key'
+			}
+		};
+
+		const newDetail = {
+			success: true,
+			data: {
+				uid: newUid,
+				description: 'New Switch',
+				location: 'Test City',
+				category: 'Community',
+				state: false,
+				lastToggled: 0,
+				toggleCount: 0,
+				userCount: 0,
+				link: '',
+				iconUrl: '',
+				bannerUrl: '',
+				ownerProfileUrl: '',
+				events: []
+			}
+		};
+
+		global.fetch = jest.fn(async (url) => {
+			const u = String(url);
+			if (u.endsWith('/public-switches')) {
+				return createMockResponse({ success: true, data: { switches: [], count: 0, timestamp: Date.now() } });
+			}
+			if (u.endsWith(`/switch/${oldUid}`)) {
+				return createMockResponse(redirectResponse);
+			}
+			if (u.endsWith(`/switch/${newUid}`)) {
+				return createMockResponse(newDetail);
+			}
+			if (u.endsWith('/categories')) {
+				return createMockResponse({ success: true, data: {} });
+			}
+			return createMockResponse({ success: false, error: `Unhandled fetch in test: ${u}` }, false, 404);
+		});
+
+		const script = fs.readFileSync(path.join(websiteRoot, 'script.js'), 'utf8');
+		window.eval(script);
+		window.history.pushState({}, '', `/switch/${oldUid}`);
+		window.init();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await window.openSwitchDetails(oldUid, false);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await window.openSwitchDetails(newUid, false, {
+			allowRedirect: false,
+			redirectFrom: oldUid,
+			redirectReason: 'Compromised key'
+		});
+
+		const fetchCalls = global.fetch.mock.calls.map((call) => String(call[0]));
+		expect(fetchCalls.some((url) => url.includes(`/switch/${oldUid}`))).toBe(true);
+		const redirectText = document.getElementById('redirectNoticeText');
+		expect(redirectText.textContent).toContain(newUid);
+		expect(redirectText.textContent).toContain('Compromised key');
+	});
 });
 
 

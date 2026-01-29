@@ -269,6 +269,79 @@ describe('Redis Client', () => {
 		});
 	});
 
+	describe('api key expiry', () => {
+		test('should treat expired api keys as invalid and remove them', async () => {
+			const personalKey = global.testUtils.createTestPersonalKey();
+			const keyData = await redisClient.createApiKey(personalKey, 'session', 60);
+
+			// Force expiry without waiting
+			await redisClient.client.hSet(
+				redisClient._apiKeyRecordKey(keyData.apiKeyId),
+				'expiresAt',
+				`${Date.now() - 1000}`
+			);
+
+			const resolved = await redisClient.resolvePersonalKeyFromApiKey(keyData.apiKey);
+			expect(resolved).toBeNull();
+
+			const list = await redisClient.listApiKeys(personalKey);
+			expect(list).toHaveLength(0);
+		});
+	});
+
+	describe('v2 access key expiry', () => {
+		test('should treat expired v2 access keys as invalid and remove them', async () => {
+			const ownerId = 'owner-test';
+			const uid = 'vs_test_uid';
+			const created = await redisClient.createV2AccessKey(ownerId, uid, 'session', ['toggle'], 60);
+
+			await redisClient.client.hSet(
+				redisClient._apiKeyRecordKey(created.apiKeyId),
+				'expiresAt',
+				`${Date.now() - 1000}`
+			);
+
+			const resolved = await redisClient.resolveV2AccessKey(created.apiKey);
+			expect(resolved).toBeNull();
+
+			const list = await redisClient.listV2AccessKeys(ownerId, uid);
+			expect(list).toHaveLength(0);
+		});
+	});
+
+	describe('admin helpers', () => {
+		test('should block and unblock owner IDs', async () => {
+			const ownerId = 'owner-test-123';
+			const blockedBefore = await redisClient.isOwnerBlocked(ownerId);
+			expect(blockedBefore).toBe(false);
+
+			await redisClient.blockOwnerId(ownerId);
+			const blockedAfter = await redisClient.isOwnerBlocked(ownerId);
+			expect(blockedAfter).toBe(true);
+
+			await redisClient.unblockOwnerId(ownerId);
+			const blockedFinal = await redisClient.isOwnerBlocked(ownerId);
+			expect(blockedFinal).toBe(false);
+		});
+
+		test('should set and clear switch redirects', async () => {
+			const fromUid = 'vs_test_redirect_old';
+			const toUid = 'vs_test_redirect_new';
+			const reason = 'Migrated';
+
+			const created = await redisClient.setSwitchRedirect(fromUid, toUid, reason);
+			expect(created.toUid).toBe(toUid);
+
+			const redirect = await redisClient.getSwitchRedirect(fromUid);
+			expect(redirect.toUid).toBe(toUid);
+			expect(redirect.reason).toBe(reason);
+
+			await redisClient.clearSwitchRedirect(fromUid);
+			const cleared = await redisClient.getSwitchRedirect(fromUid);
+			expect(cleared).toBeNull();
+		});
+	});
+
 	describe('personal key operations', () => {
 		describe('storePersonalKey', () => {
 			test('should store personal key', async () => {

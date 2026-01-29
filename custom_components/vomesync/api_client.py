@@ -272,6 +272,7 @@ class VomeSyncAPIClient:
 		uid: str,
 		name: str = "",
 		permissions: Optional[list[str]] = None,
+		ttl_seconds: Optional[int] = None,
 	) -> Dict[str, Any]:
 		"""Create a delegated v2 access key (signed by owner key)."""
 		if not self.crypto_enabled:
@@ -284,6 +285,7 @@ class VomeSyncAPIClient:
 			uid=uid,
 			name=name,
 			permissions=permissions,
+			ttl_seconds=ttl_seconds,
 		)
 		endpoint = API_V2_ACCESS_KEYS_CREATE.format(uid=uid)
 		return await self._make_request("POST", endpoint, req, require_auth=False)

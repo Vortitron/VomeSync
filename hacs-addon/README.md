@@ -262,4 +262,4 @@ This integration is released under the MIT License. See [LICENSE](LICENSE) for d
 
 ---
 
-**⚠️ Disclaimer**: VomeSync is not liable for misuse of public switches. Only use for non-sensitive devices and always verify the source of shared switch UIDs.
+**⚠️ Disclaimer**: VomeSync is not liable for misuse of public switches. Only use for non-sensitive devices and always verify the source of shared switch UIDs. VomeSync is in Public Beta - Features may be changed to premium, changed functionality or removed with no notice.

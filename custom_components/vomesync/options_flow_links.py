@@ -15,6 +15,12 @@ _LOGGER = logging.getLogger(__name__)
 class VomeSyncOptionsFlowLinkEntitiesMixin:
 	"""Mixin providing entity-linking steps for the options flow."""
 
+	def _is_listen_only_switch(self) -> bool:
+		"""Return True when the selected switch should be read-only."""
+		is_owner = bool(self._step_data.get("is_owner", False))
+		has_access_key = bool(self._step_data.get("has_access_key", False))
+		return (not is_owner) and (not has_access_key)
+
 	async def async_step_link_entities(
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:
@@ -22,12 +28,17 @@ class VomeSyncOptionsFlowLinkEntitiesMixin:
 		selected_uid = self._step_data.get("selected_uid")
 		selected_name = self._step_data.get("selected_name", selected_uid)
 		
+		listen_only = self._is_listen_only_switch()
+
 		if user_input is not None:
 			# Update links for this switch
 			selected_entities = user_input.get("entities", [])
 			if not isinstance(selected_entities, list):
 				selected_entities = list(selected_entities)
-			direction = self._normalise_link_direction(user_input.get("direction"), default="both")
+			if listen_only:
+				direction = "switch_to_entities"
+			else:
+				direction = self._normalise_link_direction(user_input.get("direction"), default="both")
 			
 			_LOGGER.info("Linking entities for switch %s: %s", selected_uid, selected_entities)
 			
@@ -108,15 +119,10 @@ class VomeSyncOptionsFlowLinkEntitiesMixin:
 			raw = current_cfg.get("entities", [])
 			current_links = raw if isinstance(raw, list) else []
 			current_direction = self._normalise_link_direction(current_cfg.get("direction"), default="both")
-			if "direction" not in current_cfg and current_cfg.get("read_only") is True:
-				# Backwards compatibility for short-lived "read_only".
-				current_direction = "switch_to_entities"
-		elif isinstance(current_cfg, list):
-			current_links = current_cfg
-			# Backwards compatibility for legacy list format (switch -> entities only).
-			current_direction = "switch_to_entities"
 		else:
 			current_links = []
+		if listen_only:
+			current_direction = "switch_to_entities"
 		
 		# Get all switchable entities from HA
 		entity_reg = er.async_get(self.hass)
@@ -153,13 +159,16 @@ class VomeSyncOptionsFlowLinkEntitiesMixin:
 		self._step_data["link_available_entities"] = available_entities
 		self._step_data["link_direction_labels"] = self._get_link_direction_labels()
 		
-		direction_labels = self._get_link_direction_labels()
+		data_fields = {
+			vol.Optional("entities", default=current_links): cv.multi_select(available_entities),
+		}
+		if not listen_only:
+			direction_labels = self._get_link_direction_labels()
+			data_fields[vol.Optional("direction", default=current_direction)] = vol.In(direction_labels)
+
 		return self.async_show_form(
 			step_id="link_entities",
-			data_schema=vol.Schema({
-				vol.Optional("entities", default=current_links): cv.multi_select(available_entities),
-				vol.Optional("direction", default=current_direction): vol.In(direction_labels),
-			}),
+			data_schema=vol.Schema(data_fields),
 			description_placeholders={
 				"switch_name": selected_name,
 				"info": (
@@ -176,6 +185,7 @@ class VomeSyncOptionsFlowLinkEntitiesMixin:
 		selected_uid = self._step_data.get("selected_uid")
 		selected_name = self._step_data.get("selected_name", selected_uid)
 		selected_entities = self._step_data.get("pending_link_entities") or []
+		listen_only = self._is_listen_only_switch()
 		direction_default = self._normalise_link_direction(self._step_data.get("pending_link_direction"), default="both")
 		available_entities = self._step_data.get("link_available_entities") or {}
 		
@@ -196,15 +206,18 @@ class VomeSyncOptionsFlowLinkEntitiesMixin:
 			if isinstance(existing_master, str) and existing_master in selected_entities:
 				master_default = existing_master
 			direction_default = self._normalise_link_direction(existing.get("direction"), default=direction_default)
-			if "direction" not in existing and existing.get("read_only") is True:
-				direction_default = "switch_to_entities"
+		if listen_only:
+			direction_default = "switch_to_entities"
 		
 		if user_input is not None:
 			mode = user_input.get("mode") if isinstance(user_input.get("mode"), str) else "master"
 			master = user_input.get("master") if isinstance(user_input.get("master"), str) else master_default
 			if master not in selected_entities:
 				master = master_default
-			direction = self._normalise_link_direction(user_input.get("direction"), default=direction_default)
+			if listen_only:
+				direction = "switch_to_entities"
+			else:
+				direction = self._normalise_link_direction(user_input.get("direction"), default=direction_default)
 			
 			# Persist the config
 			new_options = dict(self._config_entry.options or {})
@@ -240,15 +253,17 @@ class VomeSyncOptionsFlowLinkEntitiesMixin:
 			"or": "Any on (OR) — switch turns on if any linked entity is on",
 			"and": "All on (AND) — switch turns on only if all linked entities are on",
 		}
-		direction_labels = self._get_link_direction_labels()
-		
+		data_fields = {
+			vol.Required("mode", default=mode_default): vol.In(mode_labels),
+			vol.Optional("master", default=master_default): vol.In(master_labels),
+		}
+		if not listen_only:
+			direction_labels = self._get_link_direction_labels()
+			data_fields[vol.Required("direction", default=direction_default)] = vol.In(direction_labels)
+
 		return self.async_show_form(
 			step_id="link_entities_behaviour",
-			data_schema=vol.Schema({
-				vol.Required("mode", default=mode_default): vol.In(mode_labels),
-				vol.Optional("master", default=master_default): vol.In(master_labels),
-				vol.Required("direction", default=direction_default): vol.In(direction_labels),
-			}),
+			data_schema=vol.Schema(data_fields),
 			description_placeholders={
 				"info": (
 					f"Choose how multiple linked entities should update **{selected_name}**.\n\n"

@@ -46,11 +46,10 @@
 				"menu_options": {
 					"backup_signing_key": "🔐 Backup signing key",
 					"import_switches": "⬇️ Import switches from API",
-					"manage_api_keys": "🔑 Manage API keys (legacy)",
-					"connect_website": "🌐 Connect to website (legacy)",
 					"reannounce_owned_switches": "📣 Re-announce owned switches",
 					"cleanup_orphaned_devices": "🧹 Clean up orphaned devices",
-					"edit_connection": "⚙️ Edit connection URLs"
+					"edit_connection": "⚙️ Edit connection URLs",
+					"back": "← Back"
 				}
 			},
 			"backup_signing_key": {
@@ -66,15 +65,39 @@
 			},
 			"create_switch": {
 				"title": "Create a switch",
-				"description": "Create a switch owned by you.\n\n{warning}",
+				"description": "",
 				"data": {
 					"name": "Name",
 					"description": "Description (optional)",
 					"location": "Location (optional, think opsec: city only)",
 					"category": "Category",
-					"publicize": "Publicise (list publicly)",
-					"advanced_fields": "Add optional website fields (link/icon/banner)"
+					"publicize": "List on sync.Vome.io",
+					"advanced_fields": "Add optional website fields (link/icon/banner)",
+					"show_signing_key_after": "View signing key after creating this switch"
+				},
+				"data_description": {
+					"publicize": "If not listed it is still viewable by anyone with its Unique Key (UID).",
+					"show_signing_key_after": "The switch is linked to your key, Keep your key safe, we cannot recover it if you lose it."
 				}
+			},
+			"confirm_backup_signing_key": {
+				"title": "Backup signing key",
+				"description": "Before creating switches, back up your signing key.",
+				"menu_options": {
+					"reveal_signing_key": "Show signing key",
+					"confirm_backup_signing_key_done": "I have backed up my signing key"
+				}
+			},
+			"reveal_signing_key": {
+				"title": "Backup signing key",
+				"description": "{info}",
+				"data": {
+					"confirmed": "I have backed up my signing key"
+				}
+			},
+			"post_create_signing_key": {
+				"title": "Backup signing key",
+				"description": "{info}"
 			},
 			"create_switch_advanced": {
 				"title": "Create a switch (website fields)",
@@ -120,7 +143,8 @@
 				"data": {
 					"website_management_url": "Website management URL",
 					"access_key": "Access key (copy and save)",
-					"regenerate": "Regenerate access key"
+					"regenerate": "Regenerate access key",
+					"stay_logged_in": "Stay logged in (up to 30 days)"
 				}
 			},
 			"access_keys": {
@@ -285,6 +309,7 @@
 			"create_failed": "Failed to create switch. Check server URL, key, and connectivity.",
 			"update_failed": "Failed to update switch. Check server URL, key, and connectivity.",
 			"captcha_required": "CAPTCHA token required to publicise this switch on this server.",
+			"backup_required": "Please confirm you have backed up your signing key.",
 			"access_key_create_failed": "Failed to create access key. Check connectivity and try again.",
 			"access_key_revoke_failed": "Failed to revoke access key. Check connectivity and try again.",
 			"subscribe_failed": "Failed to subscribe to switch.",

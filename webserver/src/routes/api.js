@@ -1,10 +1,12 @@
 const express = require('express');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 const redisClient = require('../utils/redis');
 const authManager = require('../utils/auth');
 const logger = require('../utils/logger');
 const media = require('../utils/media');
+const config = require('../config/config');
 const {
 	validateRequest,
 	validateUID,
@@ -23,6 +25,62 @@ const upload = multer({
 		fileSize: Number.parseInt(process.env.MEDIA_MAX_UPLOAD_BYTES || '', 10) || 10_000_000
 	}
 });
+
+const legacyEnabled = Boolean(config?.security?.legacyApiEnabled);
+const sessionTokensEnabled = Boolean(config?.security?.sessionTokensEnabled);
+const sessionTokenApiKeyTtlSeconds = Number.parseInt(config?.security?.sessionTokenApiKeyTtlSeconds, 10) || 900;
+const V2_ACCESS_KEY_MAX_TTL_SECONDS = 30 * 24 * 60 * 60;
+const adminApiKey = String(config?.security?.adminApiKey || '');
+
+const requireLegacyEnabled = (req, res, next) => {
+	if (!legacyEnabled) {
+		return res.status(410).json({ success: false, error: 'Legacy API disabled' });
+	}
+	return next();
+};
+
+const requireSessionTokensEnabled = (req, res, next) => {
+	if (!sessionTokensEnabled) {
+		return res.status(410).json({ success: false, error: 'Session token API disabled' });
+	}
+	return next();
+};
+
+const extractBearerToken = (req) => {
+	const authHeader = req.headers.authorization || '';
+	if (typeof authHeader !== 'string') return '';
+	const parts = authHeader.split(' ');
+	if (parts.length === 2 && /^bearer$/i.test(parts[0])) {
+		return parts[1];
+	}
+	return '';
+};
+
+const safeEquals = (left, right) => {
+	if (!left || !right || typeof left !== 'string' || typeof right !== 'string') {
+		return false;
+	}
+	const leftBuf = Buffer.from(left);
+	const rightBuf = Buffer.from(right);
+	if (leftBuf.length !== rightBuf.length) {
+		return false;
+	}
+	return crypto.timingSafeEqual(leftBuf, rightBuf);
+};
+
+const requireAdmin = (req, res, next) => {
+	if (!adminApiKey) {
+		return res.status(503).json({ success: false, error: 'Admin API not configured' });
+	}
+	const provided = req.headers['x-admin-key'] || extractBearerToken(req) || '';
+	if (!provided) {
+		return res.status(401).json({ success: false, error: 'Admin key required' });
+	}
+	if (!safeEquals(String(provided), adminApiKey)) {
+		return res.status(403).json({ success: false, error: 'Invalid admin key' });
+	}
+	return next();
+};
 
 const uploadV2MetadataFiles = upload.fields([
 	{ name: 'iconFile', maxCount: 1 },
@@ -154,6 +212,7 @@ const v2CanonicalRevokeAccessKey = (uid, data) => stableJsonStringify({
 
 // Generate personal key endpoint
 router.post('/generate-key',
+	requireLegacyEnabled,
 	authManager.rateLimit('generate_key', 10, 3600000), // 10 per hour
 	validateRequest(schemas.generateKey),
 	async (req, res) => {
@@ -214,6 +273,8 @@ router.get('/next-switch-name',
 
 // Release a switch name (called when a switch is deleted)
 router.post('/release-switch-name',
+	requireLegacyEnabled,
+	authManager.requireAuth(),
 	authManager.rateLimit('release_switch_name', 30, 60000),
 	async (req, res) => {
 		try {
@@ -267,6 +328,10 @@ router.post('/v2/switch',
 
 			const ownerId = deriveOwnerIdFromOwnerPubKeyB64Url(data.ownerPubKey);
 			const uid = deriveSwitchUidFromSwitchPubKeyB64Url(data.switchPubKey);
+
+			if (await redisClient.isOwnerBlocked(ownerId)) {
+				return res.status(403).json({ success: false, error: 'Owner blocked' });
+			}
 
 			const canonical = v2CanonicalCreate(data, uid);
 
@@ -348,6 +413,9 @@ router.post('/v2/my-switches',
 			}
 
 			const ownerId = deriveOwnerIdFromOwnerPubKeyB64Url(data.ownerPubKey);
+			if (await redisClient.isOwnerBlocked(ownerId)) {
+				return res.status(403).json({ success: false, error: 'Owner blocked' });
+			}
 			const canonical = v2CanonicalMySwitches(data);
 			const ok = verifyEd25519SignatureB64Url(data.ownerPubKey, canonical, data.sigOwner);
 			if (!ok) {
@@ -393,6 +461,9 @@ router.post('/v2/switch/:uid/state',
 			const switchData = await redisClient.getSwitchState(uid);
 			if (!switchData) {
 				return res.status(404).json({ success: false, error: 'Switch not found' });
+			}
+			if (switchData.ownerId && await redisClient.isOwnerBlocked(switchData.ownerId)) {
+				return res.status(403).json({ success: false, error: 'Owner blocked' });
 			}
 			if (switchData.authVersion !== 2 || !switchData.switchPubKey) {
 				return res.status(400).json({ success: false, error: 'Switch is not v2 (crypto) enabled' });
@@ -468,6 +539,10 @@ router.post('/v2/switch/:uid',
 			}
 
 			const ownerId = deriveOwnerIdFromOwnerPubKeyB64Url(data.ownerPubKey);
+
+			if (await redisClient.isOwnerBlocked(ownerId)) {
+				return res.status(403).json({ success: false, error: 'Owner blocked' });
+			}
 
 			const switchData = await redisClient.getSwitchState(uid);
 			if (!switchData) {
@@ -558,6 +633,9 @@ router.post('/v2/switch/:uid/access-keys',
 			}
 
 			const ownerId = deriveOwnerIdFromOwnerPubKeyB64Url(data.ownerPubKey);
+			if (await redisClient.isOwnerBlocked(ownerId)) {
+				return res.status(403).json({ success: false, error: 'Owner blocked' });
+			}
 			if (switchData.ownerId !== ownerId || switchData.ownerPubKey !== data.ownerPubKey) {
 				return res.status(401).json({ success: false, error: 'Invalid owner signature' });
 			}
@@ -568,6 +646,9 @@ router.post('/v2/switch/:uid/access-keys',
 			}
 			if (Object.prototype.hasOwnProperty.call(req.body, 'permissions')) {
 				payload.permissions = Array.isArray(data.permissions) ? data.permissions : [];
+			}
+			if (Object.prototype.hasOwnProperty.call(req.body, 'ttlSeconds')) {
+				payload.ttlSeconds = data.ttlSeconds;
 			}
 			const canonical = v2CanonicalCreateAccessKey(uid, data, payload);
 			const ok = verifyEd25519SignatureB64Url(data.ownerPubKey, canonical, data.sigOwner);
@@ -580,7 +661,18 @@ router.post('/v2/switch/:uid/access-keys',
 				return res.status(409).json({ success: false, error: 'Nonce already used' });
 			}
 
-			const created = await redisClient.createV2AccessKey(ownerId, uid, data.name || '', data.permissions);
+			const ttlSeconds = Number.isFinite(data.ttlSeconds) ? data.ttlSeconds : null;
+			if (ttlSeconds && ttlSeconds > V2_ACCESS_KEY_MAX_TTL_SECONDS) {
+				return res.status(400).json({ success: false, error: 'ttlSeconds exceeds max of 30 days' });
+			}
+
+			const created = await redisClient.createV2AccessKey(
+				ownerId,
+				uid,
+				data.name || '',
+				data.permissions,
+				ttlSeconds
+			);
 			if (!created) {
 				return res.status(500).json({ success: false, error: 'Failed to create API key' });
 			}
@@ -592,7 +684,8 @@ router.post('/v2/switch/:uid/access-keys',
 					keyId: created.apiKeyId,
 					name: created.name || '',
 					permissions: created.permissions || [],
-					createdAt: created.createdAt
+					createdAt: created.createdAt,
+					expiresAt: created.expiresAt || 0
 				}
 			});
 		} catch (error) {
@@ -625,6 +718,9 @@ router.post('/v2/switch/:uid/access-keys/list',
 			}
 
 			const ownerId = deriveOwnerIdFromOwnerPubKeyB64Url(data.ownerPubKey);
+			if (await redisClient.isOwnerBlocked(ownerId)) {
+				return res.status(403).json({ success: false, error: 'Owner blocked' });
+			}
 			if (switchData.ownerId !== ownerId || switchData.ownerPubKey !== data.ownerPubKey) {
 				return res.status(401).json({ success: false, error: 'Invalid owner signature' });
 			}
@@ -647,7 +743,8 @@ router.post('/v2/switch/:uid/access-keys/list',
 				permissions: Array.isArray(k.permissions) ? k.permissions : [],
 				createdAt: k.createdAt || 0,
 				lastUsed: k.lastUsed || 0,
-				revoked: Boolean(k.revoked)
+				revoked: Boolean(k.revoked),
+				expiresAt: k.expiresAt || 0
 			}));
 
 			return res.json({
@@ -687,6 +784,9 @@ router.post('/v2/switch/:uid/access-keys/revoke',
 			}
 
 			const ownerId = deriveOwnerIdFromOwnerPubKeyB64Url(data.ownerPubKey);
+			if (await redisClient.isOwnerBlocked(ownerId)) {
+				return res.status(403).json({ success: false, error: 'Owner blocked' });
+			}
 			if (switchData.ownerId !== ownerId || switchData.ownerPubKey !== data.ownerPubKey) {
 				return res.status(401).json({ success: false, error: 'Invalid owner signature' });
 			}
@@ -854,6 +954,7 @@ router.post('/v2/switch/:uid/comment',
 
 // Create switch endpoint
 router.post('/create-switch',
+	requireLegacyEnabled,
 	authManager.rateLimit('create_switch', 20, 3600000), // 20 per hour
 	authManager.requireAuth(),
 	validateRequest(schemas.createSwitch),
@@ -904,6 +1005,7 @@ router.post('/create-switch',
 
 // Toggle switch endpoint
 router.post('/toggle/:uid',
+	requireLegacyEnabled,
 	validateUID,
 	authManager.rateLimit('toggle_switch', 200, 900000), // 200 per 15 minutes
 	authManager.requireSwitchAuth(),
@@ -1039,6 +1141,149 @@ router.get('/switch/:uid',
 	}
 );
 
+// Admin: delist a public switch
+router.post('/admin/switch/:uid/delist',
+	requireAdmin,
+	validateUID,
+	async (req, res) => {
+		try {
+			const { uid } = req.params;
+			const updated = await redisClient.updateSwitch(uid, { publicize: false });
+			if (!updated) {
+				return res.status(404).json({ success: false, error: 'Switch not found' });
+			}
+			return res.json({
+				success: true,
+				data: {
+					uid,
+					publicize: Boolean(updated.publicize)
+				}
+			});
+		} catch (error) {
+			logger.error(`Admin delist failed for ${req.params.uid}:`, error);
+			return res.status(500).json({ success: false, error: 'Failed to delist switch' });
+		}
+	}
+);
+
+// Admin: delete a switch and its metadata
+router.post('/admin/switch/:uid/delete',
+	requireAdmin,
+	validateUID,
+	async (req, res) => {
+		try {
+			const { uid } = req.params;
+			const deleted = await redisClient.deleteSwitchAdmin(uid);
+			if (!deleted) {
+				return res.status(404).json({ success: false, error: 'Switch not found' });
+			}
+			await media.deleteSwitchMedia(uid);
+			return res.json({ success: true, data: { uid } });
+		} catch (error) {
+			logger.error(`Admin delete failed for ${req.params.uid}:`, error);
+			return res.status(500).json({ success: false, error: 'Failed to delete switch' });
+		}
+	}
+);
+
+// Admin: block or unblock keys/owners
+router.post('/admin/blocks',
+	requireAdmin,
+	validateRequest(schemas.adminBlock),
+	async (req, res) => {
+		try {
+			const { action, type, value } = req.validatedData;
+			let targetType = type;
+			let targetValue = value;
+
+			if (type === 'uid') {
+				const switchData = await redisClient.getSwitchState(value);
+				if (!switchData) {
+					return res.status(404).json({ success: false, error: 'Switch not found' });
+				}
+				if (switchData.authVersion === 2 && switchData.ownerId) {
+					targetType = 'owner';
+					targetValue = switchData.ownerId;
+				} else if (switchData.ownerKeyId) {
+					targetType = 'personal';
+					targetValue = switchData.ownerKeyId;
+				} else {
+					return res.status(400).json({ success: false, error: 'Unable to resolve owner for switch' });
+				}
+			}
+
+			let updated = false;
+			if (targetType === 'owner') {
+				updated = action === 'block'
+					? await redisClient.blockOwnerId(targetValue)
+					: await redisClient.unblockOwnerId(targetValue);
+			} else if (targetType === 'personal') {
+				updated = action === 'block'
+					? await redisClient.blockPersonalKeyId(targetValue)
+					: await redisClient.unblockPersonalKeyId(targetValue);
+			} else if (targetType === 'api') {
+				updated = action === 'block'
+					? await redisClient.blockApiKeyId(targetValue)
+					: await redisClient.unblockApiKeyId(targetValue);
+			}
+
+			return res.json({
+				success: true,
+				data: {
+					action,
+					type: targetType,
+					value: targetValue,
+					blocked: action === 'block',
+					updated
+				}
+			});
+		} catch (error) {
+			logger.error('Admin block operation failed:', error);
+			return res.status(500).json({ success: false, error: 'Failed to update block list' });
+		}
+	}
+);
+
+// Admin: create or update a redirect
+router.post('/admin/redirects',
+	requireAdmin,
+	validateRequest(schemas.adminRedirect),
+	async (req, res) => {
+		try {
+			const { fromUid, toUid, reason } = req.validatedData;
+			if (fromUid === toUid) {
+				return res.status(400).json({ success: false, error: 'Redirect target must differ' });
+			}
+			const target = await redisClient.getSwitchState(toUid);
+			if (!target) {
+				return res.status(404).json({ success: false, error: 'Target switch not found' });
+			}
+
+			const redirect = await redisClient.setSwitchRedirect(fromUid, toUid, reason);
+			return res.json({ success: true, data: redirect });
+		} catch (error) {
+			logger.error('Admin redirect failed:', error);
+			return res.status(500).json({ success: false, error: 'Failed to set redirect' });
+		}
+	}
+);
+
+// Admin: clear a redirect
+router.delete('/admin/redirects/:uid',
+	requireAdmin,
+	validateUID,
+	async (req, res) => {
+		try {
+			const { uid } = req.params;
+			await redisClient.clearSwitchRedirect(uid);
+			return res.json({ success: true, data: { uid } });
+		} catch (error) {
+			logger.error(`Admin redirect clear failed for ${req.params.uid}:`, error);
+			return res.status(500).json({ success: false, error: 'Failed to clear redirect' });
+		}
+	}
+);
+
 // Public category listing
 router.get('/categories',
 	authManager.rateLimit('public_categories', 100, 900000),
@@ -1061,6 +1306,7 @@ router.get('/categories',
 
 // Get user's switches
 router.get('/my-switches',
+	requireLegacyEnabled,
 	authManager.requireAuth(),
 	authManager.rateLimit('my_switches', 100, 900000),
 	async (req, res) => {
@@ -1092,6 +1338,7 @@ router.get('/my-switches',
 
 // Update switch metadata (owner/API key)
 router.patch('/switch/:uid',
+	requireLegacyEnabled,
 	validateUID,
 	authManager.requireSwitchAuth(),
 	validateRequest(schemas.updateSwitch),
@@ -1130,6 +1377,7 @@ router.patch('/switch/:uid',
 
 // Comments and timeline notes
 router.post('/switch/:uid/comment',
+	requireLegacyEnabled,
 	validateUID,
 	authManager.requireSwitchAuth(),
 	validateRequest(schemas.addComment),
@@ -1165,6 +1413,7 @@ router.post('/switch/:uid/comment',
 
 // API key management
 router.get('/api-keys',
+	requireLegacyEnabled,
 	authManager.requireAuth(),
 	async (req, res) => {
 		try {
@@ -1178,6 +1427,7 @@ router.get('/api-keys',
 );
 
 router.post('/api-keys',
+	requireLegacyEnabled,
 	authManager.requireAuth(),
 	authManager.rateLimit('create_api_key', 50, 900000),
 	async (req, res) => {
@@ -1194,6 +1444,7 @@ router.post('/api-keys',
 
 // Owner profile link (for website display)
 router.post('/profile/link',
+	requireLegacyEnabled,
 	authManager.requireAuth(),
 	validateRequest(schemas.updateProfile),
 	async (req, res) => {
@@ -1209,6 +1460,7 @@ router.post('/profile/link',
 );
 
 router.delete('/api-keys/:apiKey',
+	requireLegacyEnabled,
 	authManager.requireAuth(),
 	async (req, res) => {
 		try {
@@ -1227,6 +1479,8 @@ router.delete('/api-keys/:apiKey',
 
 // Session token for web login (one-time, short-lived)
 router.post('/session-token',
+	requireLegacyEnabled,
+	requireSessionTokensEnabled,
 	authManager.requireAuth(),
 	async (req, res) => {
 		try {
@@ -1241,6 +1495,8 @@ router.post('/session-token',
 
 // Redeem session token (called by website)
 router.post('/session-token/redeem',
+	requireLegacyEnabled,
+	requireSessionTokensEnabled,
 	async (req, res) => {
 		try {
 			const { token } = req.body;
@@ -1254,14 +1510,18 @@ router.post('/session-token/redeem',
 			}
 
 			// Issue a short-lived API key tied to the personal key
-			const apiKeyData = await redisClient.createApiKey(tokenData.personalKeyId, 'web-session');
+			const apiKeyData = await redisClient.createApiKey(
+				tokenData.personalKeyId,
+				'web-session',
+				sessionTokenApiKeyTtlSeconds
+			);
 
 			res.json({
 				success: true,
 				data: {
 					apiKey: apiKeyData.apiKey,
 					apiKeyId: apiKeyData.apiKeyId,
-					expiresIn: '1 year' // aligns with existing keys; adjust if needed
+					expiresInSeconds: sessionTokenApiKeyTtlSeconds
 				}
 			});
 		} catch (error) {
@@ -1273,6 +1533,7 @@ router.post('/session-token/redeem',
 
 // Delete switch
 router.delete('/switch/:uid',
+	requireLegacyEnabled,
 	validateUID,
 	authManager.requireSwitchAuth(),
 	authManager.rateLimit('delete_switch', 50, 3600000),
@@ -1309,6 +1570,7 @@ router.delete('/switch/:uid',
 
 // Delete personal key and all associated data (GDPR compliance)
 router.post('/delete-key',
+	requireLegacyEnabled,
 	validateRequest(schemas.deleteKey),
 	authManager.rateLimit('delete_key', 5, 3600000), // 5 per hour
 	async (req, res) => {

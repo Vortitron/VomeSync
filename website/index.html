@@ -5,7 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>VomeSync - Public Remote Switches</title>
 	<meta name="description" content="Discover and monitor public remote switches from the VomeSync community. Connect your Home Assistant to global IoT devices.">
-	<link rel="stylesheet" href="/styles.css?v=20260114-5">
+	<link rel="stylesheet" href="/styles.css?v=20260128-1">
 	<link rel="apple-touch-icon" sizes="180x180" href="/favicon/apple-icon-180x180.png">
 	<link rel="icon" type="image/png" sizes="32x32" href="/favicon/favicon-32x32.png">
 	<link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-16x16.png">
@@ -150,6 +150,10 @@
 							<h2 id="detailTitle" class="detail-title">Switch details</h2>
 						</div>
 						<p id="detailLocation" class="detail-subtitle"></p>
+						<div id="redirectNotice" class="redirect-notice hidden">
+							<p id="redirectNoticeText" class="muted small"></p>
+							<a id="redirectNoticeLink" class="ghost-btn" href="#">View new switch</a>
+						</div>
 					</div>
 					<div class="detail-actions">
 						<button id="copySwitchLink" class="ghost-btn">🔗 Copy link</button>
@@ -277,6 +281,70 @@
 								</div>
 							</form>
 						</div>
+						<div id="adminPanel" class="admin-panel hidden">
+							<h3>Admin tools</h3>
+							<p class="muted small">Moderate public listings (delist, delete, block keys, add redirects).</p>
+							<div class="admin-auth">
+								<label for="adminKeyInput">Admin key:</label>
+								<input id="adminKeyInput" type="password" autocomplete="off" placeholder="Admin key">
+								<div class="comment-actions">
+									<button id="adminKeySaveBtn" type="button" class="ghost-btn">Save</button>
+									<button id="adminKeyForgetBtn" type="button" class="ghost-btn">Forget</button>
+								</div>
+							</div>
+							<div id="adminTools" class="hidden">
+								<form id="adminDelistForm" class="comment-form">
+									<label for="adminDelistUid">Delist switch (UID):</label>
+									<input id="adminDelistUid" type="text" autocomplete="off" placeholder="vs_...">
+									<div class="comment-actions">
+										<button type="submit" class="ghost-btn">Delist</button>
+									</div>
+								</form>
+								<form id="adminDeleteForm" class="comment-form">
+									<label for="adminDeleteUid">Delete switch (UID):</label>
+									<input id="adminDeleteUid" type="text" autocomplete="off" placeholder="vs_...">
+									<div class="comment-actions">
+										<button type="submit" class="ghost-btn">Delete</button>
+									</div>
+								</form>
+								<form id="adminBlockForm" class="comment-form">
+									<label for="adminBlockType">Block list:</label>
+									<select id="adminBlockType">
+										<option value="uid">Owner by UID</option>
+										<option value="owner">Owner ID</option>
+										<option value="personal">Personal key</option>
+										<option value="api">API/access key</option>
+									</select>
+									<input id="adminBlockValue" type="text" autocomplete="off" placeholder="UID or key">
+									<select id="adminBlockAction">
+										<option value="block">Block</option>
+										<option value="unblock">Unblock</option>
+									</select>
+									<div class="comment-actions">
+										<button type="submit" class="ghost-btn">Apply</button>
+									</div>
+								</form>
+								<form id="adminRedirectForm" class="comment-form">
+									<label for="adminRedirectFrom">Redirect from (old UID):</label>
+									<input id="adminRedirectFrom" type="text" autocomplete="off" placeholder="vs_...">
+									<label for="adminRedirectTo">Redirect to (new UID):</label>
+									<input id="adminRedirectTo" type="text" autocomplete="off" placeholder="vs_...">
+									<label for="adminRedirectReason">Reason (optional):</label>
+									<input id="adminRedirectReason" type="text" autocomplete="off" placeholder="Compromised key, migrated switch, etc.">
+									<div class="comment-actions">
+										<button type="submit" class="ghost-btn">Add redirect</button>
+									</div>
+								</form>
+								<form id="adminRedirectClearForm" class="comment-form">
+									<label for="adminRedirectClearUid">Clear redirect (UID):</label>
+									<input id="adminRedirectClearUid" type="text" autocomplete="off" placeholder="vs_...">
+									<div class="comment-actions">
+										<button type="submit" class="ghost-btn">Clear redirect</button>
+									</div>
+								</form>
+							</div>
+							<span id="adminStatus" class="comment-status"></span>
+						</div>
 					</div>
 				</div>
 			</div>
@@ -332,7 +400,7 @@
 				</div>
 			</div>
 			<div class="footer-bottom">
-				<p>&copy; 2024 Vortitron. VomeSync is not liable for misuse of public switches.</p>
+				<p>&copy; 2026 Vortitron. VomeSync is not liable for misuse of public switches. VomeSync is in Public Beta - Features may be changed to premium, changed functionality or removed with no notice.</p>
 			</div>
 		</div>
 	</footer>
@@ -438,6 +506,6 @@
 		</div>
 
 	<script src="/network-bg.js?v=20260114-5"></script>
-	<script src="/script.js?v=20260114-5"></script>
+	<script src="/script.js?v=20260128-1"></script>
 </body>
 </html>

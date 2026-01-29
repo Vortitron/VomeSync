@@ -5,6 +5,7 @@ const MAX_LOCATION_LENGTH = 100;
 const MAX_URL_LENGTH = 500;
 const MAX_CAPTCHA_TOKEN_LENGTH = 2000;
 const MAX_ACCESS_KEY_NAME_LENGTH = 100;
+const MAX_REDIRECT_REASON_LENGTH = 500;
 const V2_ACCESS_KEY_PERMISSIONS = ['toggle', 'comment', 'metadata'];
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -124,6 +125,7 @@ const schemas = {
 		nonce: Joi.string().min(8).max(128).required(),
 		sigOwner: Joi.string().max(200).required(),
 		name: Joi.string().max(MAX_ACCESS_KEY_NAME_LENGTH).allow(''),
+		ttlSeconds: Joi.number().integer().min(60).max(2592000),
 		permissions: Joi.array()
 			.items(Joi.string().valid(...V2_ACCESS_KEY_PERMISSIONS))
 			.min(1)
@@ -170,6 +172,18 @@ const schemas = {
 		sigSwitch: Joi.string().max(200).required(),
 		state: Joi.boolean().required(),
 		params: Joi.object().unknown(true).default({})
+	}),
+
+	adminBlock: Joi.object({
+		action: Joi.string().valid('block', 'unblock').default('block'),
+		type: Joi.string().valid('owner', 'personal', 'api', 'uid').required(),
+		value: Joi.string().min(3).max(200).required()
+	}),
+
+	adminRedirect: Joi.object({
+		fromUid: switchUidSchema,
+		toUid: switchUidSchema,
+		reason: Joi.string().max(MAX_REDIRECT_REASON_LENGTH).allow('').default('')
 	})
 };
 

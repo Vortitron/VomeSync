@@ -1,3 +1,4 @@
+# flake8: noqa
 """Tests for VomeSync switch platform."""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch

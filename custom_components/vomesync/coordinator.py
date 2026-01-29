@@ -44,7 +44,6 @@ _LINK_CFG_ENTITIES = "entities"
 _LINK_CFG_MODE = "mode"
 _LINK_CFG_MASTER = "master"
 _LINK_CFG_DIRECTION = "direction"
-_LINK_CFG_READ_ONLY = "read_only"  # legacy (replaced by direction)
 
 _LINK_MODE_MASTER = "master"
 _LINK_MODE_OR = "or"
@@ -727,7 +726,13 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			_LOGGER.error("Failed to update switch metadata uid=%s (unexpected): %s", uid, ex)
 			return None
 
-	async def create_v2_access_key(self, uid: str, name: str = "", permissions: Optional[list[str]] = None) -> Optional[Dict[str, Any]]:
+	async def create_v2_access_key(
+		self,
+		uid: str,
+		name: str = "",
+		permissions: Optional[list[str]] = None,
+		ttl_seconds: Optional[int] = None
+	) -> Optional[Dict[str, Any]]:
 		"""Create a delegated v2 access key for a switch (owner-only)."""
 		if not self.crypto_enabled:
 			_LOGGER.warning("Cannot create v2 access key: crypto mode not enabled")
@@ -736,7 +741,12 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			_LOGGER.warning("Cannot create v2 access key: not owner (uid=%s)", uid)
 			return None
 		try:
-			return await self.api_client.create_v2_access_key(uid, name=name, permissions=permissions)
+			return await self.api_client.create_v2_access_key(
+				uid,
+				name=name,
+				permissions=permissions,
+				ttl_seconds=ttl_seconds
+			)
 		except VomeSyncAPIError as ex:
 			_LOGGER.error("Failed to create v2 access key uid=%s: %s", uid, ex)
 			return None
@@ -1042,8 +1052,6 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 
 	def _extract_linked_entity_ids(self, raw_value: Any) -> list[str]:
 		"""Normalise linked entity config value to a list of entity_ids."""
-		if isinstance(raw_value, list):
-			return [e for e in raw_value if isinstance(e, str) and e]
 		if isinstance(raw_value, dict):
 			entities = raw_value.get(_LINK_CFG_ENTITIES, [])
 			if isinstance(entities, list):
@@ -1070,11 +1078,6 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			raw_direction = raw_value.get(_LINK_CFG_DIRECTION)
 			if isinstance(raw_direction, str) and raw_direction in _VALID_LINK_DIRECTIONS:
 				direction = raw_direction
-			else:
-				# Backwards compatibility for the short-lived "read_only" flag:
-				# True meant "switch → entities only" (disable entity → switch).
-				if raw_value.get(_LINK_CFG_READ_ONLY) is True:
-					direction = _LINK_DIR_SWITCH_TO_ENTITIES
 		
 		return {
 			_LINK_CFG_ENTITIES: entities,

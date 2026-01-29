@@ -26,7 +26,11 @@ const config = {
 		// Defaults to JWT_SECRET so existing deployments don't require extra config.
 		keyHashSecret: process.env.KEY_HASH_SECRET || process.env.JWT_SECRET || 'dev-secret-change-in-production',
 		rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 900000, // 15 minutes
-		rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS, 10) || 100
+		rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS, 10) || 100,
+		legacyApiEnabled: process.env.LEGACY_API_ENABLED === 'true',
+		sessionTokensEnabled: process.env.SESSION_TOKENS_ENABLED === 'true',
+		sessionTokenApiKeyTtlSeconds: parseInt(process.env.SESSION_TOKEN_API_KEY_TTL_SECONDS, 10) || 900,
+		adminApiKey: process.env.ADMIN_API_KEY || ''
 	},
 	ssl: {
 		certPath: process.env.SSL_CERT_PATH || '',

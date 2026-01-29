@@ -1,4 +1,5 @@
 """VomeSync Home Assistant Integration."""
+import inspect
 import logging
 
 from homeassistant.config_entries import ConfigEntry
@@ -8,8 +9,9 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 import voluptuous as vol
 
-from .const import DOMAIN, CONF_SWITCH_UID
+from .const import DOMAIN, CONF_SERVER_URL, CONF_SWITCH_UID
 from .coordinator import VomeSyncCoordinator
+from .naming import build_entry_title, is_default_entry_title
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +30,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	_LOGGER.info("Entry data keys: %s", list(entry.data.keys()))
 	_LOGGER.info("Entry options keys: %s", list(entry.options.keys()) if entry.options else "None")
 	_LOGGER.info("Entry options content: %s", entry.options)
+
+	try:
+		server_url = entry.data.get(CONF_SERVER_URL, "")
+	except Exception:  # noqa: BLE001
+		server_url = ""
+	desired_title = build_entry_title(server_url)
+	if desired_title and is_default_entry_title(entry.title) and entry.title != desired_title:
+		result = hass.config_entries.async_update_entry(entry, title=desired_title)
+		if inspect.isawaitable(result):
+			await result
 	
 	# Create coordinator
 	coordinator = VomeSyncCoordinator(hass, entry)

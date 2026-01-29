@@ -27,9 +27,9 @@ from .const import (
 	ATTR_CREATED_AT,
 	ATTR_IS_OWNER,
 	DEVICE_MANUFACTURER,
-	DEVICE_MODEL,
 )
 from .coordinator import VomeSyncCoordinator
+from .naming import format_device_model, format_device_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -165,9 +165,9 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 		# Device info
 		device_info = {
 			"identifiers": {(DOMAIN, uid)},
-			"name": f"VomeSync Switch ({name})",
+			"name": format_device_name(name),
 			"manufacturer": DEVICE_MANUFACTURER,
-			"model": DEVICE_MODEL,
+			"model": format_device_model(is_owner),
 			"sw_version": "1.0.0",
 		}
 		

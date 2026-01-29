@@ -20,6 +20,12 @@ This document is a practical checklist/runbook for operating VomeSync safely, es
 	- Treat **personal keys** and **(v2) access keys** as **bearer secrets**. Anyone with the key can act as that user/key.
 	- The server stores only **hashed key IDs** in Redis (no plaintext bearer keys). For legacy data, keys are migrated on first use; consider a one-time cleanup window if you had pre-existing plaintext keys.
 	- Ensure logs never print full keys (redaction is enabled in the webserver logger as defence-in-depth).
+	- Legacy v1 endpoints are **disabled by default** (`LEGACY_API_ENABLED=false`).
+	- Session-token web login is **disabled by default** (`SESSION_TOKENS_ENABLED=false`).
+	- Website management links use **short‑lived** v2 access keys by default (extendable up to **30 days**).
+- **Admin moderation**:
+	- Set `ADMIN_API_KEY` to enable admin endpoints.
+	- Admin tools can delist/delete public switches, block owners/keys, and set redirects for migrated switches.
 
 ### Network exposure
 - **Expose only what you need**:

@@ -33,6 +33,7 @@ CONF_SWITCH_ICON_URL = "icon_url"
 CONF_SWITCH_BANNER_URL = "banner_url"
 CONF_CAPTCHA_TOKEN = "captcha_token"
 CONF_SWITCH_ADVANCED = "advanced_fields"
+CONF_SHOW_SIGNING_KEY_AFTER = "show_signing_key_after"
 
 # Categories
 SWITCH_CATEGORIES = [
@@ -89,4 +90,5 @@ ATTR_IS_OWNER = "is_owner"
 
 # Device info
 DEVICE_MANUFACTURER = "Vortitron"
-DEVICE_MODEL = "VomeSync Remote Switch"
+DEVICE_MODEL_OWNED = "VomeSync Switch"
+DEVICE_MODEL_REMOTE = "VomeSync Remote Switch"

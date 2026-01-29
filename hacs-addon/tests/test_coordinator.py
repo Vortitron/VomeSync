@@ -1,3 +1,4 @@
+# flake8: noqa
 """Tests for VomeSync coordinator."""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -271,7 +272,9 @@ async def test_coordinator_triggers_linked_entities(hass, config_entry):
 	"""Test coordinator triggers linked entities on state change."""
 	config_entry.options = {
 		"linked_entities": {
-			"test-uid": ["light.living_room", "switch.bedroom"]
+			"test-uid": {
+				"entities": ["light.living_room", "switch.bedroom"]
+			}
 		}
 	}
 
@@ -318,7 +321,9 @@ async def test_coordinator_triggers_linked_entities_with_unsupported_params(hass
 	"""Test coordinator falls back when params not supported by target entity."""
 	config_entry.options = {
 		"linked_entities": {
-			"test-uid": ["switch.bedroom"]
+			"test-uid": {
+				"entities": ["switch.bedroom"]
+			}
 		}
 	}
 
@@ -503,7 +508,9 @@ async def test_coordinator_rate_limits_linked_entity_triggers(hass, config_entry
 	"""Test coordinator limits linked entity triggers to prevent runaway loops."""
 	config_entry.options = {
 		"linked_entities": {
-			"test-uid": ["light.living_room"]
+			"test-uid": {
+				"entities": ["light.living_room"]
+			}
 		}
 	}
 

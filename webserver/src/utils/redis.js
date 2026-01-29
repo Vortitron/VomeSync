@@ -15,6 +15,11 @@ const PERSONAL_KEY_TTL_SECONDS = 365 * 24 * 60 * 60; // 1 year
 const USER_INDEX_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 const SWITCH_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
+const BLOCKED_OWNER_IDS_SET = 'blocked:owner_ids';
+const BLOCKED_PERSONAL_KEY_IDS_SET = 'blocked:personal_key_ids';
+const BLOCKED_API_KEY_IDS_SET = 'blocked:api_key_ids';
+const SWITCH_REDIRECTS_HASH = 'switch_redirects';
+
 function _sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -76,6 +81,95 @@ class RedisClient {
 
 	getSessionTokenId(tokenOrId) {
 		return this._getSessionTokenId(tokenOrId);
+	}
+
+	async isOwnerBlocked(ownerId) {
+		if (!ownerId) return false;
+		return await this.client.sIsMember(BLOCKED_OWNER_IDS_SET, ownerId);
+	}
+
+	async blockOwnerId(ownerId) {
+		if (!ownerId) return false;
+		await this.client.sAdd(BLOCKED_OWNER_IDS_SET, ownerId);
+		return true;
+	}
+
+	async unblockOwnerId(ownerId) {
+		if (!ownerId) return false;
+		await this.client.sRem(BLOCKED_OWNER_IDS_SET, ownerId);
+		return true;
+	}
+
+	async isPersonalKeyBlocked(personalKeyOrId) {
+		const personalKeyId = this._getPersonalKeyId(personalKeyOrId);
+		if (!personalKeyId) return false;
+		return await this.client.sIsMember(BLOCKED_PERSONAL_KEY_IDS_SET, personalKeyId);
+	}
+
+	async blockPersonalKeyId(personalKeyOrId) {
+		const personalKeyId = this._getPersonalKeyId(personalKeyOrId);
+		if (!personalKeyId) return false;
+		await this.client.sAdd(BLOCKED_PERSONAL_KEY_IDS_SET, personalKeyId);
+		return true;
+	}
+
+	async unblockPersonalKeyId(personalKeyOrId) {
+		const personalKeyId = this._getPersonalKeyId(personalKeyOrId);
+		if (!personalKeyId) return false;
+		await this.client.sRem(BLOCKED_PERSONAL_KEY_IDS_SET, personalKeyId);
+		return true;
+	}
+
+	async isApiKeyBlocked(apiKeyOrId) {
+		const apiKeyId = this._getApiKeyId(apiKeyOrId);
+		if (!apiKeyId) return false;
+		return await this.client.sIsMember(BLOCKED_API_KEY_IDS_SET, apiKeyId);
+	}
+
+	async blockApiKeyId(apiKeyOrId) {
+		const apiKeyId = this._getApiKeyId(apiKeyOrId);
+		if (!apiKeyId) return false;
+		await this.client.sAdd(BLOCKED_API_KEY_IDS_SET, apiKeyId);
+		return true;
+	}
+
+	async unblockApiKeyId(apiKeyOrId) {
+		const apiKeyId = this._getApiKeyId(apiKeyOrId);
+		if (!apiKeyId) return false;
+		await this.client.sRem(BLOCKED_API_KEY_IDS_SET, apiKeyId);
+		return true;
+	}
+
+	async getSwitchRedirect(uid) {
+		if (!uid) return null;
+		const raw = await this.client.hGet(SWITCH_REDIRECTS_HASH, uid);
+		if (!raw) return null;
+		try {
+			const parsed = JSON.parse(raw);
+			if (parsed && typeof parsed.toUid === 'string' && parsed.toUid) {
+				return parsed;
+			}
+		} catch {
+			// ignore
+		}
+		return null;
+	}
+
+	async setSwitchRedirect(fromUid, toUid, reason = '') {
+		if (!fromUid || !toUid) return null;
+		const payload = {
+			toUid,
+			reason: reason || '',
+			updatedAt: Date.now()
+		};
+		await this.client.hSet(SWITCH_REDIRECTS_HASH, fromUid, JSON.stringify(payload));
+		return payload;
+	}
+
+	async clearSwitchRedirect(fromUid) {
+		if (!fromUid) return false;
+		await this.client.hDel(SWITCH_REDIRECTS_HASH, fromUid);
+		return true;
 	}
 
 	async connect() {
@@ -427,15 +521,23 @@ class RedisClient {
 
 	async getPublicSwitches() {
 		const publicUIDs = await this.client.sMembers('public_switches');
+		const redirectMap = await this.client.hGetAll(SWITCH_REDIRECTS_HASH);
+		const blockedOwners = new Set(await this.client.sMembers(BLOCKED_OWNER_IDS_SET));
 		const switches = [];
 
 		for (const uid of publicUIDs) {
+			if (redirectMap && redirectMap[uid]) {
+				continue;
+			}
 			const switchData = await this.getSwitchState(uid);
 			if (!switchData || !switchData.publicize) {
 				continue;
 			}
 			// Ignore legacy v1 switches (UUID + personalKey auth). Public directory should be v2-only.
 			if (switchData.authVersion !== 2) {
+				continue;
+			}
+			if (switchData.ownerId && blockedOwners.has(switchData.ownerId)) {
 				continue;
 			}
 			const userCount = await this.getUserCount(uid);
@@ -821,30 +923,41 @@ class RedisClient {
 	}
 
 	// API key management
-	async createApiKey(personalKey, name = '') {
+	async createApiKey(personalKey, name = '', ttlSeconds = null) {
 		const { v4: uuidv4 } = require('uuid');
 		const apiKey = uuidv4();
 		const personalKeyId = this._getPersonalKeyId(personalKey);
 		const apiKeyId = this._getApiKeyId(apiKey);
+		const now = Date.now();
+		const ttl = Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? Math.floor(ttlSeconds) : null;
+		const expiresAt = ttl ? now + (ttl * 1000) : null;
 
 		const keyData = {
 			type: 'api_key',
 			apiKeyId,
 			personalKeyId,
 			name,
-			createdAt: Date.now(),
+			createdAt: now,
 			lastUsed: 0,
 			revoked: false
 		};
+		if (expiresAt) {
+			keyData.expiresAt = expiresAt;
+		}
 
-		await this.client.hSet(this._apiKeyRecordKey(apiKeyId), this._serializeHash(keyData));
+		const recordKey = this._apiKeyRecordKey(apiKeyId);
+		await this.client.hSet(recordKey, this._serializeHash(keyData));
 		await this.client.sAdd(this._userApiKeyIndexKey(personalKeyId), apiKeyId);
+		if (expiresAt) {
+			await this.client.expire(recordKey, ttl);
+		}
 		// API keys do not expire automatically; rely on explicit revoke or key deletion
 		return {
 			apiKey,
 			apiKeyId,
 			name: keyData.name || '',
-			createdAt: keyData.createdAt
+			createdAt: keyData.createdAt,
+			expiresAt: expiresAt || 0
 		};
 	}
 
@@ -852,17 +965,24 @@ class RedisClient {
 		const personalKeyId = this._getPersonalKeyId(personalKey);
 		const apiKeys = await this.client.sMembers(this._userApiKeyIndexKey(personalKeyId));
 		const result = [];
+		const now = Date.now();
 		for (const key of apiKeys) {
 			const data = await this.client.hGetAll(this._apiKeyRecordKey(key));
 			if (data && Object.keys(data).length > 0) {
 				const parsed = this._deserializeHash(data);
+				if (parsed && parsed.expiresAt && parsed.expiresAt <= now) {
+					await this.client.del(this._apiKeyRecordKey(key));
+					await this.client.sRem(this._userApiKeyIndexKey(personalKeyId), key);
+					continue;
+				}
 				// Never return the plaintext API key; only stable IDs + metadata.
 				result.push({
 					apiKeyId: parsed.apiKeyId || key,
 					name: parsed.name || '',
 					createdAt: parsed.createdAt || 0,
 					lastUsed: parsed.lastUsed || 0,
-					revoked: Boolean(parsed.revoked)
+					revoked: Boolean(parsed.revoked),
+					expiresAt: parsed.expiresAt || 0
 				});
 			}
 		}
@@ -891,12 +1011,17 @@ class RedisClient {
 			if (data.revoked === 'true') {
 				return null;
 			}
-			// Update lastUsed
-			await this.client.hSet(this._apiKeyRecordKey(apiKeyId), 'lastUsed', `${Date.now()}`);
 			const parsed = this._deserializeHash(data);
 			if (!parsed || parsed.type !== 'api_key' || !parsed.personalKeyId) {
 				return null;
 			}
+			if (parsed.expiresAt && parsed.expiresAt <= Date.now()) {
+				await this.client.del(this._apiKeyRecordKey(apiKeyId));
+				await this.client.sRem(this._userApiKeyIndexKey(parsed.personalKeyId), apiKeyId);
+				return null;
+			}
+			// Update lastUsed
+			await this.client.hSet(this._apiKeyRecordKey(apiKeyId), 'lastUsed', `${Date.now()}`);
 			return parsed.personalKeyId;
 		}
 
@@ -925,13 +1050,16 @@ class RedisClient {
 	}
 
 	// V2 access keys (delegation): per-switch keys created by owner signature, stored server-side
-	async createV2AccessKey(ownerId, uid, name = '', permissions = ['toggle']) {
+	async createV2AccessKey(ownerId, uid, name = '', permissions = ['toggle'], ttlSeconds = null) {
 		if (!ownerId || !uid) {
 			return null;
 		}
 		const { v4: uuidv4 } = require('uuid');
 		const apiKey = uuidv4();
 		const apiKeyId = this._getApiKeyId(apiKey);
+		const now = Date.now();
+		const ttl = Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? Math.floor(ttlSeconds) : null;
+		const expiresAt = ttl ? now + (ttl * 1000) : null;
 
 		const keyData = {
 			apiKeyId,
@@ -941,12 +1069,19 @@ class RedisClient {
 			type: 'v2_access_key',
 			name,
 			permissions: Array.isArray(permissions) ? permissions : ['toggle'],
-			createdAt: Date.now(),
+			createdAt: now,
 			lastUsed: 0,
 			revoked: false
 		};
+		if (expiresAt) {
+			keyData.expiresAt = expiresAt;
+		}
 
-		await this.client.hSet(this._apiKeyRecordKey(apiKeyId), this._serializeHash(keyData));
+		const recordKey = this._apiKeyRecordKey(apiKeyId);
+		await this.client.hSet(recordKey, this._serializeHash(keyData));
+		if (expiresAt) {
+			await this.client.expire(recordKey, ttl);
+		}
 		await this.client.sAdd(`switch:${uid}:access_keys`, apiKeyId);
 		await this.client.sAdd(`owner:${ownerId}:access_keys`, apiKeyId);
 		return {
@@ -954,7 +1089,8 @@ class RedisClient {
 			apiKeyId,
 			name: keyData.name || '',
 			permissions: keyData.permissions || [],
-			createdAt: keyData.createdAt
+			createdAt: keyData.createdAt,
+			expiresAt: expiresAt || 0
 		};
 	}
 
@@ -964,10 +1100,17 @@ class RedisClient {
 		}
 		const apiKeys = await this.client.sMembers(`switch:${uid}:access_keys`);
 		const result = [];
+		const now = Date.now();
 		for (const key of apiKeys) {
 			const data = await this.client.hGetAll(this._apiKeyRecordKey(key));
 			if (data && Object.keys(data).length > 0) {
 				const parsed = this._deserializeHash(data);
+				if (parsed && parsed.expiresAt && parsed.expiresAt <= now) {
+					await this.client.del(this._apiKeyRecordKey(key));
+					await this.client.sRem(`switch:${uid}:access_keys`, key);
+					await this.client.sRem(`owner:${ownerId}:access_keys`, key);
+					continue;
+				}
 				// Only list keys for this switch + owner (defence in depth)
 				if (parsed && parsed.uid === uid && parsed.ownerId === ownerId && parsed.type === 'v2_access_key') {
 					result.push(parsed);
@@ -1010,6 +1153,12 @@ class RedisClient {
 			}
 			const parsed = this._deserializeHash(data);
 			if (!parsed || parsed.type !== 'v2_access_key' || parsed.authVersion !== 2) {
+				return null;
+			}
+			if (parsed.expiresAt && parsed.expiresAt <= Date.now()) {
+				await this.client.del(this._apiKeyRecordKey(apiKeyId));
+				await this.client.sRem(`switch:${parsed.uid}:access_keys`, apiKeyId);
+				await this.client.sRem(`owner:${parsed.ownerId}:access_keys`, apiKeyId);
 				return null;
 			}
 			await this.client.hSet(this._apiKeyRecordKey(apiKeyId), 'lastUsed', `${Date.now()}`);
@@ -1127,12 +1276,26 @@ class RedisClient {
 	}
 
 	async getPublicSwitchDetail(uid) {
+		const redirect = await this.getSwitchRedirect(uid);
+		if (redirect) {
+			return {
+				uid,
+				redirect: true,
+				redirectTo: redirect.toUid,
+				redirectReason: redirect.reason || '',
+				redirectAt: redirect.updatedAt || 0
+			};
+		}
+
 		const switchData = await this.getSwitchState(uid);
 		if (!switchData || !switchData.publicize) {
 			return null;
 		}
 		// Ignore legacy v1 switches (UUID + personalKey auth). Public pages should be v2-only.
 		if (switchData.authVersion !== 2) {
+			return null;
+		}
+		if (switchData.ownerId && await this.isOwnerBlocked(switchData.ownerId)) {
 			return null;
 		}
 
@@ -1190,6 +1353,42 @@ class RedisClient {
 		}
 
 		return this.getSwitchState(uid);
+	}
+
+	async deleteSwitchAdmin(uid) {
+		if (!uid) return null;
+		const switchData = await this.getSwitchState(uid);
+		if (!switchData) {
+			return null;
+		}
+
+		const ownerKeyId = switchData.ownerKeyId || '';
+		const ownerId = switchData.ownerId || '';
+
+		const switchAccessKeys = await this.client.sMembers(`switch:${uid}:access_keys`);
+
+		const pipeline = this.client.multi();
+		pipeline.del(`switch:${uid}`);
+		pipeline.del(`switch:${uid}:users`);
+		pipeline.del(`switch:${uid}:events`);
+		pipeline.del(`switch:${uid}:access_keys`);
+		pipeline.sRem('public_switches', uid);
+		if (ownerKeyId) {
+			pipeline.sRem(`user:${ownerKeyId}:switches`, uid);
+		}
+		if (ownerId) {
+			pipeline.sRem(`owner:${ownerId}`, uid);
+		}
+
+		for (const apiKeyId of switchAccessKeys) {
+			pipeline.del(this._apiKeyRecordKey(apiKeyId));
+			if (ownerId) {
+				pipeline.sRem(`owner:${ownerId}:access_keys`, apiKeyId);
+			}
+		}
+
+		await pipeline.exec();
+		return switchData;
 	}
 
 	async setProfileUrl(personalKey, profileUrl) {

@@ -139,7 +139,11 @@ class AuthManager {
 				});
 			}
 
-			req.personalKeyId = redisClient.getPersonalKeyId(personalKey);
+			const personalKeyId = redisClient.getPersonalKeyId(personalKey);
+			if (await redisClient.isPersonalKeyBlocked(personalKeyId)) {
+				return res.status(403).json({ success: false, error: 'Key blocked' });
+			}
+			req.personalKeyId = personalKeyId;
 			next();
 		};
 	}
@@ -162,6 +166,13 @@ class AuthManager {
 					success: false,
 					error: 'Personal key or API key required'
 				});
+			}
+
+			if (await redisClient.isPersonalKeyBlocked(personalKeyId)) {
+				return res.status(403).json({ success: false, error: 'Key blocked' });
+			}
+			if (apiKey && await redisClient.isApiKeyBlocked(apiKey)) {
+				return res.status(403).json({ success: false, error: 'Key blocked' });
 			}
 
 			const authResult = await this.authenticateSwitch(uid, personalKeyId);
@@ -197,6 +208,12 @@ class AuthManager {
 				if (!keyData) {
 					return res.status(401).json({ success: false, error: 'Invalid or revoked API key' });
 				}
+				if (await redisClient.isApiKeyBlocked(keyData.apiKeyId || apiKey)) {
+					return res.status(403).json({ success: false, error: 'Key blocked' });
+				}
+				if (keyData.ownerId && await redisClient.isOwnerBlocked(keyData.ownerId)) {
+					return res.status(403).json({ success: false, error: 'Owner blocked' });
+				}
 				if (keyData.uid !== uid) {
 					return res.status(401).json({ success: false, error: 'Unauthorized: API key is not valid for this switch' });
 				}
@@ -211,6 +228,9 @@ class AuthManager {
 				const switchData = await redisClient.getSwitchState(uid);
 				if (!switchData) {
 					return res.status(404).json({ success: false, error: 'Switch not found' });
+				}
+				if (switchData.ownerId && await redisClient.isOwnerBlocked(switchData.ownerId)) {
+					return res.status(403).json({ success: false, error: 'Owner blocked' });
 				}
 				if (switchData.authVersion !== 2) {
 					return res.status(400).json({ success: false, error: 'Switch is not v2 (crypto) enabled' });
