@@ -86,6 +86,7 @@ const lastUpdate = document.getElementById('lastUpdate');
 const categoryList = document.getElementById('categoryList');
 const detailSection = document.getElementById('switchDetail');
 const detailTitle = document.getElementById('detailTitle');
+const detailDescription = document.getElementById('detailDescription');
 const detailIcon = document.getElementById('detailIcon');
 const detailLocation = document.getElementById('detailLocation');
 const redirectNotice = document.getElementById('redirectNotice');
@@ -170,6 +171,7 @@ const quickViewBackdrop = document.getElementById('quickViewBackdrop');
 const quickViewCloseBtn = document.getElementById('quickViewClose');
 const quickViewIcon = document.getElementById('quickViewIcon');
 const quickViewTitle = document.getElementById('quickViewTitle');
+const quickViewDescription = document.getElementById('quickViewDescription');
 const quickViewSubtitle = document.getElementById('quickViewSubtitle');
 const quickViewMeta = document.getElementById('quickViewMeta');
 const quickViewCopyUidBtn = document.getElementById('quickViewCopyUid');
@@ -338,7 +340,7 @@ function updateNavSwitchStatus(detail) {
 		return;
 	}
 	const info = detail || currentSwitchDetail || {};
-	const name = getDisplaySwitchName(info.description || info.name || uid) || 'Switch';
+	const name = getSwitchDisplayName(info);
 	const stateKnown = typeof info.state === 'boolean';
 	const isOn = stateKnown ? Boolean(info.state) : false;
 	const stateLabel = stateKnown ? (isOn ? 'ON' : 'OFF') : 'Unknown';
@@ -396,15 +398,20 @@ function setHeroForSwitch(detail) {
 	if (!detail) return;
 	if (!heroTitleEl || !heroSubtitleEl) return;
 
-	const title = getDisplaySwitchName(detail.description) || 'Switch';
+	const title = getSwitchDisplayName(detail);
 	const subtitleBits = [];
-	const location = String(detail.location || '').trim();
-	if (location) subtitleBits.push(`📍 ${location}`);
-	const category = String(detail.category || '').trim();
-	if (category) subtitleBits.push(`🏷️ ${category}`);
-	const users = (typeof detail.userCount === 'number') ? detail.userCount : null;
-	if (users != null) {
-		subtitleBits.push(`👥 ${users} user${users === 1 ? '' : 's'}`);
+	const description = getSwitchDescription(detail);
+	if (description) {
+		subtitleBits.push(description);
+	} else {
+		const location = String(detail.location || '').trim();
+		if (location) subtitleBits.push(`📍 ${location}`);
+		const category = String(detail.category || '').trim();
+		if (category) subtitleBits.push(`🏷️ ${category}`);
+		const users = (typeof detail.userCount === 'number') ? detail.userCount : null;
+		if (users != null) {
+			subtitleBits.push(`👥 ${users} user${users === 1 ? '' : 's'}`);
+		}
 	}
 
 	setHeroText(title, subtitleBits.join('  ·  ') || DEFAULT_HERO_SUBTITLE_TEXT);
@@ -1336,9 +1343,16 @@ function updateSwitchCardElement(card, switchData) {
 		}
 	}
 
+	const nameEl = card.querySelector('[data-field="name"]');
+	if (nameEl) {
+		nameEl.textContent = getSwitchDisplayName(switchData);
+	}
+
 	const descEl = card.querySelector('[data-field="description"]');
 	if (descEl) {
-		descEl.textContent = getDisplaySwitchName(switchData.description) || 'Untitled Switch';
+		const description = getSwitchDescription(switchData);
+		descEl.textContent = description;
+		descEl.classList.toggle('hidden', !description);
 	}
 
 	const stateEl = card.querySelector('[data-field="stateBadge"]');
@@ -1388,11 +1402,16 @@ function computeFilteredSwitches() {
 	const minUsers = userCountFilter.value ? parseInt(userCountFilter.value, 10) : null;
 
 	return allSwitches.filter((switchData) => {
-		const description = getDisplaySwitchName(switchData.description || '').toLowerCase();
+	const name = getDisplaySwitchName(switchData.name || '').toLowerCase();
+	const description = String(switchData.description || '').toLowerCase();
 		const location = (switchData.location || '').toLowerCase();
 		const categoryValue = (switchData.category || '').toLowerCase();
 
-		const matchesSearch = !searchQuery || description.includes(searchQuery) || location.includes(searchQuery) || categoryValue.includes(searchQuery);
+	const matchesSearch = !searchQuery
+		|| name.includes(searchQuery)
+		|| description.includes(searchQuery)
+		|| location.includes(searchQuery)
+		|| categoryValue.includes(searchQuery);
 		const matchesCategory = !category || switchData.category === category;
 		const matchesUserCount = !minUsers || (switchData.userCount || 0) >= minUsers;
 
@@ -1591,6 +1610,10 @@ async function refreshSwitchDetail(uid, allowRedirect = true) {
 
 		currentSwitchDetail = detail;
 		hideRedirectNotice();
+		
+		// Re-render full detail view to update name, description, and all metadata
+		renderSwitchDetail(detail);
+		setHeroForSwitch(detail);
 		updateHeroStatusButton(detail);
 
 		// Update activity + counts without resetting the manage panel inputs.
@@ -1643,8 +1666,13 @@ function updateDetailActivity(detail) {
 	if (detailToggles) detailToggles.textContent = `${detail.toggleCount || 0} toggles`;
 	if (detailLastChange) detailLastChange.textContent = detail.lastToggled ? formatTimeAgo(new Date(detail.lastToggled)) : 'Never';
 
-	// If the icon/banner/description changes, update visible pieces too
-	if (detailTitle) detailTitle.textContent = getDisplaySwitchName(detail.description) || 'Untitled switch';
+	// If the icon/banner/name/description changes, update visible pieces too
+	if (detailTitle) detailTitle.textContent = getSwitchDisplayName(detail);
+	if (detailDescription) {
+		const description = getSwitchDescription(detail);
+		detailDescription.textContent = description;
+		detailDescription.classList.toggle('hidden', !description);
+	}
 	if (detailIcon) {
 		const icon = String(detail.iconUrl || '').trim();
 		if (icon) {
@@ -1675,6 +1703,7 @@ function syncSwitchDetailToIndex(detail) {
 			userCount: detail.userCount,
 			iconUrl: detail.iconUrl || allSwitches[idx].iconUrl,
 			bannerUrl: detail.bannerUrl || allSwitches[idx].bannerUrl,
+			name: detail.name || allSwitches[idx].name,
 			description: detail.description || allSwitches[idx].description,
 			location: detail.location || allSwitches[idx].location,
 			category: detail.category || allSwitches[idx].category
@@ -2169,7 +2198,12 @@ async function copyAndOpenHomeAssistant(uid, button, defaultLabel) {
 
 function renderQuickView(detail) {
 	if (!detail) return;
-	if (quickViewTitle) quickViewTitle.textContent = getDisplaySwitchName(detail.description) || 'Untitled switch';
+	if (quickViewTitle) quickViewTitle.textContent = getSwitchDisplayName(detail);
+	if (quickViewDescription) {
+		const description = getSwitchDescription(detail);
+		quickViewDescription.textContent = description;
+		quickViewDescription.classList.toggle('hidden', !description);
+	}
 	if (quickViewSubtitle) {
 		quickViewSubtitle.textContent = detail.location ? `📍 ${detail.location}` : '';
 	}
@@ -2277,6 +2311,7 @@ function wireSwitchCardClicks() {
 function createSwitchCard(switchData) {
 	const {
 		uid,
+		name,
 		description,
 		location,
 		category,
@@ -2299,13 +2334,18 @@ function createSwitchCard(switchData) {
 	const webLink = link ? `<a class="inline-link" href="${escapeAttr(link)}" target="_blank" rel="noopener">🌐 Link</a>` : '';
 	const iconSrc = String(iconUrl || '').trim();
 	const iconHtml = `<img class="switch-icon ${iconSrc ? '' : 'hidden'}" data-field="icon" ${iconSrc ? `src="${escapeAttr(iconSrc)}"` : ''} alt="" loading="lazy" referrerpolicy="no-referrer">`;
+	const displayName = getSwitchDisplayName({ name });
+	const displayDescription = getSwitchDescription({ name, description });
 
 	return `
 		<div class="switch-card ${stateClass}" data-uid="${escapeAttr(uid)}" data-banner-url="${escapeAttr(bannerUrl || '')}">
 			<div class="switch-header">
 				<div class="switch-title">
 					${iconHtml}
-					<div class="switch-description" data-field="description">${escapeHtml(getDisplaySwitchName(description) || 'Untitled Switch')}</div>
+					<div class="switch-title-text">
+						<div class="switch-name" data-field="name">${escapeHtml(displayName)}</div>
+						<div class="switch-description ${displayDescription ? '' : 'hidden'}" data-field="description">${escapeHtml(displayDescription)}</div>
+					</div>
 				</div>
 				<div class="switch-state ${stateText}" data-field="stateBadge">${stateLabel}</div>
 			</div>
@@ -2476,7 +2516,12 @@ function renderSwitchDetail(detail) {
 	} else {
 		hideRedirectNotice();
 	}
-	detailTitle.textContent = getDisplaySwitchName(detail.description) || 'Untitled switch';
+	detailTitle.textContent = getSwitchDisplayName(detail);
+	if (detailDescription) {
+		const description = getSwitchDescription(detail);
+		detailDescription.textContent = description;
+		detailDescription.classList.toggle('hidden', !description);
+	}
 	if (detailIcon) {
 		const icon = String(detail.iconUrl || '').trim();
 		if (icon) {
@@ -3066,6 +3111,17 @@ function formatTimeAgo(date) {
 	if (diffDays < 7) return `${diffDays}d ago`;
 
 	return date.toLocaleDateString();
+}
+
+function getSwitchDisplayName(detail) {
+	const name = getDisplaySwitchName(detail && detail.name);
+	return name || 'Untitled switch';
+}
+
+function getSwitchDescription(detail) {
+	const raw = String(detail && detail.description ? detail.description : '').trim();
+	if (!raw) return '';
+	return raw.replace(/\s+/g, ' ').trim();
 }
 
 function getDisplaySwitchName(rawName) {

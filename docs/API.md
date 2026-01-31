@@ -157,6 +157,7 @@ Create a deterministic switch (UID is derived by the server from `switchPubKey`)
   "nonce": "random-string",
   "sigOwner": "base64url-ed25519-signature",
   "sigSwitch": "base64url-ed25519-signature",
+  "name": "My Switch",
   "description": "",
   "location": "",
   "category": "Other",
@@ -176,6 +177,8 @@ Create a deterministic switch (UID is derived by the server from `switchPubKey`)
     "uid": "vs_...",
     "authVersion": 2,
     "index": 0,
+    "name": "My Switch",
+    "description": "",
     "state": false,
     "publicize": false,
     "iconUrl": "",
@@ -197,6 +200,7 @@ Update a v2 switch's metadata (signed by the owner key).
   "ts": 1712345678901,
   "nonce": "random-string",
   "sigOwner": "base64url-ed25519-signature",
+  "name": "My Switch",
   "description": "My Switch",
   "link": "https://example.com",
   "iconUrl": "https://example.com/icon.png",
@@ -295,6 +299,8 @@ X-Api-Key: uuid-v4-string
 Body (example):
 ```json
 {
+  "name": "My Switch",
+  "description": "Optional detail",
   "iconUrl": "https://example.com/icon.png",
   "bannerUrl": "https://example.com/banner.jpg",
   "link": "https://example.com"

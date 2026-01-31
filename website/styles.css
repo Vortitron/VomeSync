@@ -586,6 +586,12 @@ select {
 	min-width: 0;
 }
 
+.switch-title-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
 .switch-icon {
 	width: 32px;
 	height: 32px;
@@ -596,11 +602,19 @@ select {
 	flex: 0 0 auto;
 }
 
-.switch-description {
+.switch-name {
 	font-size: 1.125rem;
 	font-weight: 600;
 	margin-bottom: 0.25rem;
 	color: var(--text-primary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.switch-description {
+	font-size: 0.9rem;
+	color: var(--text-muted);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -851,6 +865,16 @@ body.view-switch .intro {
 	font-size: 1.875rem;
 	font-weight: 700;
 	color: var(--text-primary);
+}
+
+.detail-description {
+	font-size: 0.95rem;
+	color: var(--text-muted);
+	margin-top: 0.35rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 100%;
 }
 
 .detail-title-row {
@@ -1195,6 +1219,16 @@ body.modal-open {
 	background: rgba(255, 255, 255, 0.04);
 	box-shadow: var(--shadow-sm);
 	flex: 0 0 auto;
+}
+
+.quickview-description {
+	font-size: 0.9rem;
+	color: var(--text-muted);
+	margin-top: 0.25rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 100%;
 }
 
 .comment-form h3 {

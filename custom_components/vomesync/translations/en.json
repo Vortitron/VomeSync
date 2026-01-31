@@ -65,7 +65,7 @@
 			},
 			"create_switch": {
 				"title": "Create a switch",
-				"description": "",
+				"description": "{error}",
 				"data": {
 					"name": "Name",
 					"description": "Description (optional)",
@@ -126,7 +126,7 @@
 			},
 			"manage_switch_action": {
 				"title": "Switch actions",
-				"description": "Actions for **{name}** (…{uid_hint})\nEntity ID: `{entity_id}`",
+				"description": "UID: `{uid}`\nActions for **{name}** (…{uid_hint})\nEntity ID: `{entity_id}`",
 				"menu_options": {
 					"view_switch": "View details",
 					"edit_switch": "Edit settings",
@@ -205,8 +205,9 @@
 			},
 			"edit_switch": {
 				"title": "Edit switch",
-				"description": "Update switch settings (only owners can edit)",
+				"description": "Update switch settings (only owners can edit){error}",
 				"data": {
+					"name": "Name",
 					"description": "Description",
 					"location": "Location",
 					"category": "Category",

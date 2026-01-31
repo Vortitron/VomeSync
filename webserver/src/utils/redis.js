@@ -365,6 +365,7 @@ class RedisClient {
 			state: 'off',
 			createdAt: Date.now(),
 			lastToggled: 0,
+			name: switchConfig.name || '',
 			description: switchConfig.description || '',
 			location: switchConfig.location || '',
 			category: switchConfig.category || '',
@@ -401,6 +402,7 @@ class RedisClient {
 			state: 'off',
 			createdAt: Date.now(),
 			lastToggled: 0,
+			name: switchConfig.name || '',
 			description: switchConfig.description || '',
 			location: switchConfig.location || '',
 			category: switchConfig.category || '',
@@ -544,6 +546,7 @@ class RedisClient {
 			const ownerProfileUrl = '';
 			switches.push({
 				uid: switchData.uid,
+				name: switchData.name || '',
 				description: switchData.description,
 				location: switchData.location,
 				category: switchData.category,
@@ -1305,6 +1308,7 @@ class RedisClient {
 
 		return {
 			uid: switchData.uid,
+			name: switchData.name || '',
 			description: switchData.description || '',
 			location: switchData.location || '',
 			category: switchData.category || 'Other',

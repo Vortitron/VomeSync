@@ -122,6 +122,18 @@ class VomeSyncAPIClient:
 
 				if response.status >= 400:
 					error_msg = response_data.get("error", f"HTTP {response.status}")
+					details = response_data.get("details")
+					if isinstance(details, list) and details:
+						detail_messages = []
+						for detail in details:
+							if isinstance(detail, dict):
+								message = detail.get("message") or detail.get("field")
+							else:
+								message = str(detail)
+							if message:
+								detail_messages.append(str(message))
+						if detail_messages:
+							error_msg = f"{error_msg} ({'; '.join(detail_messages)})"
 					_LOGGER.error("API request failed (%s %s): %s", method, url, error_msg)
 					raise VomeSyncAPIError(f"API request failed: {error_msg}")
 
@@ -167,6 +179,7 @@ class VomeSyncAPIClient:
 
 	async def create_switch(
 		self,
+		name: str = "",
 		description: str = "",
 		location: str = "",
 		category: str = "Other",
@@ -179,6 +192,7 @@ class VomeSyncAPIClient:
 			raise VomeSyncAPIError("Crypto mode enabled; use create_switch_v2()")
 		
 		data = {
+			"name": name,
 			"description": description,
 			"location": location,
 			"category": category,
@@ -200,6 +214,7 @@ class VomeSyncAPIClient:
 	async def create_switch_v2(
 		self,
 		index: int,
+		name: str = "",
 		description: str = "",
 		location: str = "",
 		category: str = "Other",
@@ -216,6 +231,7 @@ class VomeSyncAPIClient:
 		req = build_v2_create_switch_request(
 			self.crypto_seed,
 			index=index,
+			name=name,
 			description=description,
 			location=location,
 			category=category,
@@ -233,6 +249,7 @@ class VomeSyncAPIClient:
 			"nonce": req.nonce,
 			"sigOwner": req.sigOwner,
 			"sigSwitch": req.sigSwitch,
+			**({"name": req.name} if isinstance(req.name, str) and req.name else {}),
 			"description": req.description,
 			"location": req.location,
 			"category": req.category,

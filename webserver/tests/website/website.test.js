@@ -51,7 +51,8 @@ describe('Website SPA (v2 directory)', () => {
 			data: {
 				switches: [{
 					uid,
-					description: 'Pretty Switch',
+					name: 'Pretty Switch',
+					description: 'Pretty description',
 					location: 'Test City',
 					category: 'Community',
 					state: false,
@@ -72,7 +73,8 @@ describe('Website SPA (v2 directory)', () => {
 			success: true,
 			data: {
 				uid,
-				description: 'Pretty Switch',
+				name: 'Pretty Switch',
+				description: 'Pretty description',
 				location: 'Test City',
 				category: 'Community',
 				state: false,
@@ -140,6 +142,7 @@ describe('Website SPA (v2 directory)', () => {
 		const quickView = document.getElementById('quickView');
 		expect(quickView.classList.contains('hidden')).toBe(false);
 		expect(document.getElementById('quickViewTitle').textContent).toBe('Pretty Switch');
+		expect(document.getElementById('quickViewDescription').textContent).toBe('Pretty description');
 
 		const quickViewAddHacsBtn = document.getElementById('quickViewAddHacs');
 		quickViewAddHacsBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -164,6 +167,7 @@ describe('Website SPA (v2 directory)', () => {
 
 		// Hero text should reflect the switch (not the marketing headline)
 		expect(document.getElementById('heroTitle').textContent).toBe('Pretty Switch');
+		expect(document.getElementById('heroSubtitle').textContent).toBe('Pretty description');
 
 		// Home Assistant deep link should target config flow
 		const heroHaLink = document.getElementById('heroHaLink');
@@ -223,7 +227,8 @@ describe('Website SPA (v2 directory)', () => {
 			data: {
 				switches: [{
 					uid,
-					description: 'Toggle Switch',
+					name: 'Toggle Switch',
+					description: 'Toggle description',
 					location: 'Test City',
 					category: 'Community',
 					state: false,
@@ -244,7 +249,8 @@ describe('Website SPA (v2 directory)', () => {
 			success: true,
 			data: {
 				uid,
-				description: 'Toggle Switch',
+				name: 'Toggle Switch',
+				description: 'Toggle description',
 				location: 'Test City',
 				category: 'Community',
 				state: false,
@@ -323,7 +329,8 @@ describe('Website SPA (v2 directory)', () => {
 			data: {
 				switches: [{
 					uid,
-					description: 'Nav Switch',
+					name: 'Nav Switch',
+					description: 'Nav description',
 					location: 'Test City',
 					category: 'Community',
 					state: true,
@@ -344,7 +351,8 @@ describe('Website SPA (v2 directory)', () => {
 			success: true,
 			data: {
 				uid,
-				description: 'Nav Switch',
+				name: 'Nav Switch',
+				description: 'Nav description',
 				location: 'Test City',
 				category: 'Community',
 				state: true,
@@ -448,7 +456,8 @@ describe('Website SPA (v2 directory)', () => {
 			success: true,
 			data: {
 				uid,
-				description: 'Pretty Switch',
+				name: 'Pretty Switch',
+				description: 'Pretty description',
 				location: 'Test City',
 				category: 'Community',
 				state: false,
@@ -531,7 +540,8 @@ describe('Website SPA (v2 directory)', () => {
 			success: true,
 			data: {
 				uid: newUid,
-				description: 'New Switch',
+				name: 'New Switch',
+				description: 'New description',
 				location: 'Test City',
 				category: 'Community',
 				state: false,

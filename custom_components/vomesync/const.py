@@ -76,6 +76,7 @@ WEBSOCKET_RECONNECT_DELAY = 5
 
 # Entity attributes
 ATTR_SWITCH_UID = "switch_uid"
+ATTR_NAME = "name"
 ATTR_DESCRIPTION = "description"
 ATTR_LOCATION = "location"
 ATTR_CATEGORY = "category"
@@ -86,7 +87,10 @@ ATTR_BANNER_URL = "banner_url"
 ATTR_TOGGLE_COUNT = "toggle_count"
 ATTR_LAST_TOGGLED = "last_toggled"
 ATTR_CREATED_AT = "created_at"
+ATTR_LAST_TOGGLED_TS = "last_toggled_ts"
+ATTR_CREATED_AT_TS = "created_at_ts"
 ATTR_IS_OWNER = "is_owner"
+DEFAULT_SWITCH_NAME = "Unnamed switch"
 
 # Device info
 DEVICE_MANUFACTURER = "Vortitron"

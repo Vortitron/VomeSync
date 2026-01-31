@@ -94,15 +94,15 @@ async def test_switch_created_for_subscription_with_access_key(hass, config_entr
 @pytest.mark.asyncio
 async def test_switch_entity_state_from_coordinator(hass, config_entry):
 	"""Test switch entity gets state from coordinator."""
-	mock_coordinator = MagicMock()
-	mock_coordinator.switches = {
-		"test-uid": {
-			"state": True,
-			"description": "Test",
-		}
+	switch_data = {
+		"state": True,
+		"description": "Test",
 	}
+	mock_coordinator = MagicMock()
+	mock_coordinator.switches = {"test-uid": switch_data}
 	mock_coordinator.subscriptions = {}
 	mock_coordinator.last_update_success = True
+	mock_coordinator.get_switch_data = MagicMock(return_value=switch_data)
 
 	switch = VomeSyncSwitch(
 		coordinator=mock_coordinator,
@@ -123,6 +123,7 @@ async def test_switch_entity_unavailable_when_no_data(hass, config_entry):
 	mock_coordinator.switches = {}
 	mock_coordinator.subscriptions = {}
 	mock_coordinator.last_update_success = True
+	mock_coordinator.get_switch_data = MagicMock(return_value=None)
 
 	switch = VomeSyncSwitch(
 		coordinator=mock_coordinator,
@@ -138,13 +139,13 @@ async def test_switch_entity_unavailable_when_no_data(hass, config_entry):
 @pytest.mark.asyncio
 async def test_switch_turn_on_calls_coordinator(hass, config_entry):
 	"""Test turning on switch calls coordinator set_switch_state."""
+	switch_data = {"state": False}
 	mock_coordinator = MagicMock()
-	mock_coordinator.switches = {
-		"test-uid": {"state": False}
-	}
+	mock_coordinator.switches = {"test-uid": switch_data}
 	mock_coordinator.subscriptions = {}
 	mock_coordinator.last_update_success = True
 	mock_coordinator.set_switch_state = AsyncMock(return_value=True)
+	mock_coordinator.get_switch_data = MagicMock(return_value=switch_data)
 
 	switch = VomeSyncSwitch(
 		coordinator=mock_coordinator,
@@ -162,13 +163,13 @@ async def test_switch_turn_on_calls_coordinator(hass, config_entry):
 @pytest.mark.asyncio
 async def test_switch_turn_off_calls_coordinator(hass, config_entry):
 	"""Test turning off switch calls coordinator set_switch_state."""
+	switch_data = {"state": True}
 	mock_coordinator = MagicMock()
-	mock_coordinator.switches = {
-		"test-uid": {"state": True}
-	}
+	mock_coordinator.switches = {"test-uid": switch_data}
 	mock_coordinator.subscriptions = {}
 	mock_coordinator.last_update_success = True
 	mock_coordinator.set_switch_state = AsyncMock(return_value=True)
+	mock_coordinator.get_switch_data = MagicMock(return_value=switch_data)
 
 	switch = VomeSyncSwitch(
 		coordinator=mock_coordinator,
@@ -186,12 +187,12 @@ async def test_switch_turn_off_calls_coordinator(hass, config_entry):
 @pytest.mark.asyncio
 async def test_switch_toggle_denied_for_non_owners(hass, config_entry):
 	"""Test non-owners cannot toggle subscribed switches."""
+	sub_data = {"state": False}
 	mock_coordinator = MagicMock()
-	mock_coordinator.subscriptions = {
-		"test-uid": {"state": False}
-	}
+	mock_coordinator.subscriptions = {"test-uid": sub_data}
 	mock_coordinator.switches = {}
 	mock_coordinator.last_update_success = True
+	mock_coordinator.get_switch_data = MagicMock(return_value=sub_data)
 
 	switch = VomeSyncSwitch(
 		coordinator=mock_coordinator,
@@ -209,12 +210,14 @@ async def test_switch_toggle_denied_for_non_owners(hass, config_entry):
 @pytest.mark.asyncio
 async def test_switch_turn_on_with_access_key(hass, config_entry):
 	"""Subscribed switch should toggle when access key is present."""
+	sub_data = {"state": False}
 	mock_coordinator = MagicMock()
-	mock_coordinator.subscriptions = {"test-uid": {"state": False}}
+	mock_coordinator.subscriptions = {"test-uid": sub_data}
 	mock_coordinator.switches = {}
 	mock_coordinator.last_update_success = True
 	mock_coordinator.get_subscription_access_key = MagicMock(return_value="access-123")
 	mock_coordinator.toggle_switch_with_access_key = AsyncMock(return_value=True)
+	mock_coordinator.get_switch_data = MagicMock(return_value=sub_data)
 
 	switch = VomeSyncSwitch(
 		coordinator=mock_coordinator,
@@ -237,16 +240,16 @@ async def test_switch_extra_attributes_include_linked_entities(hass, config_entr
 		}
 	}
 
-	mock_coordinator = MagicMock()
-	mock_coordinator.switches = {
-		"test-uid": {
-			"state": False,
-			"description": "Test Switch",
-			"location": "Home",
-		}
+	switch_data = {
+		"state": False,
+		"description": "Test Switch",
+		"location": "Home",
 	}
+	mock_coordinator = MagicMock()
+	mock_coordinator.switches = {"test-uid": switch_data}
 	mock_coordinator.subscriptions = {}
 	mock_coordinator.last_update_success = True
+	mock_coordinator.get_switch_data = MagicMock(return_value=switch_data)
 
 	switch = VomeSyncSwitch(
 		coordinator=mock_coordinator,
@@ -301,10 +304,20 @@ async def test_switch_link_entities_service_call(hass, config_entry):
 @pytest.mark.asyncio
 async def test_switch_displays_owner_vs_subscribed_icon(hass, config_entry):
 	"""Test switch icon differs for owned vs subscribed."""
+	owned_data = {"state": True}
+	sub_data = {"state": False}
 	mock_coordinator = MagicMock()
-	mock_coordinator.switches = {"uid-1": {"state": True}}
-	mock_coordinator.subscriptions = {"uid-2": {"state": False}}
+	mock_coordinator.switches = {"uid-1": owned_data}
+	mock_coordinator.subscriptions = {"uid-2": sub_data}
 	mock_coordinator.last_update_success = True
+	
+	def get_switch_data(uid):
+		if uid == "uid-1":
+			return owned_data
+		elif uid == "uid-2":
+			return sub_data
+		return None
+	mock_coordinator.get_switch_data = MagicMock(side_effect=get_switch_data)
 
 	# Owned switch
 	owned_switch = VomeSyncSwitch(

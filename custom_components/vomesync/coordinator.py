@@ -24,6 +24,7 @@ from .const import (
 	CONF_CRYPTO_SEED,
 	AUTH_MODE_CRYPTO,
 	UPDATE_INTERVAL_SECONDS,
+	DEFAULT_SWITCH_NAME,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -154,16 +155,18 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			
 			# Update switches data
 			switches_data = {}
+			pending_name_sync: list[tuple[str, str]] = []
 			for switch in my_switches:
 				uid = switch["uid"]
-				# Priority: API name/description > cached name > entity_names > uid
+				# Priority: API name > cached name > entity_names > default
 				name = (
 					switch.get("name")
-					or switch.get("description")
 					or uid_to_name.get(uid)
 					or self.entity_names.get(uid)
-					or uid[:8]
+					or DEFAULT_SWITCH_NAME
 				)
+				if not switch.get("name") and name and name != DEFAULT_SWITCH_NAME:
+					pending_name_sync.append((uid, name))
 				switches_data[uid] = {
 					**switch,
 					"name": name,
@@ -196,7 +199,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					continue
 				if info.get("is_owner", False):
 					continue
-				sub_uid_to_name[uid] = info.get("name") or uid[:8]
+				sub_uid_to_name[uid] = info.get("name") or DEFAULT_SWITCH_NAME
 			
 			# Legacy format: {friendly_name: {"uid": "..."}}
 			for name, sub_config in legacy_subscriptions.items():
@@ -204,7 +207,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					continue
 				uid = sub_config.get("uid")
 				if isinstance(uid, str) and uid not in sub_uid_to_name:
-					sub_uid_to_name[uid] = name or uid[:8]
+					sub_uid_to_name[uid] = name or DEFAULT_SWITCH_NAME
 			
 			subscriptions_data: Dict[str, Dict[str, Any]] = {}
 			for uid, name in sub_uid_to_name.items():
@@ -235,6 +238,13 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			# Store current data
 			self.switches = switches_data
 			self.subscriptions = subscriptions_data
+
+			if pending_name_sync:
+				for uid, name in pending_name_sync:
+					try:
+						await self.update_switch_metadata(uid, {"name": name})
+					except Exception as ex:  # noqa: BLE001
+						_LOGGER.debug("Name sync skipped for %s: %s", uid, ex)
 			
 			# Update cached data in options for imported switches
 			options = self.config_entry.options or {}
@@ -576,10 +586,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 	) -> Optional[str]:
 		"""Create a new switch."""
 		try:
-			# If the user only provided a local entity name, use it as the server-visible description
-			# so the website doesn't show "Untitled switch".
-			if not description and name:
-				description = name
+			# Keep description optional; name is stored separately on the server.
 			
 			options = dict(self.config_entry.options or {})
 			imported_switches = options.get(_OPT_IMPORTED_SWITCHES, {}) or {}
@@ -608,6 +615,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				
 				result = await self.api_client.create_switch_v2(
 					index=index,
+					name=name,
 					description=description,
 					location=location,
 					category=category,
@@ -623,6 +631,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				options[_OPT_CRYPTO_NEXT_INDEX] = index + 1
 			else:
 				result = await self.api_client.create_switch(
+					name=name,
 					description=description,
 					location=location,
 					category=category,
@@ -700,20 +709,29 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				updated = await self.api_client.update_switch(uid, endpoint_updates)
 
 			# Merge back into local cache, preserving local-only fields
-			local_name = (switch_data or {}).get("name", uid)
+			local_name = (switch_data or {}).get("name") or DEFAULT_SWITCH_NAME
+			updated_name = None
+			if isinstance(updated, dict) and "name" in updated:
+				updated_name = updated.get("name")
+			elif "name" in updates:
+				updated_name = updates.get("name")
+			merged_name = updated_name if updated_name is not None else local_name
 			merged = {
 				**(switch_data if isinstance(switch_data, dict) else {}),
 				**(updated if isinstance(updated, dict) else {}),
-				"name": local_name,
+				"name": merged_name,
 				"is_owner": True
 			}
 			self.switches[uid] = merged
+			if hasattr(self, "entity_names") and isinstance(self.entity_names, dict):
+				self.entity_names[uid] = merged_name
 
 			# Persist to imported cache if present
 			options = dict(self.config_entry.options or {})
 			imported_switches = options.get(_OPT_IMPORTED_SWITCHES, {}) or {}
 			if uid in imported_switches:
 				imported_switches[uid]["cached_data"] = merged
+				imported_switches[uid]["name"] = merged_name
 				options[_OPT_IMPORTED_SWITCHES] = imported_switches
 				await self._async_update_entry_options(options)
 
@@ -788,8 +806,8 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				_LOGGER.warning("Subscribe failed: switch not found or no status returned (uid=%s)", uid)
 				return False
 			
-			# Derive a sensible default name from the API (user can rename the entity in HA UI)
-			name = status.get("name") or status.get("description") or f"Switch {uid[:8]}"
+			# Derive a sensible default name (user can rename the entity in HA UI)
+			name = status.get("name") or DEFAULT_SWITCH_NAME
 			
 			_LOGGER.info("Subscribed to switch via API: uid=%s, name=%s", uid, name)
 			

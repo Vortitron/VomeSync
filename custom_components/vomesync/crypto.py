@@ -132,6 +132,7 @@ class V2CreateSwitchRequest:
 	nonce: str
 	sigOwner: str
 	sigSwitch: str
+	name: str
 	description: str
 	location: str
 	category: str
@@ -145,6 +146,7 @@ class V2CreateSwitchRequest:
 def build_v2_create_switch_request(
 	master_seed_b64url: str,
 	index: int,
+	name: str = "",
 	description: str = "",
 	location: str = "",
 	category: str = "Other",
@@ -187,6 +189,9 @@ def build_v2_create_switch_request(
 
 	# IMPORTANT: these must only be included when explicitly set, otherwise older
 	# clients (and signatures) will not match server canonicalisation.
+	name_clean = str(name).strip() if isinstance(name, str) else ""
+	if name_clean:
+		payload["payload"]["name"] = name_clean
 	icon_clean = str(icon_url).strip() if isinstance(icon_url, str) else ""
 	if icon_clean:
 		payload["payload"]["iconUrl"] = icon_clean
@@ -207,6 +212,7 @@ def build_v2_create_switch_request(
 		nonce=nonce_s,
 		sigOwner=owner_sig,
 		sigSwitch=switch_sig,
+		name=name_clean,
 		description=description or "",
 		location=location or "",
 		category=category or "Other",

@@ -161,7 +161,8 @@ async def test_options_flow_create_switch_auto_imports(hass, config_entry):
 		CONF_SWITCH_ADVANCED: False,
 	})
 
-	assert result["type"] == FlowResultType.CREATE_ENTRY
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "manage_switch_action"
 	mock_coordinator.create_switch.assert_called_once()
 
 
@@ -200,7 +201,8 @@ async def test_options_flow_create_switch_show_signing_key_after(hass, config_en
 	mock_coordinator.create_switch.assert_called_once()
 
 	result = await flow.async_step_post_create_signing_key({})
-	assert result["type"] == FlowResultType.CREATE_ENTRY
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "manage_switch_action"
 
 
 @pytest.mark.asyncio

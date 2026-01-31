@@ -112,6 +112,8 @@ const assertFreshTimestamp = (ts) => {
 };
 
 const pickSwitchMetadata = (data) => ({
+	// IMPORTANT: only include new fields when present, otherwise older v2 clients will fail signature checks
+	...(typeof data.name === 'string' ? { name: data.name } : {}),
 	description: data.description || '',
 	location: data.location || '',
 	category: data.category || 'Other',
@@ -160,6 +162,7 @@ const pickSwitchMetadataUpdatesV2 = (data) => {
 		}
 	};
 
+	maybeSet('name');
 	maybeSet('description');
 	maybeSet('location');
 	maybeSet('category');

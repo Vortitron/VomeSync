@@ -255,6 +255,7 @@ describe('Validation Utilities', () => {
 			const switchData = {
 				uid: 'test-uid',
 				personalKey: 'secret-key',
+				name: 'Test Name',
 				description: 'Test Switch',
 				location: 'Test City',
 				category: 'Test',
@@ -270,6 +271,7 @@ describe('Validation Utilities', () => {
 
 			expect(sanitized).toEqual({
 				uid: 'test-uid',
+				name: 'Test Name',
 				description: 'Test Switch',
 				location: 'Test City',
 				category: 'Test',
@@ -312,6 +314,7 @@ describe('Validation Utilities', () => {
 			const switchData = {
 				uid: 'test-uid',
 				personalKey: 'secret-key',
+				name: 'Test Name',
 				description: 'Test Switch',
 				location: 'Test City',
 				category: 'Test',
@@ -327,6 +330,7 @@ describe('Validation Utilities', () => {
 
 			expect(sanitized).toEqual({
 				uid: 'test-uid',
+				name: 'Test Name',
 				description: 'Test Switch',
 				location: 'Test City',
 				category: 'Test',

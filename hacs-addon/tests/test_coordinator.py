@@ -6,6 +6,7 @@ import time
 
 from custom_components.vomesync.coordinator import VomeSyncCoordinator
 from custom_components.vomesync.api_client import VomeSyncAPIError
+from custom_components.vomesync.const import DEFAULT_SWITCH_NAME
 
 
 @pytest.mark.asyncio
@@ -112,7 +113,7 @@ async def test_coordinator_auto_imports_new_subscription(hass, config_entry):
 	
 	assert "imported_switches" in updated_options
 	assert "remote-uid-456" in updated_options["imported_switches"]
-	assert updated_options["imported_switches"]["remote-uid-456"]["name"] == "Remote Switch"
+	assert updated_options["imported_switches"]["remote-uid-456"]["name"] == DEFAULT_SWITCH_NAME
 	assert updated_options["imported_switches"]["remote-uid-456"]["is_owner"] == False
 
 

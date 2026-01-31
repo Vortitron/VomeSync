@@ -40,9 +40,11 @@ from .const import (
 	CONF_SWITCH_ADVANCED,
 	CONF_SHOW_SIGNING_KEY_AFTER,
 	SWITCH_CATEGORIES,
+	DEFAULT_SWITCH_NAME,
 )
 
 from .crypto import generate_master_seed_b64url, owner_pubkey_b64url
+from .time_utils import format_timestamp_ms
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -345,22 +347,29 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			f"Signing key:\n`{signing_key}`"
 		)
 
-	def _build_create_switch_schema(self, default_name: str = "VomeSync Switch") -> vol.Schema:
+	def _build_create_switch_schema(
+		self,
+		default_name: str = "VomeSync Switch",
+		defaults: Optional[Dict[str, Any]] = None,
+	) -> vol.Schema:
 		"""Base create-switch schema."""
-		default_location = self._default_location_hint()
+		values = defaults or {}
+		default_location = values.get(CONF_SWITCH_LOCATION)
+		if default_location is None:
+			default_location = self._default_location_hint()
 		return vol.Schema({
-			vol.Required(CONF_SWITCH_NAME, default=default_name): str,
-			vol.Optional(CONF_SWITCH_DESCRIPTION, default=""): str,
+			vol.Required(CONF_SWITCH_NAME, default=values.get(CONF_SWITCH_NAME, default_name)): str,
+			vol.Optional(CONF_SWITCH_DESCRIPTION, default=values.get(CONF_SWITCH_DESCRIPTION, "")): str,
 			vol.Optional(CONF_SWITCH_LOCATION, default=default_location): str,
-			vol.Optional(CONF_SWITCH_CATEGORY, default="Other"): selector({
+			vol.Optional(CONF_SWITCH_CATEGORY, default=values.get(CONF_SWITCH_CATEGORY, "Other")): selector({
 				"select": {
 					"options": SWITCH_CATEGORIES,
 					"mode": "dropdown",
 				}
 			}),
-			vol.Optional(CONF_SWITCH_PUBLICIZE, default=False): bool,
-			vol.Optional(CONF_SWITCH_ADVANCED, default=False): cv.boolean,
-			vol.Optional(CONF_SHOW_SIGNING_KEY_AFTER, default=False): cv.boolean,
+			vol.Optional(CONF_SWITCH_PUBLICIZE, default=bool(values.get(CONF_SWITCH_PUBLICIZE, False))): bool,
+			vol.Optional(CONF_SWITCH_ADVANCED, default=bool(values.get(CONF_SWITCH_ADVANCED, False))): cv.boolean,
+			vol.Optional(CONF_SHOW_SIGNING_KEY_AFTER, default=bool(values.get(CONF_SHOW_SIGNING_KEY_AFTER, False))): cv.boolean,
 		})
 
 	def _build_create_switch_advanced_schema(self) -> vol.Schema:
@@ -381,6 +390,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 	) -> FlowResult:
 		"""Create switch from base + advanced data."""
 		errors: Dict[str, str] = {}
+		error_detail = ""
 		try:
 			coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
 			payload = dict(base_data or {})
@@ -398,9 +408,15 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 				captcha_token=payload.get(CONF_CAPTCHA_TOKEN, ""),
 			)
 			if uid:
+				self._step_data["selected_uid"] = uid
+				self._step_data["selected_name"] = switch_name
+				self._step_data["is_owner"] = True
+				self._step_data["has_access_key"] = False
 				if show_signing_key_after and self._crypto_enabled():
+					self._step_data["post_create_manage_uid"] = uid
+					self._step_data["post_create_manage_name"] = switch_name
 					return await self.async_step_post_create_signing_key()
-				return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+				return self._show_manage_switch_action_menu(uid, switch_name, True)
 			errors["base"] = "create_failed"
 		except VomeSyncAPIError as ex:
 			_LOGGER.error(
@@ -409,17 +425,21 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 				self._config_entry.data[CONF_WEBSOCKET_URL],
 				ex
 			)
+			error_detail = str(ex)
 			errors["base"] = "create_failed"
 		except Exception as ex:
 			_LOGGER.error("Failed to create switch (unexpected): %s", ex)
+			error_detail = str(ex)
 			errors["base"] = "create_failed"
 
 		# On error, preserve the name they entered
 		attempted_name = base_data.get(CONF_SWITCH_NAME) or self._generate_switch_name_fallback()
+		defaults = dict(base_data or {})
 		return self.async_show_form(
 			step_id="create_switch",
-			data_schema=self._build_create_switch_schema(attempted_name),
-			errors=errors
+			data_schema=self._build_create_switch_schema(attempted_name, defaults=defaults),
+			errors=errors,
+			description_placeholders={"error": f"Error: {error_detail}" if error_detail else ""},
 		)
 
 	def _build_manage_switch_actions(self, uid: str, is_owner: bool) -> list[str]:
@@ -459,6 +479,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			menu_options=actions,
 			description_placeholders={
 				"name": name,
+				"uid": uid,
 				"uid_hint": uid_hint,
 				"entity_id": entity_id or "Not created yet",
 			},
@@ -544,7 +565,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 					switch_data = coordinator.switches.get(uid) or coordinator.subscriptions.get(uid)
 					if switch_data:
 						imported_switches[uid] = {
-							"name": switch_data.get("name", switch_data.get("description", f"Switch {uid[:8]}")),
+							"name": switch_data.get("name") or DEFAULT_SWITCH_NAME,
 							"is_owner": switch_data.get("is_owner", uid in coordinator.switches),
 							"cached_data": switch_data,
 							**({"crypto_index": switch_data.get("index")} if isinstance(switch_data.get("index"), int) else {}),
@@ -590,14 +611,14 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			
 			# Add owned switches
 			for uid, switch_data in coordinator.switches.items():
-				name = switch_data.get("name", switch_data.get("description", f"Switch {uid[:8]}"))
+				name = switch_data.get("name") or DEFAULT_SWITCH_NAME
 				status = " (already imported)" if uid in already_imported else ""
 				available_switches[uid] = f"[OWNED] {name}{status}"
 			
 			# Add subscriptions
 			for uid, sub_data in coordinator.subscriptions.items():
 				if uid not in available_switches:  # Don't duplicate
-					name = sub_data.get("name", sub_data.get("description", f"Subscription {uid[:8]}"))
+					name = sub_data.get("name") or DEFAULT_SWITCH_NAME
 					status = " (already imported)" if uid in already_imported else ""
 					available_switches[uid] = f"[SUBSCRIBED] {name}{status}"
 			
@@ -644,7 +665,8 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		return self.async_show_form(
 			step_id="create_switch",
 			data_schema=self._build_create_switch_schema(default_name),
-			errors={}
+			errors={},
+			description_placeholders={"error": ""},
 		)
 
 	async def async_step_confirm_backup_signing_key(
@@ -707,6 +729,14 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
 
 		if user_input is not None:
+			uid = self._step_data.pop("post_create_manage_uid", None)
+			name = self._step_data.pop("post_create_manage_name", None)
+			if uid and name:
+				self._step_data["selected_uid"] = uid
+				self._step_data["selected_name"] = name
+				self._step_data["is_owner"] = True
+				self._step_data["has_access_key"] = False
+				return self._show_manage_switch_action_menu(uid, name, True)
 			return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
 
 		return self.async_show_form(
@@ -801,7 +831,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		# Build list of imported switches to manage
 		switch_list = {}
 		for uid, switch_info in imported_switches.items():
-			name = switch_info.get("name", f"Switch {uid[:8]}")
+			name = switch_info.get("name") or DEFAULT_SWITCH_NAME
 			is_owner = switch_info.get("is_owner", False)
 			
 			# Add ownership icon
@@ -817,7 +847,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			
 			# Get name and ownership from imported switches
 			switch_info = imported_switches.get(selected_uid, {})
-			selected_name = switch_info.get("name", selected_uid[:8])
+			selected_name = switch_info.get("name") or DEFAULT_SWITCH_NAME
 			is_owner = switch_info.get("is_owner", False)
 			has_access_key = bool(str(switch_info.get("access_key", "") or "").strip())
 			
@@ -1094,11 +1124,16 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			elif entity_id:
 				device_settings_note = f"\n\n**Entity:** Search for `{entity_id}` in Settings → Devices & Services"
 			
+			last_toggled = format_timestamp_ms(switch_config.get("lastToggled"))
+			created_at = format_timestamp_ms(switch_config.get("createdAt"))
+
 			description = f"""**{selected_name}** (Owner)
 
 **Description:** {switch_config.get('description', 'None')}
 **Location:** {switch_config.get('location', 'None')}
 **Category:** {switch_config.get('category', 'Other')}
+**Last toggled:** {last_toggled or "Unknown"}
+**Created at:** {created_at or "Unknown"}
 **Publicise:** {"Yes" if switch_config.get('publicize', False) else "No"}{device_settings_note}
 
 **Website:** {website_url or "Not configured"}
@@ -1124,7 +1159,13 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			
 			schema_fields[vol.Optional(CONF_ACCESS_KEY, default=current_access_key)] = str
 			
+			last_toggled = format_timestamp_ms(switch_config.get("lastToggled"))
+			created_at = format_timestamp_ms(switch_config.get("createdAt"))
+
 			description = f"""**{selected_name}** (Subscribed){device_settings_note}
+
+**Last toggled:** {last_toggled or "Unknown"}
+**Created at:** {created_at or "Unknown"}
 
 Provide an access key to enable toggling from this Home Assistant instance."""
 		
@@ -1221,11 +1262,14 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 			return self.async_abort(reason="no_switches")
 		
 		errors = {}
+		error_detail = ""
 		
 		if user_input is not None:
 			# Only send changed fields to the server (important: avoids re-triggering CAPTCHA when already public)
 			updates: Dict[str, Any] = {}
 
+			if user_input.get(CONF_SWITCH_NAME, "") != (switch_config.get("name", "") if isinstance(switch_config, dict) else ""):
+				updates["name"] = user_input.get(CONF_SWITCH_NAME, "")
 			if user_input.get("description", "") != (switch_config.get("description", "") if isinstance(switch_config, dict) else ""):
 				updates["description"] = user_input.get("description", "")
 			if user_input.get("location", "") != (switch_config.get("location", "") if isinstance(switch_config, dict) else ""):
@@ -1259,25 +1303,40 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 				if updates:
 					updated = await coordinator.update_switch_metadata(selected_uid, updates, captcha_token=captcha_token)
 					if not updated:
+						error_detail = "Update rejected by server. Check name/description length and allowed characters."
 						errors["base"] = "update_failed"
 
 				if not errors:
 					# IMPORTANT: return current options so the options flow doesn't overwrite them with {}
 					return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
 		
+		# Always use server-saved values for defaults.
+		# This prevents "sticky" bad values when there's a validation error.
+		# User will need to re-enter changes if there was an error, but this is cleaner
+		# than having invalid data persist across submissions.
+		name_default = switch_config.get("name", "")
+		desc_default = switch_config.get("description", "")
+		loc_default = switch_config.get("location", "")
+		cat_default = switch_config.get("category", "Other")
+		pub_default = switch_config.get("publicize", False)
+		link_default = switch_config.get("link", "")
+		icon_default = switch_config.get("iconUrl", "")
+		banner_default = switch_config.get("bannerUrl", "")
+
 		data_schema = vol.Schema({
-			vol.Optional("description", default=switch_config.get("description", "")): str,
-			vol.Optional("location", default=switch_config.get("location", "")): str,
-			vol.Optional("category", default=switch_config.get("category", "Other")): selector({
+			vol.Optional(CONF_SWITCH_NAME, default=name_default): str,
+			vol.Optional("description", default=desc_default): str,
+			vol.Optional("location", default=loc_default): str,
+			vol.Optional("category", default=cat_default): selector({
 				"select": {
 					"options": SWITCH_CATEGORIES,
 					"mode": "dropdown",
 				}
 			}),
-			vol.Optional("publicize", default=switch_config.get("publicize", False)): bool,
-			vol.Optional(CONF_SWITCH_LINK, default=switch_config.get("link", "")): str,
-			vol.Optional(CONF_SWITCH_ICON_URL, default=switch_config.get("iconUrl", "")): str,
-			vol.Optional(CONF_SWITCH_BANNER_URL, default=switch_config.get("bannerUrl", "")): str,
+			vol.Optional("publicize", default=pub_default): bool,
+			vol.Optional(CONF_SWITCH_LINK, default=link_default): str,
+			vol.Optional(CONF_SWITCH_ICON_URL, default=icon_default): str,
+			vol.Optional(CONF_SWITCH_BANNER_URL, default=banner_default): str,
 			# Ensure this renders as a normal text field (not a password box)
 			vol.Optional(CONF_CAPTCHA_TOKEN, default=""): selector({"text": {"type": "text"}}),
 		})
@@ -1285,7 +1344,8 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 		return self.async_show_form(
 			step_id="edit_switch",
 			data_schema=data_schema,
-			errors=errors
+			errors=errors,
+			description_placeholders={"error": f"\n\nError: {error_detail}" if error_detail else ""}
 		)
 
 	async def async_step_access_keys(

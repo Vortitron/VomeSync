@@ -2,7 +2,6 @@
 import logging
 from typing import Any, Dict, Optional
 from urllib.parse import quote
-from unittest.mock import AsyncMock, MagicMock
 import voluptuous as vol
 
 from homeassistant.components.switch import SwitchEntity
@@ -10,11 +9,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers import config_validation as cv, entity_platform
+from homeassistant.helpers import config_validation as cv, entity_platform, device_registry as dr
 
 from .const import (
 	DOMAIN,
 	ATTR_SWITCH_UID,
+	ATTR_NAME,
 	ATTR_DESCRIPTION,
 	ATTR_LOCATION,
 	ATTR_CATEGORY,
@@ -25,11 +25,15 @@ from .const import (
 	ATTR_TOGGLE_COUNT,
 	ATTR_LAST_TOGGLED,
 	ATTR_CREATED_AT,
+	ATTR_LAST_TOGGLED_TS,
+	ATTR_CREATED_AT_TS,
 	ATTR_IS_OWNER,
 	DEVICE_MANUFACTURER,
+	DEFAULT_SWITCH_NAME,
 )
 from .coordinator import VomeSyncCoordinator
 from .naming import format_device_model, format_device_name
+from .time_utils import format_timestamp_ms
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,7 +70,7 @@ async def async_setup_entry(
 	
 	# Create entities for each imported switch
 	for uid, switch_info in imported_switches.items():
-		name = switch_info.get("name", f"Switch {uid[:8]}")
+		name = switch_info.get("name") or DEFAULT_SWITCH_NAME
 		is_owner = switch_info.get("is_owner", False)
 		
 		_LOGGER.debug(
@@ -177,20 +181,43 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 		
 		self._attr_device_info = device_info
 
+	def _update_name_from_data(self) -> None:
+		data = self.switch_data or {}
+		name = data.get("name") or DEFAULT_SWITCH_NAME
+		if name != self._attr_name:
+			self._attr_name = name
+			self._name = name
+			formatted_name = format_device_name(name)
+			try:
+				self._attr_device_info["name"] = formatted_name
+			except Exception:  # noqa: BLE001
+				pass
+			# Update device registry to reflect the new name
+			try:
+				device_registry = dr.async_get(self.coordinator.hass)
+				device = device_registry.async_get_device(identifiers={(DOMAIN, self._uid)})
+				if device:
+					device_registry.async_update_device(device.id, name=formatted_name)
+			except Exception:  # noqa: BLE001
+				pass
+
+	def _handle_coordinator_update(self) -> None:
+		self._update_name_from_data()
+		super()._handle_coordinator_update()
+
 	@property
 	def switch_data(self) -> Optional[Dict[str, Any]]:
 		"""Get switch data from coordinator."""
-		# Prefer coordinator helper when available
-		method = getattr(self.coordinator, "get_switch_data", None)
-		if callable(method) and not isinstance(method, (MagicMock, AsyncMock)):
+		# Try coordinator helper first
+		if hasattr(self.coordinator, "get_switch_data"):
 			try:
-				return method(self._uid)
-			except Exception:
+				return self.coordinator.get_switch_data(self._uid)
+			except Exception:  # noqa: BLE001
 				pass
 		
-		# Fallback for tests/mocks
-		switches = getattr(self.coordinator, "switches", {}) or {}
-		subs = getattr(self.coordinator, "subscriptions", {}) or {}
+		# Fallback to direct dict access
+		switches = getattr(self.coordinator, "switches", None) or {}
+		subs = getattr(self.coordinator, "subscriptions", None) or {}
 		return switches.get(self._uid) or subs.get(self._uid)
 
 	@property
@@ -231,6 +258,9 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 			ATTR_SWITCH_UID: self._uid,
 			ATTR_IS_OWNER: self._is_owner,
 		}
+		name = data.get("name")
+		if name:
+			attributes[ATTR_NAME] = name
 		
 		# Add WebSocket URL for easy access
 		ws_base_url = self.coordinator.config_entry.data.get("websocket_url", "")
@@ -254,11 +284,18 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 			(ATTR_BANNER_URL, "bannerUrl"),
 			(ATTR_PUBLICIZE, "publicize"),
 			(ATTR_TOGGLE_COUNT, "toggleCount"),
-			(ATTR_LAST_TOGGLED, "lastToggled"),
-			(ATTR_CREATED_AT, "createdAt"),
 		]:
 			if key in data:
 				attributes[attr] = data[key]
+
+		last_toggled_raw = data.get("lastToggled")
+		created_at_raw = data.get("createdAt")
+		if last_toggled_raw is not None:
+			attributes[ATTR_LAST_TOGGLED_TS] = last_toggled_raw
+			attributes[ATTR_LAST_TOGGLED] = format_timestamp_ms(last_toggled_raw) or last_toggled_raw
+		if created_at_raw is not None:
+			attributes[ATTR_CREATED_AT_TS] = created_at_raw
+			attributes[ATTR_CREATED_AT] = format_timestamp_ms(created_at_raw) or created_at_raw
 		
 		# Add linked entities count and list
 		linked = self.async_get_linked_entities()

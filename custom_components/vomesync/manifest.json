@@ -10,5 +10,9 @@
 		"websockets>=11.0.0"
 	],
 	"config_flow": true,
-	"integration_type": "device"
+	"integration_type": "device",
+	"brand_assets": {
+		"icon": "icon.png",
+		"logo": "logo.png"
+	}
 }

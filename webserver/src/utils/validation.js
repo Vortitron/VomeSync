@@ -1,6 +1,7 @@
 const Joi = require('joi');
 
 const MAX_DESCRIPTION_LENGTH = 200;
+const MAX_SWITCH_NAME_LENGTH = 80;
 const MAX_LOCATION_LENGTH = 100;
 const MAX_URL_LENGTH = 500;
 const MAX_CAPTCHA_TOKEN_LENGTH = 2000;
@@ -27,6 +28,7 @@ const switchUidSchema = Joi.string().required().custom((value, helpers) => {
 
 const schemas = {
 	createSwitch: Joi.object({
+		name: Joi.string().max(MAX_SWITCH_NAME_LENGTH).allow('').default(''),
 		description: Joi.string().max(MAX_DESCRIPTION_LENGTH).allow('').default(''),
 		location: Joi.string().max(MAX_LOCATION_LENGTH).allow('').default(''),
 		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other').default('Other'),
@@ -36,6 +38,7 @@ const schemas = {
 	}),
 
 	updateSwitch: Joi.object({
+		name: Joi.string().max(MAX_SWITCH_NAME_LENGTH).allow(''),
 		description: Joi.string().max(MAX_DESCRIPTION_LENGTH).allow(''),
 		location: Joi.string().max(MAX_LOCATION_LENGTH).allow(''),
 		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other'),
@@ -78,6 +81,7 @@ const schemas = {
 		nonce: Joi.string().min(8).max(128).required(),
 		sigOwner: Joi.string().max(200).required(),
 		sigSwitch: Joi.string().max(200).required(),
+		name: Joi.string().max(MAX_SWITCH_NAME_LENGTH).allow(''),
 		description: Joi.string().max(MAX_DESCRIPTION_LENGTH).allow('').default(''),
 		location: Joi.string().max(MAX_LOCATION_LENGTH).allow('').default(''),
 		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other').default('Other'),
@@ -102,6 +106,7 @@ const schemas = {
 		ts: Joi.number().integer().min(0).required(),
 		nonce: Joi.string().min(8).max(128).required(),
 		sigOwner: Joi.string().max(200).required(),
+		name: Joi.string().max(MAX_SWITCH_NAME_LENGTH).allow(''),
 		description: Joi.string().max(MAX_DESCRIPTION_LENGTH).allow(''),
 		location: Joi.string().max(MAX_LOCATION_LENGTH).allow(''),
 		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other'),
@@ -111,7 +116,7 @@ const schemas = {
 		bannerUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
 		captchaToken: Joi.string().max(MAX_CAPTCHA_TOKEN_LENGTH).allow('')
 	}).custom((value, helpers) => {
-		const updatableFields = ['description', 'location', 'category', 'publicize', 'link', 'iconUrl', 'bannerUrl'];
+		const updatableFields = ['name', 'description', 'location', 'category', 'publicize', 'link', 'iconUrl', 'bannerUrl'];
 		const hasUpdate = updatableFields.some((field) => Object.prototype.hasOwnProperty.call(value, field));
 		if (!hasUpdate) {
 			return helpers.message('At least one metadata field is required');
@@ -158,6 +163,7 @@ const schemas = {
 	// V2: Update switch metadata via delegated access key (no signatures)
 	// Intentionally excludes "publicize" to avoid bypassing CAPTCHA requirements.
 	v2UpdateSwitchViaAccessKey: Joi.object({
+		name: Joi.string().max(MAX_SWITCH_NAME_LENGTH).allow(''),
 		description: Joi.string().max(MAX_DESCRIPTION_LENGTH).allow(''),
 		location: Joi.string().max(MAX_LOCATION_LENGTH).allow(''),
 		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other'),
@@ -230,6 +236,7 @@ const sanitizePublicSwitchData = (switchData) => {
 
 	return {
 		uid: switchData.uid,
+		name: switchData.name || '',
 		description: switchData.description || '',
 		location: switchData.location || '',
 		category: switchData.category || 'Other',
@@ -249,6 +256,7 @@ const sanitizePrivateSwitchData = (switchData) => {
 
 	return {
 		uid: switchData.uid,
+		name: switchData.name || '',
 		description: switchData.description || '',
 		location: switchData.location || '',
 		category: switchData.category || 'Other',

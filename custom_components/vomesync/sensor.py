@@ -11,6 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
 	DOMAIN,
 	ATTR_SWITCH_UID,
+	ATTR_NAME,
 	ATTR_DESCRIPTION,
 	ATTR_LOCATION,
 	ATTR_CATEGORY,
@@ -18,11 +19,16 @@ from .const import (
 	ATTR_ICON_URL,
 	ATTR_BANNER_URL,
 	ATTR_LAST_TOGGLED,
+	ATTR_CREATED_AT,
+	ATTR_LAST_TOGGLED_TS,
+	ATTR_CREATED_AT_TS,
 	ATTR_IS_OWNER,
 	DEVICE_MANUFACTURER,
+	DEFAULT_SWITCH_NAME,
 )
 from .coordinator import VomeSyncCoordinator
 from .naming import format_device_model, format_device_name
+from .time_utils import format_timestamp_ms
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,7 +59,7 @@ async def async_setup_entry(
 			continue
 		if str(info.get("access_key", "") or "").strip():
 			continue
-		name = info.get("name", f"Switch {uid[:8]}")
+		name = info.get("name") or DEFAULT_SWITCH_NAME
 		entity = VomeSyncSensor(coordinator, uid, name)
 		entities.append(entity)
 	
@@ -89,6 +95,22 @@ class VomeSyncSensor(CoordinatorEntity[VomeSyncCoordinator], SensorEntity):
 			"model": format_device_model(False),
 			"sw_version": "1.0.0",
 		}
+
+	def _update_name_from_data(self) -> None:
+		data = self.switch_data or {}
+		name = data.get("name") or DEFAULT_SWITCH_NAME
+		entity_name = f"{name} Status"
+		if entity_name != self._attr_name:
+			self._attr_name = entity_name
+			self._name = name
+			try:
+				self._attr_device_info["name"] = format_device_name(name)
+			except Exception:  # noqa: BLE001
+				pass
+
+	def _handle_coordinator_update(self) -> None:
+		self._update_name_from_data()
+		super()._handle_coordinator_update()
 
 	@property
 	def switch_data(self) -> Optional[Dict[str, Any]]:
@@ -130,6 +152,9 @@ class VomeSyncSensor(CoordinatorEntity[VomeSyncCoordinator], SensorEntity):
 			ATTR_SWITCH_UID: self._uid,
 			ATTR_IS_OWNER: False,  # Sensors are always for subscribed switches
 		}
+		name = data.get("name")
+		if name:
+			attributes[ATTR_NAME] = name
 
 		# Add available attributes
 		for attr, key in [
@@ -139,9 +164,17 @@ class VomeSyncSensor(CoordinatorEntity[VomeSyncCoordinator], SensorEntity):
 			(ATTR_LINK, "link"),
 			(ATTR_ICON_URL, "iconUrl"),
 			(ATTR_BANNER_URL, "bannerUrl"),
-			(ATTR_LAST_TOGGLED, "lastToggled"),
 		]:
 			if key in data:
 				attributes[attr] = data[key]
+
+		last_toggled_raw = data.get("lastToggled")
+		created_at_raw = data.get("createdAt")
+		if last_toggled_raw is not None:
+			attributes[ATTR_LAST_TOGGLED_TS] = last_toggled_raw
+			attributes[ATTR_LAST_TOGGLED] = format_timestamp_ms(last_toggled_raw) or last_toggled_raw
+		if created_at_raw is not None:
+			attributes[ATTR_CREATED_AT_TS] = created_at_raw
+			attributes[ATTR_CREATED_AT] = format_timestamp_ms(created_at_raw) or created_at_raw
 
 		return attributes
