@@ -28,6 +28,7 @@ from custom_components.vomesync.const import (
 	CONF_SWITCH_ADVANCED,
 	CONF_SHOW_SIGNING_KEY_AFTER,
 	DOMAIN,
+	FREE_TIER_MAX_SUBSCRIPTIONS,
 )
 
 
@@ -354,6 +355,34 @@ async def test_options_flow_subscribe_switch_auto_imports(hass, config_entry):
 
 	assert result["type"] == FlowResultType.CREATE_ENTRY
 	mock_coordinator.subscribe_to_switch.assert_called_once_with("remote-uid-456", access_key="access-123")
+
+
+@pytest.mark.asyncio
+async def test_options_flow_subscribe_switch_limit_reached(hass, config_entry):
+	"""Test subscription limit blocks additional subscriptions."""
+	imported_switches = {}
+	for idx in range(FREE_TIER_MAX_SUBSCRIPTIONS):
+		imported_switches[f"uid-{idx}"] = {
+			"name": f"Switch {idx}",
+			"is_owner": False,
+			"cached_data": {}
+		}
+	config_entry.options = {
+		"imported_switches": imported_switches
+	}
+	mock_coordinator = MagicMock()
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_subscribe_switch({
+		CONF_SWITCH_UID: "remote-uid-999",
+		CONF_ACCESS_KEY: ""
+	})
+
+	assert result["type"] == FlowResultType.FORM
+	assert result["errors"]["base"] == "subscription_limit_reached"
 
 
 @pytest.mark.asyncio

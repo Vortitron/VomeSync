@@ -25,7 +25,10 @@ This document is a practical checklist/runbook for operating VomeSync safely, es
 	- Website management links use **short‑lived** v2 access keys by default (extendable up to **30 days**).
 - **Admin moderation**:
 	- Set `ADMIN_API_KEY` to enable admin endpoints.
-	- Admin tools can delist/delete public switches, block owners/keys, and set redirects for migrated switches.
+	- Admin tools can delist/delete public switches, block owners/keys, set redirects for migrated switches, and override listing fields for public pages.
+- **Free tier limits**:
+	- Set `FREE_TIER_LIMITS_ENABLED` to enable/disable enforcement.
+	- Configure `FREE_TIER_MAX_SWITCHES` and `FREE_TIER_MAX_PUBLIC_SWITCHES` for server-side caps.
 
 ### Network exposure
 - **Expose only what you need**:

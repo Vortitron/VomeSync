@@ -314,6 +314,7 @@
 			"access_key_create_failed": "Failed to create access key. Check connectivity and try again.",
 			"access_key_revoke_failed": "Failed to revoke access key. Check connectivity and try again.",
 			"subscribe_failed": "Failed to subscribe to switch.",
+			"subscription_limit_reached": "Subscription limit reached for the free tier.",
 			"connect_failed": "Failed to create session token. Check server URL/key and try again.",
 			"fetch_failed": "Failed to fetch API keys from server.",
 			"delete_failed": "Failed to delete API key.",

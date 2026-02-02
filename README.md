@@ -171,8 +171,9 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
    - Copy UID to subscribe in their add-on.
 
 ## Monetization
-- **Free Tier**: Basic switch creation/subscription with limits (public switch count, toggle/update rate, and private switch slots).
-- **Premium Tier**: €5-15/month via Gumroad for higher limits, private switches, analytics (e.g., trigger history), and priority support.
+- **Free Tier**: Up to 8 switches (4 public listings) and up to 16 subscriptions per Home Assistant installation, plus rate limits.
+- **Premium Tier**: €5-15/month for higher limits, private switches, analytics (e.g., trigger history), and priority support.
+- **Payments**: Stripe planned; interim crypto payments (Base/Solana) are under consideration.
 - **Premium Listings**: Paid featured placement in the public directory for community events or organisations.
 
 

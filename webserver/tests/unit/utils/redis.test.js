@@ -158,6 +158,25 @@ describe('Redis Client', () => {
 			});
 		});
 
+		describe('getUserSwitchCounts', () => {
+			test('should count total and public switches', async () => {
+				const personalKey = global.testUtils.createTestPersonalKey();
+				const uid1 = global.testUtils.generateTestUUID();
+				const uid2 = global.testUtils.generateTestUUID();
+
+				await redisClient.createSwitch(uid1, personalKey,
+					global.testUtils.createTestSwitchData({ publicize: true })
+				);
+				await redisClient.createSwitch(uid2, personalKey,
+					global.testUtils.createTestSwitchData({ publicize: false })
+				);
+
+				const counts = await redisClient.getUserSwitchCounts(personalKey);
+				expect(counts.total).toBe(2);
+				expect(counts.public).toBe(1);
+			});
+		});
+
 		describe('getPublicSwitches', () => {
 			test('should return only public switches', async () => {
 				const personalKey = global.testUtils.createTestPersonalKey();
@@ -250,6 +269,41 @@ describe('Redis Client', () => {
 				expect(publicSwitch.state).toBeDefined();
 				expect(publicSwitch.iconUrl).toBe('https://example.com/icon.png');
 				expect(publicSwitch.bannerUrl).toBe('https://example.com/banner.jpg');
+			});
+
+			test('should apply listing overrides', async () => {
+				const owner = global.testUtils.createEd25519Keypair();
+				const ownerPubKeyB64 = Buffer.from(owner.rawPublicKey).toString('base64url');
+				const ownerId = deriveOwnerIdFromOwnerPubKeyB64Url(ownerPubKeyB64);
+				const sw = global.testUtils.createEd25519Keypair();
+				const switchPubKeyB64 = Buffer.from(sw.rawPublicKey).toString('base64url');
+				const uid = deriveSwitchUidFromSwitchPubKeyB64Url(switchPubKeyB64);
+
+				await redisClient.createSwitchV2(uid, ownerId, ownerPubKeyB64, switchPubKeyB64, 0, {
+					name: 'Original Name',
+					description: 'Original Desc',
+					location: 'Original City',
+					category: 'Test',
+					publicize: true,
+					link: ''
+				});
+
+				await redisClient.setSwitchListingOverride(uid, {
+					name: 'Listing Name',
+					description: 'Listing Desc',
+					category: 'Community'
+				});
+
+				const publicSwitches = await redisClient.getPublicSwitches();
+				const listing = publicSwitches.find(s => s.uid === uid);
+				expect(listing.name).toBe('Listing Name');
+				expect(listing.description).toBe('Listing Desc');
+				expect(listing.category).toBe('Community');
+
+				const detail = await redisClient.getPublicSwitchDetail(uid);
+				expect(detail.name).toBe('Listing Name');
+				expect(detail.description).toBe('Listing Desc');
+				expect(detail.category).toBe('Community');
 			});
 		});
 

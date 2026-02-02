@@ -671,6 +671,28 @@ Create or update a redirect for a switch.
 **DELETE** `/api/admin/redirects/{uid}`  
 Clear a redirect.
 
+**POST** `/api/admin/switch/{uid}/override`  
+Override listing fields for a public switch (listing-only; does not change owner metadata).
+
+```json
+{
+  "name": "Listing Name",
+  "description": "Listing description",
+  "location": "Listing location",
+  "category": "Community",
+  "link": "https://example.com",
+  "iconUrl": "https://example.com/icon.jpg",
+  "bannerUrl": "https://example.com/banner.jpg"
+}
+```
+
+**DELETE** `/api/admin/switch/{uid}/override`  
+Clear listing overrides for a switch.
+
+### Free Tier Limits
+
+Create/update endpoints may return `403` with `code: "free_tier_limit"` when limits are exceeded.
+
 ### Switch Name Allocation
 
 Allocate or release a globally unique switch name.

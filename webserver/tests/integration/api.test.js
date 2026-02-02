@@ -16,6 +16,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const apiRoutes = require('../../src/routes/api');
 const redisClient = require('../../src/utils/redis');
+const config = require('../../src/config/config');
 const {
 	deriveOwnerIdFromOwnerPubKeyB64Url,
 	deriveSwitchUidFromSwitchPubKeyB64Url,
@@ -82,6 +83,90 @@ async function createV2PublicSwitch(app, metaOverrides = {}, index = 0) {
 		switchPubKeyB64,
 		ownerId: deriveOwnerIdFromOwnerPubKeyB64Url(ownerPubKeyB64)
 	};
+}
+
+async function createV2SwitchForOwner(app, owner, metaOverrides = {}, index = 0, expectStatus = 200) {
+	const sw = global.testUtils.createEd25519Keypair();
+	const ownerPubKeyB64 = Buffer.from(owner.rawPublicKey).toString('base64url');
+	const switchPubKeyB64 = Buffer.from(sw.rawPublicKey).toString('base64url');
+	const uid = deriveSwitchUidFromSwitchPubKeyB64Url(switchPubKeyB64);
+
+	const ts = Date.now();
+	const nonce = `n-${Date.now()}-${Math.random().toString(16).slice(2)}-create`;
+	const meta = {
+		description: 'Test Switch',
+		location: 'Test City',
+		category: 'Community',
+		publicize: false,
+		link: '',
+		...metaOverrides
+	};
+
+	const canonical = stableJsonStringify({
+		v: 2,
+		action: 'create_switch',
+		ownerPubKey: ownerPubKeyB64,
+		switchPubKey: switchPubKeyB64,
+		uid,
+		index,
+		ts,
+		nonce,
+		payload: meta
+	});
+	const sigOwner = global.testUtils.ed25519SignBase64Url(owner.privateKey, canonical);
+	const sigSwitch = global.testUtils.ed25519SignBase64Url(sw.privateKey, canonical);
+
+	const response = await request(app)
+		.post('/api/v2/switch')
+		.send({
+			ownerPubKey: ownerPubKeyB64,
+			switchPubKey: switchPubKeyB64,
+			index,
+			ts,
+			nonce,
+			sigOwner,
+			sigSwitch,
+			...meta,
+			captchaToken: process.env.HCAPTCHA_BYPASS_TOKEN
+		})
+		.expect(expectStatus);
+
+	return {
+		uid,
+		ownerPubKeyB64,
+		sw,
+		response
+	};
+}
+
+async function updateV2Switch(app, uid, owner, ownerPubKeyB64, updates, expectStatus = 200) {
+	const ts = Date.now();
+	const nonce = `n-${Date.now()}-${Math.random().toString(16).slice(2)}-update`;
+	const payload = { ...updates };
+	const captchaToken = payload.captchaToken;
+	delete payload.captchaToken;
+	const canonical = stableJsonStringify({
+		v: 2,
+		action: 'update_switch',
+		uid,
+		ownerPubKey: ownerPubKeyB64,
+		ts,
+		nonce,
+		payload
+	});
+	const sigOwner = global.testUtils.ed25519SignBase64Url(owner.privateKey, canonical);
+
+	return request(app)
+		.post(`/api/v2/switch/${uid}`)
+		.send({
+			ownerPubKey: ownerPubKeyB64,
+			ts,
+			nonce,
+			sigOwner,
+			...payload,
+			...(captchaToken ? { captchaToken } : {})
+		})
+		.expect(expectStatus);
 }
 
 async function createV2AccessKey(app, uid, owner, ownerPubKeyB64, permissions, name = '') {
@@ -732,6 +817,55 @@ describe('API Integration Tests', () => {
 			expect(response.body.data.description).toBe('Updated');
 			expect(response.body.data.iconUrl).toMatch(new RegExp(`^/api/media/switch/${publicUid}/icon_[0-9a-f]{16}\\.webp$`));
 			expect(response.body.data.bannerUrl).toMatch(new RegExp(`^/api/media/switch/${publicUid}/banner_[0-9a-f]{16}\\.webp$`));
+		});
+
+		test('should enforce free tier switch limits', async () => {
+			const originalLimits = { ...config.limits };
+			Object.assign(config.limits, {
+				freeTierEnabled: true,
+				freeTierMaxSwitches: 1,
+				freeTierMaxPublicSwitches: 1
+			});
+
+			try {
+				const owner = global.testUtils.createEd25519Keypair();
+				const first = await createV2SwitchForOwner(app, owner, { publicize: false }, 0, 200);
+				expect(first.response.body.success).toBe(true);
+
+				const second = await createV2SwitchForOwner(app, owner, { publicize: false }, 1, 403);
+				expect(second.response.body.success).toBe(false);
+				expect(second.response.body.error).toMatch(/free tier/i);
+			} finally {
+				Object.assign(config.limits, originalLimits);
+			}
+		});
+
+		test('should enforce free tier public listing limits', async () => {
+			const originalLimits = { ...config.limits };
+			Object.assign(config.limits, {
+				freeTierEnabled: true,
+				freeTierMaxSwitches: 3,
+				freeTierMaxPublicSwitches: 1
+			});
+
+			try {
+				const owner = global.testUtils.createEd25519Keypair();
+				const ownerPubKeyB64 = Buffer.from(owner.rawPublicKey).toString('base64url');
+				const first = await createV2SwitchForOwner(app, owner, { publicize: true }, 0, 200);
+				expect(first.response.body.success).toBe(true);
+
+				const second = await createV2SwitchForOwner(app, owner, { publicize: false }, 1, 200);
+				expect(second.response.body.success).toBe(true);
+
+				const updateResponse = await updateV2Switch(app, second.uid, owner, ownerPubKeyB64, {
+					publicize: true,
+					captchaToken: process.env.HCAPTCHA_BYPASS_TOKEN
+				}, 403);
+				expect(updateResponse.body.success).toBe(false);
+				expect(updateResponse.body.error).toMatch(/public/i);
+			} finally {
+				Object.assign(config.limits, originalLimits);
+			}
 		});
 	});
 

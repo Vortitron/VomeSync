@@ -4,6 +4,10 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const sslEnabled = process.env.ENABLE_SSL === 'true';
+const parsePositiveInt = (value, fallback) => {
+	const parsed = parseInt(value, 10);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
 
 const config = {
 	server: {
@@ -49,6 +53,11 @@ const config = {
 	logging: {
 		level: process.env.LOG_LEVEL || 'info',
 		file: process.env.LOG_FILE || 'logs/vomesync.log'
+	},
+	limits: {
+		freeTierEnabled: process.env.FREE_TIER_LIMITS_ENABLED !== 'false',
+		freeTierMaxSwitches: parsePositiveInt(process.env.FREE_TIER_MAX_SWITCHES, 8),
+		freeTierMaxPublicSwitches: parsePositiveInt(process.env.FREE_TIER_MAX_PUBLIC_SWITCHES, 4)
 	}
 };
 

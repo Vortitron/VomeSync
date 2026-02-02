@@ -19,6 +19,7 @@ const BLOCKED_OWNER_IDS_SET = 'blocked:owner_ids';
 const BLOCKED_PERSONAL_KEY_IDS_SET = 'blocked:personal_key_ids';
 const BLOCKED_API_KEY_IDS_SET = 'blocked:api_key_ids';
 const SWITCH_REDIRECTS_HASH = 'switch_redirects';
+const SWITCH_LISTING_OVERRIDES_PREFIX = 'switch_override:';
 
 function _sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,6 +70,10 @@ class RedisClient {
 			return tokenOrId;
 		}
 		return this._deriveSecretId('sessionToken', tokenOrId);
+	}
+
+	_switchOverrideKey(uid) {
+		return `${SWITCH_LISTING_OVERRIDES_PREFIX}${uid}`;
 	}
 
 	getPersonalKeyId(personalKeyOrId) {
@@ -521,6 +526,90 @@ class RedisClient {
 		return switches;
 	}
 
+	async _countSwitchesInSet(setKey) {
+		if (!setKey) {
+			return { total: 0, public: 0 };
+		}
+		const switchUIDs = await this.client.sMembers(setKey);
+		if (!switchUIDs || switchUIDs.length === 0) {
+			return { total: 0, public: 0 };
+		}
+		const pipeline = this.client.multi();
+		for (const uid of switchUIDs) {
+			pipeline.hGet(`switch:${uid}`, 'publicize');
+		}
+		const results = await pipeline.exec();
+		let publicCount = 0;
+		for (const result of results) {
+			const value = Array.isArray(result) ? result[1] : result;
+			if (value === 'true' || value === true) {
+				publicCount += 1;
+			}
+		}
+		return { total: switchUIDs.length, public: publicCount };
+	}
+
+	async getUserSwitchCounts(personalKeyOrId) {
+		const ownerKeyId = this._getPersonalKeyId(personalKeyOrId);
+		if (!ownerKeyId) {
+			return { total: 0, public: 0 };
+		}
+		return this._countSwitchesInSet(`user:${ownerKeyId}:switches`);
+	}
+
+	async getOwnerSwitchCounts(ownerId) {
+		if (!ownerId) {
+			return { total: 0, public: 0 };
+		}
+		return this._countSwitchesInSet(`owner:${ownerId}`);
+	}
+
+	async getSwitchListingOverride(uid) {
+		if (!uid) {
+			return null;
+		}
+		const data = await this.client.hGetAll(this._switchOverrideKey(uid));
+		if (!data || Object.keys(data).length === 0) {
+			return null;
+		}
+		return this._deserializeHash(data);
+	}
+
+	async setSwitchListingOverride(uid, overrides) {
+		if (!uid || !overrides || typeof overrides !== 'object') {
+			return null;
+		}
+		const payload = {
+			...overrides,
+			updatedAt: Date.now()
+		};
+		await this.client.hSet(this._switchOverrideKey(uid), this._serializeHash(payload));
+		await this.client.expire(this._switchOverrideKey(uid), SWITCH_TTL_SECONDS);
+		return this.getSwitchListingOverride(uid);
+	}
+
+	async clearSwitchListingOverride(uid) {
+		if (!uid) {
+			return false;
+		}
+		await this.client.del(this._switchOverrideKey(uid));
+		return true;
+	}
+
+	_applyListingOverride(switchData, override) {
+		if (!switchData || !override) {
+			return switchData;
+		}
+		const fields = ['name', 'description', 'location', 'category', 'link', 'iconUrl', 'bannerUrl'];
+		const merged = { ...switchData };
+		for (const field of fields) {
+			if (Object.prototype.hasOwnProperty.call(override, field)) {
+				merged[field] = override[field];
+			}
+		}
+		return merged;
+	}
+
 	async getPublicSwitches() {
 		const publicUIDs = await this.client.sMembers('public_switches');
 		const redirectMap = await this.client.hGetAll(SWITCH_REDIRECTS_HASH);
@@ -542,21 +631,23 @@ class RedisClient {
 			if (switchData.ownerId && blockedOwners.has(switchData.ownerId)) {
 				continue;
 			}
+			const override = await this.getSwitchListingOverride(uid);
+			const listingData = this._applyListingOverride(switchData, override);
 			const userCount = await this.getUserCount(uid);
 			const ownerProfileUrl = '';
 			switches.push({
-				uid: switchData.uid,
-				name: switchData.name || '',
-				description: switchData.description,
-				location: switchData.location,
-				category: switchData.category,
-				state: switchData.state,
-				lastToggled: switchData.lastToggled,
-				toggleCount: switchData.toggleCount || 0,
+				uid: listingData.uid,
+				name: listingData.name || '',
+				description: listingData.description,
+				location: listingData.location,
+				category: listingData.category,
+				state: listingData.state,
+				lastToggled: listingData.lastToggled,
+				toggleCount: listingData.toggleCount || 0,
 				userCount,
-				link: switchData.link || '',
-				iconUrl: switchData.iconUrl || '',
-				bannerUrl: switchData.bannerUrl || '',
+				link: listingData.link || '',
+				iconUrl: listingData.iconUrl || '',
+				bannerUrl: listingData.bannerUrl || '',
 				ownerProfileUrl
 			});
 		}
@@ -1301,24 +1392,26 @@ class RedisClient {
 		if (switchData.ownerId && await this.isOwnerBlocked(switchData.ownerId)) {
 			return null;
 		}
+		const override = await this.getSwitchListingOverride(uid);
+		const listingData = this._applyListingOverride(switchData, override);
 
 		const userCount = await this.getUserCount(uid);
 		const events = await this.getEvents(uid, 50);
 		const ownerProfileUrl = '';
 
 		return {
-			uid: switchData.uid,
-			name: switchData.name || '',
-			description: switchData.description || '',
-			location: switchData.location || '',
-			category: switchData.category || 'Other',
-			state: switchData.state,
-			lastToggled: switchData.lastToggled,
-			toggleCount: switchData.toggleCount || 0,
+			uid: listingData.uid,
+			name: listingData.name || '',
+			description: listingData.description || '',
+			location: listingData.location || '',
+			category: listingData.category || 'Other',
+			state: listingData.state,
+			lastToggled: listingData.lastToggled,
+			toggleCount: listingData.toggleCount || 0,
 			userCount,
-			link: switchData.link || '',
-			iconUrl: switchData.iconUrl || '',
-			bannerUrl: switchData.bannerUrl || '',
+			link: listingData.link || '',
+			iconUrl: listingData.iconUrl || '',
+			bannerUrl: listingData.bannerUrl || '',
 			ownerProfileUrl,
 			events
 		};
@@ -1376,6 +1469,7 @@ class RedisClient {
 		pipeline.del(`switch:${uid}:users`);
 		pipeline.del(`switch:${uid}:events`);
 		pipeline.del(`switch:${uid}:access_keys`);
+		pipeline.del(this._switchOverrideKey(uid));
 		pipeline.sRem('public_switches', uid);
 		if (ownerKeyId) {
 			pipeline.sRem(`user:${ownerKeyId}:switches`, uid);

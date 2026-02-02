@@ -82,6 +82,49 @@ const requireAdmin = (req, res, next) => {
 	return next();
 };
 
+const sendFreeTierLimitError = (res, limit, max) => {
+	return res.status(403).json({
+		success: false,
+		error: `Free tier limit reached (${max} ${limit})`,
+		code: 'free_tier_limit',
+		details: {
+			limit,
+			max
+		}
+	});
+};
+
+const checkFreeTierLimits = async ({ ownerId, personalKeyId, wantsPublicize, currentPublicize }) => {
+	const limits = config?.limits || {};
+	const freeTierEnabled = limits.freeTierEnabled !== false;
+	const freeTierMaxSwitches = Number.isFinite(Number(limits.freeTierMaxSwitches))
+		? Number(limits.freeTierMaxSwitches)
+		: 8;
+	const freeTierMaxPublicSwitches = Number.isFinite(Number(limits.freeTierMaxPublicSwitches))
+		? Number(limits.freeTierMaxPublicSwitches)
+		: 4;
+
+	if (!freeTierEnabled) {
+		return null;
+	}
+	let counts = null;
+	if (ownerId) {
+		counts = await redisClient.getOwnerSwitchCounts(ownerId);
+	} else if (personalKeyId) {
+		counts = await redisClient.getUserSwitchCounts(personalKeyId);
+	}
+	if (!counts) {
+		return null;
+	}
+	if (freeTierMaxSwitches >= 0 && counts.total >= freeTierMaxSwitches) {
+		return { limit: 'switches', max: freeTierMaxSwitches };
+	}
+	if (wantsPublicize && !currentPublicize && freeTierMaxPublicSwitches >= 0 && counts.public >= freeTierMaxPublicSwitches) {
+		return { limit: 'public switches', max: freeTierMaxPublicSwitches };
+	}
+	return null;
+};
+
 const uploadV2MetadataFiles = upload.fields([
 	{ name: 'iconFile', maxCount: 1 },
 	{ name: 'bannerFile', maxCount: 1 }
@@ -371,6 +414,15 @@ router.post('/v2/switch',
 				return res.status(409).json({ success: false, error: 'Switch UID already exists' });
 			}
 
+			const limitCheck = await checkFreeTierLimits({
+				ownerId,
+				wantsPublicize: Boolean(data.publicize),
+				currentPublicize: false
+			});
+			if (limitCheck) {
+				return sendFreeTierLimitError(res, limitCheck.limit, limitCheck.max);
+			}
+
 			const switchConfig = pickSwitchMetadata(data);
 			// If icon/banner URLs are provided, ingest and re-host them (store only local URLs).
 			try {
@@ -567,6 +619,15 @@ router.post('/v2/switch/:uid',
 			const ok = verifyEd25519SignatureB64Url(data.ownerPubKey, canonical, data.sigOwner);
 			if (!ok) {
 				return res.status(401).json({ success: false, error: 'Invalid owner signature' });
+			}
+
+			const limitCheck = await checkFreeTierLimits({
+				ownerId,
+				wantsPublicize: updates.publicize === true,
+				currentPublicize: Boolean(switchData.publicize)
+			});
+			if (limitCheck) {
+				return sendFreeTierLimitError(res, limitCheck.limit, limitCheck.max);
 			}
 
 			const claimed = await redisClient.claimV2Nonce(ownerId, data.nonce, 10 * 60 * 1000);
@@ -969,6 +1030,15 @@ router.post('/create-switch',
 			const captchaToken = switchConfig.captchaToken;
 			delete switchConfig.captchaToken;
 
+			const limitCheck = await checkFreeTierLimits({
+				personalKeyId,
+				wantsPublicize: Boolean(switchConfig.publicize),
+				currentPublicize: false
+			});
+			if (limitCheck) {
+				return sendFreeTierLimitError(res, limitCheck.limit, limitCheck.max);
+			}
+
 			// Enforce CAPTCHA for public listings if configured
 			if (switchConfig.publicize) {
 				const captcha = await authManager.verifyCaptcha(captchaToken);
@@ -1287,6 +1357,57 @@ router.delete('/admin/redirects/:uid',
 	}
 );
 
+// Admin: override listing fields for public switches (listing-only)
+router.post('/admin/switch/:uid/override',
+	requireAdmin,
+	validateUID,
+	validateRequest(schemas.adminListingOverride),
+	async (req, res) => {
+		try {
+			const { uid } = req.params;
+			const switchData = await redisClient.getSwitchState(uid);
+			if (!switchData) {
+				return res.status(404).json({ success: false, error: 'Switch not found' });
+			}
+			if (!switchData.publicize) {
+				return res.status(400).json({ success: false, error: 'Switch is not public' });
+			}
+			const overrides = { ...req.validatedData };
+			try {
+				if (typeof overrides.iconUrl === 'string' && overrides.iconUrl.trim()) {
+					overrides.iconUrl = await media.ingestImageFromUrl(uid, 'icon', overrides.iconUrl);
+				}
+				if (typeof overrides.bannerUrl === 'string' && overrides.bannerUrl.trim()) {
+					overrides.bannerUrl = await media.ingestImageFromUrl(uid, 'banner', overrides.bannerUrl);
+				}
+			} catch (imgErr) {
+				return res.status(400).json({ success: false, error: imgErr && imgErr.message ? imgErr.message : 'Invalid image URL' });
+			}
+			const override = await redisClient.setSwitchListingOverride(uid, overrides);
+			return res.json({ success: true, data: { uid, override } });
+		} catch (error) {
+			logger.error(`Admin override failed for ${req.params.uid}:`, error);
+			return res.status(500).json({ success: false, error: 'Failed to set listing override' });
+		}
+	}
+);
+
+// Admin: clear listing override
+router.delete('/admin/switch/:uid/override',
+	requireAdmin,
+	validateUID,
+	async (req, res) => {
+		try {
+			const { uid } = req.params;
+			await redisClient.clearSwitchListingOverride(uid);
+			return res.json({ success: true, data: { uid } });
+		} catch (error) {
+			logger.error(`Admin override clear failed for ${req.params.uid}:`, error);
+			return res.status(500).json({ success: false, error: 'Failed to clear listing override' });
+		}
+	}
+);
+
 // Public category listing
 router.get('/categories',
 	authManager.rateLimit('public_categories', 100, 900000),
@@ -1351,6 +1472,15 @@ router.patch('/switch/:uid',
 			const updates = { ...req.validatedData };
 			const captchaToken = updates.captchaToken;
 			delete updates.captchaToken;
+
+			const limitCheck = await checkFreeTierLimits({
+				personalKeyId: req.personalKeyId,
+				wantsPublicize: updates.publicize === true,
+				currentPublicize: Boolean(req.switchData && req.switchData.publicize)
+			});
+			if (limitCheck) {
+				return sendFreeTierLimitError(res, limitCheck.limit, limitCheck.max);
+			}
 
 			if (updates.publicize === true) {
 				const captcha = await authManager.verifyCaptcha(captchaToken);

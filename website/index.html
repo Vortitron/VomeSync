@@ -343,6 +343,41 @@
 										<button type="submit" class="ghost-btn">Clear redirect</button>
 									</div>
 								</form>
+								<form id="adminOverrideForm" class="comment-form">
+									<label for="adminOverrideUid">Override listing (UID):</label>
+									<input id="adminOverrideUid" type="text" autocomplete="off" placeholder="vs_...">
+									<label for="adminOverrideName">Name override (optional):</label>
+									<input id="adminOverrideName" type="text" autocomplete="off" placeholder="Listing name">
+									<label for="adminOverrideDescription">Description override (optional):</label>
+									<input id="adminOverrideDescription" type="text" autocomplete="off" placeholder="Listing description">
+									<label for="adminOverrideLocation">Location override (optional):</label>
+									<input id="adminOverrideLocation" type="text" autocomplete="off" placeholder="Listing location">
+									<label for="adminOverrideCategory">Category override (optional):</label>
+									<select id="adminOverrideCategory">
+										<option value="">(No override)</option>
+										<option value="Community">Community</option>
+										<option value="Personal">Personal</option>
+										<option value="Event">Event</option>
+										<option value="Test">Test</option>
+										<option value="Other">Other</option>
+									</select>
+									<label for="adminOverrideLink">Link override (optional):</label>
+									<input id="adminOverrideLink" type="url" autocomplete="off" placeholder="https://example.com">
+									<label for="adminOverrideIconUrl">Icon URL override (optional):</label>
+									<input id="adminOverrideIconUrl" type="url" autocomplete="off" placeholder="https://example.com/icon.jpg">
+									<label for="adminOverrideBannerUrl">Banner URL override (optional):</label>
+									<input id="adminOverrideBannerUrl" type="url" autocomplete="off" placeholder="https://example.com/banner.jpg">
+									<div class="comment-actions">
+										<button type="submit" class="ghost-btn">Apply override</button>
+									</div>
+								</form>
+								<form id="adminOverrideClearForm" class="comment-form">
+									<label for="adminOverrideClearUid">Clear listing override (UID):</label>
+									<input id="adminOverrideClearUid" type="text" autocomplete="off" placeholder="vs_...">
+									<div class="comment-actions">
+										<button type="submit" class="ghost-btn">Clear override</button>
+									</div>
+								</form>
 							</div>
 							<span id="adminStatus" class="comment-status"></span>
 						</div>

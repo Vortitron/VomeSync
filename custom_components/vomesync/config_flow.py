@@ -2,7 +2,8 @@
 import asyncio
 import inspect
 import logging
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Optional, Set
 
 import voluptuous as vol
 from homeassistant import config_entries
@@ -39,6 +40,7 @@ from .const import (
 	CONF_CAPTCHA_TOKEN,
 	CONF_SWITCH_ADVANCED,
 	CONF_SHOW_SIGNING_KEY_AFTER,
+	FREE_TIER_MAX_SUBSCRIPTIONS,
 	SWITCH_CATEGORIES,
 	DEFAULT_SWITCH_NAME,
 )
@@ -311,6 +313,39 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		if location.lower() in {"home", "house"}:
 			return ""
 		return location
+
+	def _extract_invalid_fields(self, error_detail: str) -> Set[str]:
+		"""Extract invalid field names from an API error message."""
+		if not error_detail:
+			return set()
+		fields = set(re.findall(r'"([^"]+)"', error_detail))
+		if not fields:
+			for candidate in ("name", "description", "location", "category", "publicize", "link", "iconUrl", "bannerUrl"):
+				if candidate in error_detail:
+					fields.add(candidate)
+		return fields
+
+	def _apply_invalid_defaults(self, defaults: Dict[str, Any], invalid_fields: Set[str]) -> Dict[str, Any]:
+		"""Blank only the invalid fields so other values are preserved."""
+		field_map = {
+			"name": CONF_SWITCH_NAME,
+			"description": "description",
+			"location": "location",
+			"category": "category",
+			"publicize": "publicize",
+			"link": CONF_SWITCH_LINK,
+			"iconUrl": CONF_SWITCH_ICON_URL,
+			"bannerUrl": CONF_SWITCH_BANNER_URL
+		}
+		for field in invalid_fields:
+			form_key = field_map.get(field)
+			if not form_key or form_key not in defaults:
+				continue
+			if isinstance(defaults[form_key], bool):
+				defaults[form_key] = False
+			else:
+				defaults[form_key] = ""
+		return defaults
 
 	def _generate_switch_name_fallback(self) -> str:
 		"""Generate a numbered fallback name when server is unreachable."""
@@ -782,20 +817,29 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 				uid = _normalise_uid(user_input.get(CONF_SWITCH_UID))
 				if not _is_valid_uid(uid):
 					raise ValueError("invalid uid")
-				access_key = str(user_input.get(CONF_ACCESS_KEY, "") or "").strip()
-				
-				# Get coordinator
-				coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
-				
-				# Subscribe via coordinator (handles API check + dynamic entity addition)
-				success = await coordinator.subscribe_to_switch(uid, access_key=access_key)
-				
-				if success:
-					# IMPORTANT: return current options so the options flow doesn't overwrite them with {}
-					# Coordinator already updated options (imported cache) and added the entity dynamically.
-					return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+				options = self._config_entry.options or {}
+				imported_switches = options.get("imported_switches", {}) or {}
+				subscription_count = sum(
+					1 for info in imported_switches.values()
+					if isinstance(info, dict) and not info.get("is_owner", False)
+				)
+				if subscription_count >= FREE_TIER_MAX_SUBSCRIPTIONS:
+					errors["base"] = "subscription_limit_reached"
 				else:
-					errors[CONF_SWITCH_UID] = "switch_not_found"
+					access_key = str(user_input.get(CONF_ACCESS_KEY, "") or "").strip()
+					
+					# Get coordinator
+					coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+					
+					# Subscribe via coordinator (handles API check + dynamic entity addition)
+					success = await coordinator.subscribe_to_switch(uid, access_key=access_key)
+					
+					if success:
+						# IMPORTANT: return current options so the options flow doesn't overwrite them with {}
+						# Coordinator already updated options (imported cache) and added the entity dynamically.
+						return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+					else:
+						errors[CONF_SWITCH_UID] = "switch_not_found"
 					
 			except ValueError:
 				errors[CONF_SWITCH_UID] = "invalid_uid"
@@ -1301,8 +1345,13 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 			else:
 				# Apply update to server, then persist updated cache in coordinator/options
 				if updates:
-					updated = await coordinator.update_switch_metadata(selected_uid, updates, captcha_token=captcha_token)
-					if not updated:
+					try:
+						updated = await coordinator.update_switch_metadata(selected_uid, updates, captcha_token=captcha_token)
+					except VomeSyncAPIError as ex:
+						error_detail = str(ex)
+						errors["base"] = "update_failed"
+						updated = None
+					if not updated and not errors.get("base"):
 						error_detail = "Update rejected by server. Check name/description length and allowed characters."
 						errors["base"] = "update_failed"
 
@@ -1310,10 +1359,6 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 					# IMPORTANT: return current options so the options flow doesn't overwrite them with {}
 					return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
 		
-		# Always use server-saved values for defaults.
-		# This prevents "sticky" bad values when there's a validation error.
-		# User will need to re-enter changes if there was an error, but this is cleaner
-		# than having invalid data persist across submissions.
 		name_default = switch_config.get("name", "")
 		desc_default = switch_config.get("description", "")
 		loc_default = switch_config.get("location", "")
@@ -1322,6 +1367,36 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 		link_default = switch_config.get("link", "")
 		icon_default = switch_config.get("iconUrl", "")
 		banner_default = switch_config.get("bannerUrl", "")
+		if user_input:
+			name_default = user_input.get(CONF_SWITCH_NAME, name_default)
+			desc_default = user_input.get("description", desc_default)
+			loc_default = user_input.get("location", loc_default)
+			cat_default = user_input.get("category", cat_default)
+			pub_default = user_input.get("publicize", pub_default)
+			link_default = user_input.get(CONF_SWITCH_LINK, link_default)
+			icon_default = user_input.get(CONF_SWITCH_ICON_URL, icon_default)
+			banner_default = user_input.get(CONF_SWITCH_BANNER_URL, banner_default)
+
+		invalid_fields = self._extract_invalid_fields(error_detail)
+		defaults = {
+			CONF_SWITCH_NAME: name_default,
+			"description": desc_default,
+			"location": loc_default,
+			"category": cat_default,
+			"publicize": pub_default,
+			CONF_SWITCH_LINK: link_default,
+			CONF_SWITCH_ICON_URL: icon_default,
+			CONF_SWITCH_BANNER_URL: banner_default
+		}
+		defaults = self._apply_invalid_defaults(defaults, invalid_fields)
+		name_default = defaults[CONF_SWITCH_NAME]
+		desc_default = defaults["description"]
+		loc_default = defaults["location"]
+		cat_default = defaults["category"]
+		pub_default = defaults["publicize"]
+		link_default = defaults[CONF_SWITCH_LINK]
+		icon_default = defaults[CONF_SWITCH_ICON_URL]
+		banner_default = defaults[CONF_SWITCH_BANNER_URL]
 
 		data_schema = vol.Schema({
 			vol.Optional(CONF_SWITCH_NAME, default=name_default): str,

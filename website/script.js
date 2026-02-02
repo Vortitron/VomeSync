@@ -164,6 +164,17 @@ const adminRedirectTo = document.getElementById('adminRedirectTo');
 const adminRedirectReason = document.getElementById('adminRedirectReason');
 const adminRedirectClearForm = document.getElementById('adminRedirectClearForm');
 const adminRedirectClearUid = document.getElementById('adminRedirectClearUid');
+const adminOverrideForm = document.getElementById('adminOverrideForm');
+const adminOverrideUid = document.getElementById('adminOverrideUid');
+const adminOverrideName = document.getElementById('adminOverrideName');
+const adminOverrideDescription = document.getElementById('adminOverrideDescription');
+const adminOverrideLocation = document.getElementById('adminOverrideLocation');
+const adminOverrideCategory = document.getElementById('adminOverrideCategory');
+const adminOverrideLink = document.getElementById('adminOverrideLink');
+const adminOverrideIconUrl = document.getElementById('adminOverrideIconUrl');
+const adminOverrideBannerUrl = document.getElementById('adminOverrideBannerUrl');
+const adminOverrideClearForm = document.getElementById('adminOverrideClearForm');
+const adminOverrideClearUid = document.getElementById('adminOverrideClearUid');
 
 // Quick view modal
 const quickView = document.getElementById('quickView');
@@ -989,6 +1000,62 @@ function setupEventListeners() {
 				setAdminStatus(`Cleared redirect for ${uid}.`, false);
 			} catch (error) {
 				setAdminStatus(error.message || 'Clear redirect failed.', true);
+			}
+		});
+	}
+
+	if (adminOverrideForm) {
+		adminOverrideForm.addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const uid = adminOverrideUid ? String(adminOverrideUid.value || '').trim() : '';
+			if (!uid) {
+				setAdminStatus('Switch UID required for override.', true);
+				return;
+			}
+			const payload = {};
+			const name = adminOverrideName ? String(adminOverrideName.value || '').trim() : '';
+			const description = adminOverrideDescription ? String(adminOverrideDescription.value || '').trim() : '';
+			const location = adminOverrideLocation ? String(adminOverrideLocation.value || '').trim() : '';
+			const category = adminOverrideCategory ? String(adminOverrideCategory.value || '').trim() : '';
+			const link = adminOverrideLink ? String(adminOverrideLink.value || '').trim() : '';
+			const iconUrl = adminOverrideIconUrl ? String(adminOverrideIconUrl.value || '').trim() : '';
+			const bannerUrl = adminOverrideBannerUrl ? String(adminOverrideBannerUrl.value || '').trim() : '';
+
+			if (name) payload.name = name;
+			if (description) payload.description = description;
+			if (location) payload.location = location;
+			if (category) payload.category = category;
+			if (link) payload.link = link;
+			if (iconUrl) payload.iconUrl = iconUrl;
+			if (bannerUrl) payload.bannerUrl = bannerUrl;
+
+			if (Object.keys(payload).length === 0) {
+				setAdminStatus('Provide at least one override field.', true);
+				return;
+			}
+
+			try {
+				await adminRequest(`/admin/switch/${encodeURIComponent(uid)}/override`, { body: payload });
+				setAdminStatus(`Listing override saved for ${uid}.`, false);
+			} catch (error) {
+				setAdminStatus(error.message || 'Failed to save override.', true);
+			}
+		});
+	}
+
+	if (adminOverrideClearForm) {
+		adminOverrideClearForm.addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const uid = adminOverrideClearUid ? String(adminOverrideClearUid.value || '').trim() : '';
+			if (!uid) {
+				setAdminStatus('Switch UID required to clear override.', true);
+				return;
+			}
+			try {
+				await adminRequest(`/admin/switch/${encodeURIComponent(uid)}/override`, { method: 'DELETE' });
+				setAdminStatus(`Listing override cleared for ${uid}.`, false);
+			} catch (error) {
+				setAdminStatus(error.message || 'Failed to clear override.', true);
 			}
 		});
 	}

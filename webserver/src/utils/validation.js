@@ -190,7 +190,17 @@ const schemas = {
 		fromUid: switchUidSchema,
 		toUid: switchUidSchema,
 		reason: Joi.string().max(MAX_REDIRECT_REASON_LENGTH).allow('').default('')
-	})
+	}),
+
+	adminListingOverride: Joi.object({
+		name: Joi.string().max(MAX_SWITCH_NAME_LENGTH).allow(''),
+		description: Joi.string().max(MAX_DESCRIPTION_LENGTH).allow(''),
+		location: Joi.string().max(MAX_LOCATION_LENGTH).allow(''),
+		category: Joi.string().valid('Community', 'Personal', 'Event', 'Test', 'Other'),
+		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
+		iconUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
+		bannerUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow('')
+	}).min(1)
 };
 
 const validateRequest = (schema) => {
