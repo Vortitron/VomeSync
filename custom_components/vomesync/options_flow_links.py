@@ -4,8 +4,8 @@ from typing import Any, Dict, Optional
 
 import voluptuous as vol
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.selector import selector
 
 from .const import DOMAIN
 
@@ -129,8 +129,8 @@ class VomeSyncOptionsFlowLinkEntitiesMixin:
 		
 		# Get all entities that support turn_on/turn_off
 		switchable_domains = ["switch", "light", "fan", "input_boolean", "automation", "script"]
-		# Sort linked entities first, then by domain/name for a predictable UI.
-		candidates: list[tuple[int, str, str, str, str]] = []
+		candidates: list[tuple[str, str, str]] = []
+		seen_entities = set()
 		
 		for entity in entity_reg.entities.values():
 			if entity.domain in switchable_domains:
@@ -142,15 +142,24 @@ class VomeSyncOptionsFlowLinkEntitiesMixin:
 				state = self.hass.states.get(entity.entity_id)
 				name = (state.attributes.get("friendly_name") if state else None) or entity.original_name or entity.entity_id
 				label = f"{name} ({entity.entity_id})"
-				linked_rank = 0 if entity.entity_id in current_links else 1
-				candidates.append((linked_rank, entity.domain, str(name).casefold(), entity.entity_id, label))
+				candidates.append((str(name).casefold(), entity.entity_id, label))
+				seen_entities.add(entity.entity_id)
+		
+		# Ensure existing links are still selectable even if the entity is missing from the registry.
+		for entity_id in current_links:
+			if entity_id not in seen_entities:
+				candidates.append((str(entity_id).casefold(), entity_id, entity_id))
 		
 		if not candidates:
 			return self.async_abort(reason="no_linkable_entities")
 		
 		available_entities: Dict[str, str] = {}
-		for _linked_rank, _domain, _name_key, entity_id, label in sorted(candidates):
+		include_entities: list[str] = []
+		for _name_key, entity_id, label in sorted(candidates):
+			if entity_id in available_entities:
+				continue
 			available_entities[entity_id] = label
+			include_entities.append(entity_id)
 		
 		_LOGGER.debug("Current links for %s: %s", selected_uid, current_links)
 		_LOGGER.debug("Available entities: %s", list(available_entities.keys())[:5])
@@ -160,7 +169,12 @@ class VomeSyncOptionsFlowLinkEntitiesMixin:
 		self._step_data["link_direction_labels"] = self._get_link_direction_labels()
 		
 		data_fields = {
-			vol.Optional("entities", default=current_links): cv.multi_select(available_entities),
+			vol.Optional("entities", default=current_links): selector({
+				"entity": {
+					"multiple": True,
+					"include_entities": include_entities,
+				}
+			}),
 		}
 		if not listen_only:
 			direction_labels = self._get_link_direction_labels()

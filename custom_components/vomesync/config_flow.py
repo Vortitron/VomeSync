@@ -52,6 +52,10 @@ _LOGGER = logging.getLogger(__name__)
 
 _WEBSITE_SESSION_DEFAULT_TTL_SECONDS = 4 * 60 * 60
 _WEBSITE_SESSION_STAY_TTL_SECONDS = 30 * 24 * 60 * 60
+_MAX_SWITCH_NAME_LENGTH = 80
+_MAX_DESCRIPTION_LENGTH = 500
+_MAX_LOCATION_LENGTH = 100
+_MAX_URL_LENGTH = 500
 
 
 def _normalise_uid(raw_uid: Any) -> str:
@@ -393,9 +397,15 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		if default_location is None:
 			default_location = self._default_location_hint()
 		return vol.Schema({
-			vol.Required(CONF_SWITCH_NAME, default=values.get(CONF_SWITCH_NAME, default_name)): str,
-			vol.Optional(CONF_SWITCH_DESCRIPTION, default=values.get(CONF_SWITCH_DESCRIPTION, "")): str,
-			vol.Optional(CONF_SWITCH_LOCATION, default=default_location): str,
+			vol.Required(CONF_SWITCH_NAME, default=values.get(CONF_SWITCH_NAME, default_name)): vol.All(
+				str, vol.Length(max=_MAX_SWITCH_NAME_LENGTH)
+			),
+			vol.Optional(CONF_SWITCH_DESCRIPTION, default=values.get(CONF_SWITCH_DESCRIPTION, "")): vol.All(
+				str, vol.Length(max=_MAX_DESCRIPTION_LENGTH)
+			),
+			vol.Optional(CONF_SWITCH_LOCATION, default=default_location): vol.All(
+				str, vol.Length(max=_MAX_LOCATION_LENGTH)
+			),
 			vol.Optional(CONF_SWITCH_CATEGORY, default=values.get(CONF_SWITCH_CATEGORY, "Other")): selector({
 				"select": {
 					"options": SWITCH_CATEGORIES,
@@ -410,9 +420,9 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 	def _build_create_switch_advanced_schema(self) -> vol.Schema:
 		"""Advanced metadata fields for create-switch."""
 		return vol.Schema({
-			vol.Optional(CONF_SWITCH_LINK, default=""): str,
-			vol.Optional(CONF_SWITCH_ICON_URL, default=""): str,
-			vol.Optional(CONF_SWITCH_BANNER_URL, default=""): str,
+			vol.Optional(CONF_SWITCH_LINK, default=""): vol.All(str, vol.Length(max=_MAX_URL_LENGTH)),
+			vol.Optional(CONF_SWITCH_ICON_URL, default=""): vol.All(str, vol.Length(max=_MAX_URL_LENGTH)),
+			vol.Optional(CONF_SWITCH_BANNER_URL, default=""): vol.All(str, vol.Length(max=_MAX_URL_LENGTH)),
 			# Ensure this renders as a normal text field (not a password box)
 			vol.Optional(CONF_CAPTCHA_TOKEN, default=""): selector({"text": {"type": "text"}}),
 		})
@@ -1399,9 +1409,15 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 		banner_default = defaults[CONF_SWITCH_BANNER_URL]
 
 		data_schema = vol.Schema({
-			vol.Optional(CONF_SWITCH_NAME, default=name_default): str,
-			vol.Optional("description", default=desc_default): str,
-			vol.Optional("location", default=loc_default): str,
+			vol.Optional(CONF_SWITCH_NAME, default=name_default): vol.All(
+				str, vol.Length(max=_MAX_SWITCH_NAME_LENGTH)
+			),
+			vol.Optional("description", default=desc_default): vol.All(
+				str, vol.Length(max=_MAX_DESCRIPTION_LENGTH)
+			),
+			vol.Optional("location", default=loc_default): vol.All(
+				str, vol.Length(max=_MAX_LOCATION_LENGTH)
+			),
 			vol.Optional("category", default=cat_default): selector({
 				"select": {
 					"options": SWITCH_CATEGORIES,
@@ -1409,9 +1425,9 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 				}
 			}),
 			vol.Optional("publicize", default=pub_default): bool,
-			vol.Optional(CONF_SWITCH_LINK, default=link_default): str,
-			vol.Optional(CONF_SWITCH_ICON_URL, default=icon_default): str,
-			vol.Optional(CONF_SWITCH_BANNER_URL, default=banner_default): str,
+			vol.Optional(CONF_SWITCH_LINK, default=link_default): vol.All(str, vol.Length(max=_MAX_URL_LENGTH)),
+			vol.Optional(CONF_SWITCH_ICON_URL, default=icon_default): vol.All(str, vol.Length(max=_MAX_URL_LENGTH)),
+			vol.Optional(CONF_SWITCH_BANNER_URL, default=banner_default): vol.All(str, vol.Length(max=_MAX_URL_LENGTH)),
 			# Ensure this renders as a normal text field (not a password box)
 			vol.Optional(CONF_CAPTCHA_TOKEN, default=""): selector({"text": {"type": "text"}}),
 		})

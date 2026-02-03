@@ -53,13 +53,13 @@ describe('Validation Utilities', () => {
 
 			test('should reject description that is too long', () => {
 				const invalidData = {
-					description: 'a'.repeat(201) // Exceeds 200 character limit
+					description: 'a'.repeat(501) // Exceeds 500 character limit
 				};
 
 				const { error } = schemas.createSwitch.validate(invalidData);
 
 				expect(error).toBeDefined();
-				expect(error.details[0].message).toContain('length must be less than or equal to 200');
+				expect(error.details[0].message).toContain('length must be less than or equal to 500');
 			});
 
 			test('should reject location that is too long', () => {

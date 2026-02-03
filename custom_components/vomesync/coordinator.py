@@ -739,7 +739,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			return merged
 		except VomeSyncAPIError as ex:
 			_LOGGER.error("Failed to update switch metadata uid=%s: %s", uid, ex)
-			return None
+			raise
 		except Exception as ex:  # noqa: BLE001
 			_LOGGER.error("Failed to update switch metadata uid=%s (unexpected): %s", uid, ex)
 			return None

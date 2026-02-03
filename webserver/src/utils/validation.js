@@ -1,6 +1,6 @@
 const Joi = require('joi');
 
-const MAX_DESCRIPTION_LENGTH = 200;
+const MAX_DESCRIPTION_LENGTH = 500;
 const MAX_SWITCH_NAME_LENGTH = 80;
 const MAX_LOCATION_LENGTH = 100;
 const MAX_URL_LENGTH = 500;

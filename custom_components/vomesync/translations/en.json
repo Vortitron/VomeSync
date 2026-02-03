@@ -307,8 +307,8 @@
 			}
 		},
 		"error": {
-			"create_failed": "Failed to create switch. Check server URL, key, and connectivity.",
-			"update_failed": "Failed to update switch. Check server URL, key, and connectivity.",
+			"create_failed": "Failed to create switch. Check the error above for the invalid field(s).",
+			"update_failed": "Failed to update switch. Check the error above for the invalid field(s).",
 			"captcha_required": "CAPTCHA token required to publicise this switch on this server.",
 			"backup_required": "Please confirm you have backed up your signing key.",
 			"access_key_create_failed": "Failed to create access key. Check connectivity and try again.",
