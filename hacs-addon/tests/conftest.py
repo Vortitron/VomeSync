@@ -3,7 +3,7 @@
 import asyncio
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from homeassistant.config_entries import ConfigEntry
@@ -13,6 +13,12 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from custom_components.vomesync.const import DOMAIN
+from flow_test_framework import (
+	FlowIntrospector,
+	FlowResultValidator,
+	FlowStepRunner,
+	MockHASSFactory,
+)
 
 
 @pytest.fixture
@@ -26,29 +32,37 @@ def event_loop():
 @pytest.fixture
 def hass():
 	"""Mock Home Assistant instance."""
-	hass_mock = MagicMock()
-	hass_mock.data = {}
-	hass_mock.loop = asyncio.get_event_loop()
-	hass_mock.config_entries = MagicMock()
-	return hass_mock
+	return MockHASSFactory.create_hass()
 
 
 @pytest.fixture
 def config_entry():
 	"""Mock config entry."""
-	entry = MagicMock(spec=ConfigEntry)
-	entry.domain = DOMAIN
-	entry.data = {
-		"personal_key": "test-personal-key-uuid",
-		"server_url": "https://test-server.com",
-		"websocket_url": "wss://test-server.com"
-	}
-	entry.options = {
-		"imported_switches": {},
-		"linked_entities": {}
-	}
-	entry.entry_id = "test-entry-id"
-	return entry
+	return MockHASSFactory.create_config_entry()
+
+
+@pytest.fixture
+def crypto_config_entry():
+	"""Mock config entry configured for v2 crypto auth."""
+	return MockHASSFactory.create_crypto_config_entry()
+
+
+@pytest.fixture
+def mock_coordinator():
+	"""Mock VomeSyncCoordinator with all common methods."""
+	return MockHASSFactory.create_coordinator()
+
+
+@pytest.fixture
+def mock_entity_registry():
+	"""Mock entity registry with no entities."""
+	return MockHASSFactory.create_entity_registry()
+
+
+@pytest.fixture
+def flow_validator():
+	"""FlowResultValidator with no known steps (generic)."""
+	return FlowResultValidator()
 
 
 @pytest.fixture
@@ -56,6 +70,7 @@ def mock_switch_data():
 	"""Mock switch data."""
 	return {
 		"uid": "test-switch-uid",
+		"name": "Test Switch",
 		"description": "Test Switch",
 		"location": "Test City",
 		"category": "Test",

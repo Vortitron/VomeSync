@@ -44,11 +44,16 @@ pytest -v
 
 ```
 hacs-addon/tests/
-├── conftest.py              # Shared fixtures
+├── conftest.py              # Shared fixtures (MockHASSFactory-based)
+├── flow_test_framework.py   # Reusable flow test framework (generic, not VomeSync-specific)
 ├── requirements.txt         # Test dependencies
-├── test_config_flow.py      # Config and options flow tests
+├── test_config_flow.py      # Config and options flow tests (all 40 steps)
+├── test_flow_coverage.py    # Auto-discovery and structural validation of all flow steps
+├── test_flow_journeys.py    # Multi-step user workflow simulations
 ├── test_coordinator.py      # Coordinator logic tests
 ├── test_switch.py           # Switch platform tests
+├── test_sensor.py           # Sensor platform tests
+├── test_services.py         # HA service registration tests
 ├── test_api_client.py       # API client tests
 └── README.md                # This file
 ```
@@ -101,24 +106,84 @@ test_options_flow_import_switches()
 test_options_flow_remove_from_installation()
 ```
 
+## Flow Test Framework
+
+The `flow_test_framework.py` module provides **generic, reusable utilities** for testing
+any Home Assistant integration's config/options flows — not just VomeSync.
+
+### Classes
+
+| Class | Purpose |
+|-------|---------|
+| `FlowIntrospector` | Discovers all `async_step_*` methods in a flow class; builds a step registry |
+| `FlowResultValidator` | Validates `FlowResult` dicts (type, step_id, menu_options, data_schema) |
+| `MockHASSFactory` | Builder-pattern helpers for mock `hass`, `ConfigEntry`, coordinator, entity registry |
+| `FlowStepRunner` | Convenience wrapper to run a step + validate the result in one call |
+
+### Using the Framework for Other Plugins
+
+```python
+from flow_test_framework import FlowIntrospector, FlowResultValidator, FlowStepRunner, MockHASSFactory
+
+# 1. Discover all steps in your flow class
+introspector = FlowIntrospector(MyPluginOptionsFlow)
+print(introspector.list_steps())  # ['init', 'configure', 'done', ...]
+
+# 2. Validate menu options reference real steps
+validator = FlowResultValidator(known_steps=introspector.step_ids)
+result = await flow.async_step_init(None)
+validator.assert_valid(result)
+
+# 3. Use FlowStepRunner for multi-step journey tests
+runner = FlowStepRunner(flow, auto_validate=True)
+result = await runner.run_step("init")
+runner.assert_menu("init")
+result = await runner.run_step("configure", {"name": "Test"})
+runner.assert_form("configure")
+
+# 4. Create mock HA objects
+hass = MockHASSFactory.create_hass()
+entry = MockHASSFactory.create_config_entry(domain="my_plugin")
+```
+
 ## Writing New Tests
 
 ### Use Existing Fixtures
 
 ```python
 @pytest.mark.asyncio
-async def test_my_feature(hass, config_entry, mock_switch_data):
+async def test_my_feature(hass, config_entry, mock_coordinator):
     """Test description."""
+    MockHASSFactory.wire_hass(hass, config_entry, mock_coordinator)
+    flow = VomeSyncOptionsFlow(config_entry)
+    flow.hass = hass
     # Your test code here
-    pass
 ```
 
-### Mock Coordinator
+### Use FlowStepRunner for Journey Tests
 
 ```python
-mock_coordinator = MagicMock()
-mock_coordinator.switches = {"uid": {"state": True}}
-mock_coordinator.toggle_switch = AsyncMock(return_value=True)
+@pytest.mark.asyncio
+async def test_full_journey(hass, config_entry, mock_coordinator):
+    """Test a multi-step user journey."""
+    MockHASSFactory.wire_hass(hass, config_entry, mock_coordinator)
+    flow = VomeSyncOptionsFlow(config_entry)
+    flow.hass = hass
+    runner = FlowStepRunner(flow, auto_validate=False)
+
+    result = await runner.run_step("init")
+    runner.assert_menu("init")
+
+    result = await runner.run_step("create_switch", {
+        "name": "My Switch",
+        "description": "",
+        "location": "",
+        "category": "Other",
+        "publicize": False,
+        "advanced_fields": False,
+        "show_signing_key_after": False,
+    })
+    runner.assert_menu("manage_switch_action")
 ```
 
 ### Assert Options Updates
@@ -151,7 +216,8 @@ jobs:
 
 ## Coverage Goals
 
-- **Config Flow**: 95%+ coverage
+- **Config Flow**: 100% step coverage (all 40 steps tested)
+- **Flow Journeys**: 9 multi-step user workflows
 - **Coordinator**: 90%+ coverage
 - **Switch Platform**: 90%+ coverage
 - **API Client**: 85%+ coverage

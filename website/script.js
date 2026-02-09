@@ -60,6 +60,7 @@ let filteredSwitches = [];
 let categories = {};
 let currentSwitchId = null;
 let currentSwitchDetail = null;
+let heroBannerUrl = '';
 
 // DOM elements
 const heroSection = document.querySelector('.hero');
@@ -77,8 +78,8 @@ const errorMessage = document.getElementById('errorMessage');
 const emptySwitches = document.getElementById('emptySwitches');
 const switchesGrid = document.getElementById('switchesGrid');
 const searchBox = document.getElementById('searchBox');
-const categoryFilter = document.getElementById('categoryFilter');
 const userCountFilter = document.getElementById('userCountFilter');
+let selectedCategory = '';
 const refreshBtn = document.getElementById('refreshBtn');
 const totalSwitches = document.getElementById('totalSwitches');
 const activeSwitches = document.getElementById('activeSwitches');
@@ -286,6 +287,18 @@ function cssEscapeUrl(url) {
 	return String(url).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+function updatePageBannerBackground() {
+	if (!document?.body) return;
+	if (!heroBannerUrl) {
+		document.body.classList.remove('page-banner-active', 'page-banner-out');
+		document.body.style.removeProperty('--page-banner-image');
+		return;
+	}
+	document.body.style.setProperty('--page-banner-image', `url("${cssEscapeUrl(heroBannerUrl)}")`);
+	document.body.classList.add('page-banner-active');
+	document.body.classList.toggle('page-banner-out', !heroInView);
+}
+
 function setHeroBanner(bannerUrl) {
 	if (!heroSection) return;
 	const url = String(bannerUrl || '').trim();
@@ -293,14 +306,18 @@ function setHeroBanner(bannerUrl) {
 		clearHeroBanner();
 		return;
 	}
+	heroBannerUrl = url;
 	heroSection.classList.add('hero-banner-active');
 	heroSection.style.setProperty('--hero-banner-image', `url("${cssEscapeUrl(url)}")`);
+	updatePageBannerBackground();
 }
 
 function clearHeroBanner() {
 	if (!heroSection) return;
+	heroBannerUrl = '';
 	heroSection.classList.remove('hero-banner-active');
 	heroSection.style.removeProperty('--hero-banner-image');
+	updatePageBannerBackground();
 }
 
 function setHeroText(title, subtitle) {
@@ -324,7 +341,7 @@ function updateHeroStatusButton(detail) {
 	const ts = detail?.lastToggled ? Number(detail.lastToggled) : 0;
 	let title = '';
 	if (ts) {
-		const absolute = new Date(ts).toLocaleString();
+		const absolute = formatDateTimeYmd(new Date(ts));
 		const relative = formatTimeAgo(new Date(ts));
 		title = `Last changed: ${absolute} (${relative})`;
 	} else if (stateKnown) {
@@ -369,6 +386,7 @@ function initHeroObserver() {
 			const entry = entries && entries[0];
 			heroInView = entry ? entry.isIntersecting : true;
 			updateNavSwitchStatus(currentSwitchDetail || {});
+			updatePageBannerBackground();
 		}, { rootMargin: '-64px 0px 0px 0px', threshold: 0.1 });
 		observer.observe(heroSection);
 		return;
@@ -377,6 +395,7 @@ function initHeroObserver() {
 		const rect = heroSection.getBoundingClientRect();
 		heroInView = rect.bottom > 64;
 		updateNavSwitchStatus(currentSwitchDetail || {});
+		updatePageBannerBackground();
 	};
 	window.addEventListener('scroll', onScroll, { passive: true });
 	onScroll();
@@ -802,7 +821,6 @@ function applyDynamicLinks() {
 
 function setupEventListeners() {
 	searchBox.addEventListener('input', () => applyFilters());
-	categoryFilter.addEventListener('change', () => applyFilters());
 	userCountFilter.addEventListener('change', () => applyFilters());
 	refreshBtn.addEventListener('click', loadAllData);
 
@@ -1465,7 +1483,7 @@ function updateRenderedSwitchCards() {
 
 function computeFilteredSwitches() {
 	const searchQuery = searchBox.value.toLowerCase().trim();
-	const category = categoryFilter.value;
+	const category = selectedCategory;
 	const minUsers = userCountFilter.value ? parseInt(userCountFilter.value, 10) : null;
 
 	return allSwitches.filter((switchData) => {
@@ -1890,14 +1908,21 @@ function renderCategories() {
 		return;
 	}
 
-	categoryList.innerHTML = Object.entries(categories)
+	const totalCount = allSwitches.length;
+	const allChip = `<button class="category-chip${selectedCategory === '' ? ' active' : ''}" onclick="filterByCategory('')">
+		<span>All</span><span class="chip-count">${totalCount}</span>
+	</button>`;
+
+	const chips = Object.entries(categories)
 		.sort((a, b) => b[1] - a[1])
 		.map(([name, count]) => `
-			<button class="category-chip" onclick="filterByCategory('${encodeURIComponent(name)}')">
+			<button class="category-chip${selectedCategory === name ? ' active' : ''}" onclick="filterByCategory('${encodeURIComponent(name)}')">
 				<span>${escapeHtml(name)}</span>
 				<span class="chip-count">${count}</span>
 			</button>
 		`).join('');
+
+	categoryList.innerHTML = allChip + chips;
 }
 
 function showLoading() {
@@ -2904,36 +2929,37 @@ function renderEvents(events) {
 	}
 
 	detailEvents.innerHTML = events.map((event) => {
-		const timeText = event.timestamp ? new Date(event.timestamp).toLocaleString() : 'Unknown time';
+		const timeText = event.timestamp ? formatDateTimeYmd(new Date(event.timestamp)) : 'Unknown time';
 		if (event.type === 'comment') {
 			return `
 				<li class="timeline-item">
 					<div class="timeline-dot comment"></div>
 					<div class="timeline-content">
 						<div class="timeline-head">
-							<span class="timeline-type">Comment</span>
+							<span class="timeline-type type-comment">Comment</span>
+							<span class="timeline-actor">${escapeHtml(event.actor || 'user')}</span>
 							<span class="timeline-time">${timeText}</span>
 						</div>
-						<p class="timeline-actor">${escapeHtml(event.actor || 'user')}</p>
 						<p>${escapeHtml(event.comment || '')}</p>
 					</div>
 				</li>
 			`;
 		}
 
-		const stateLabel = event.state ? 'turned ON' : 'turned OFF';
+		const stateLabel = event.state ? 'ON' : 'OFF';
 		const actor = event.actor || 'user';
-		const via = event.viaApiKey ? 'via API key' : 'via personal key';
+		const via = event.viaApiKey ? 'API' : 'key';
+		const typeCls = event.state ? 'type-state-on' : 'type-state-off';
 
 		return `
 			<li class="timeline-item">
 				<div class="timeline-dot state ${event.state ? 'on' : 'off'}"></div>
 				<div class="timeline-content">
 					<div class="timeline-head">
-						<span class="timeline-type">State</span>
+						<span class="timeline-type ${typeCls}">${stateLabel}</span>
+						<span class="timeline-actor">${escapeHtml(actor)} (${via})</span>
 						<span class="timeline-time">${timeText}</span>
 					</div>
-					<p class="timeline-actor">${escapeHtml(actor)} ${stateLabel} (${via})</p>
 				</div>
 			</li>
 		`;
@@ -2956,28 +2982,29 @@ function renderToggleDialogActivity(detail) {
 					<div class="timeline-dot comment"></div>
 					<div class="timeline-content">
 						<div class="timeline-head">
-							<span class="timeline-type">Comment</span>
+							<span class="timeline-type type-comment">Comment</span>
+							<span class="timeline-actor">${escapeHtml(event.actor || 'user')}</span>
 							<span class="timeline-time">${timeText}</span>
 						</div>
-						<p class="timeline-actor">${escapeHtml(event.actor || 'user')}</p>
 						<p>${escapeHtml(event.comment || '')}</p>
 					</div>
 				</li>
 			`;
 		}
 
-		const stateLabel = event.state ? 'turned ON' : 'turned OFF';
+		const stateLabel = event.state ? 'ON' : 'OFF';
 		const actor = event.actor || 'user';
-		const via = event.viaApiKey ? 'via API key' : 'via personal key';
+		const via = event.viaApiKey ? 'API' : 'key';
+		const typeCls = event.state ? 'type-state-on' : 'type-state-off';
 		return `
 			<li class="timeline-item">
 				<div class="timeline-dot state ${event.state ? 'on' : 'off'}"></div>
 				<div class="timeline-content">
 					<div class="timeline-head">
-						<span class="timeline-type">State</span>
+						<span class="timeline-type ${typeCls}">${stateLabel}</span>
+						<span class="timeline-actor">${escapeHtml(actor)} (${via})</span>
 						<span class="timeline-time">${timeText}</span>
 					</div>
-					<p class="timeline-actor">${escapeHtml(actor)} ${stateLabel} (${via})</p>
 				</div>
 			</li>
 		`;
@@ -3112,8 +3139,9 @@ function closeDetail() {
 
 function filterByCategory(encodedCategory) {
 	const category = decodeURIComponent(encodedCategory);
-	categoryFilter.value = category;
+	selectedCategory = category;
 	applyFilters();
+	renderCategories();
 }
 
 function restoreSwitchFromQuery() {
@@ -3177,7 +3205,20 @@ function formatTimeAgo(date) {
 	if (diffHours < 24) return `${diffHours}h ago`;
 	if (diffDays < 7) return `${diffDays}d ago`;
 
-	return date.toLocaleDateString();
+	return formatDateYmd(date);
+}
+
+function formatDateYmd(date) {
+	const year = date.getFullYear();
+	const month = String(date.getMonth() + 1).padStart(2, '0');
+	const day = String(date.getDate()).padStart(2, '0');
+	return `${year}-${month}-${day}`;
+}
+
+function formatDateTimeYmd(date) {
+	const hours = String(date.getHours()).padStart(2, '0');
+	const minutes = String(date.getMinutes()).padStart(2, '0');
+	return `${formatDateYmd(date)} ${hours}:${minutes}`;
 }
 
 function getSwitchDisplayName(detail) {

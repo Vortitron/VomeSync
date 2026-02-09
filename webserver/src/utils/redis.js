@@ -51,6 +51,62 @@ class RedisClient {
 			.digest('hex');
 	}
 
+	/**
+	 * Derive the secret ID using the OLD hash secret (rotation support).
+	 * Returns '' if no old secret is configured or if old === current.
+	 */
+	_deriveSecretIdOld(kind, secret) {
+		const oldSecret = config?.security?.keyHashSecretOld || '';
+		if (!oldSecret || typeof secret !== 'string' || secret.length === 0) {
+			return '';
+		}
+		const oldId = crypto
+			.createHmac(SECRET_ID_HASH_ALGO, oldSecret)
+			.update(`${kind}:${secret}`, 'utf8')
+			.digest('hex');
+		// Don't return same ID as current secret (no rotation happened)
+		const currentId = this._deriveSecretId(kind, secret);
+		return oldId !== currentId ? oldId : '';
+	}
+
+	/**
+	 * Try to find a Redis hash record stored under the OLD hash-secret-derived ID.
+	 * If found, migrates (renames) the record to the current-secret ID.
+	 * @param {string} kind – 'personalKey' | 'apiKey' | 'sessionToken'
+	 * @param {string} rawSecret – the raw key/token value
+	 * @param {function} recordKeyFn – e.g. this._apiKeyRecordKey.bind(this)
+	 * @returns {Promise<{id: string, data: object}|null>}
+	 */
+	async _tryOldSecretFallback(kind, rawSecret, recordKeyFn) {
+		const oldId = this._deriveSecretIdOld(kind, rawSecret);
+		if (!oldId) return null;
+
+		const oldRecordKey = recordKeyFn(oldId);
+		const data = await this.client.hGetAll(oldRecordKey);
+		if (!data || Object.keys(data).length === 0) return null;
+
+		const currentId = this._deriveSecretId(kind, rawSecret);
+		const newRecordKey = recordKeyFn(currentId);
+
+		try {
+			// RENAME preserves TTL; atomically move the record to the new key
+			await this.client.rename(oldRecordKey, newRecordKey);
+			// Update the stored ID field inside the hash if present
+			if (data.personalKeyId) {
+				await this.client.hSet(newRecordKey, 'personalKeyId', currentId);
+			} else if (data.apiKeyId) {
+				await this.client.hSet(newRecordKey, 'apiKeyId', currentId);
+			} else if (data.tokenId) {
+				await this.client.hSet(newRecordKey, 'tokenId', currentId);
+			}
+			logger.info(`Migrated ${kind} record from old hash secret (${oldId.substring(0, 8)}… → ${currentId.substring(0, 8)}…)`);
+		} catch (err) {
+			logger.warn(`Old-secret migration failed for ${kind}: ${err.message}`);
+		}
+
+		return { id: currentId, data };
+	}
+
 	_getPersonalKeyId(personalKeyOrId) {
 		if (this._isSecretIdHex(personalKeyOrId)) {
 			return personalKeyOrId;
@@ -793,6 +849,15 @@ class RedisClient {
 			return true;
 		}
 
+		// Old hash-secret fallback: record stored under previous KEY_HASH_SECRET
+		const oldResult = await this._tryOldSecretFallback(
+			'personalKey', personalKey, this._personalKeyRecordKey.bind(this)
+		);
+		if (oldResult) {
+			await this.client.hSet(this._personalKeyRecordKey(personalKeyId), 'lastUsed', `${Date.now()}`);
+			return true;
+		}
+
 		// Legacy fallback: key:<personalKey> (plaintext) -> migrate on first validation
 		const legacyKey = `key:${personalKey}`;
 		const legacyRaw = await this.client.hGetAll(legacyKey);
@@ -1234,16 +1299,70 @@ class RedisClient {
 		return true;
 	}
 
+	async pauseV2AccessKey(ownerId, uid, keyIdOrApiKey, paused = true) {
+		if (!ownerId || !uid || !keyIdOrApiKey) {
+			return false;
+		}
+		const apiKeyId = this._getApiKeyId(keyIdOrApiKey);
+		const data = await this.client.hGetAll(this._apiKeyRecordKey(apiKeyId));
+		if (!data || Object.keys(data).length === 0) {
+			return false;
+		}
+		const parsed = this._deserializeHash(data);
+		if (!parsed || parsed.type !== 'v2_access_key' || parsed.ownerId !== ownerId || parsed.uid !== uid) {
+			return false;
+		}
+		if (parsed.revoked) {
+			return false; // Cannot pause a revoked key
+		}
+		await this.client.hSet(this._apiKeyRecordKey(apiKeyId), this._serializeHash({ paused: Boolean(paused) }));
+		return true;
+	}
+
+	async updateV2AccessKeyPermissions(ownerId, uid, keyIdOrApiKey, permissions) {
+		if (!ownerId || !uid || !keyIdOrApiKey || !Array.isArray(permissions)) {
+			return false;
+		}
+		const apiKeyId = this._getApiKeyId(keyIdOrApiKey);
+		const data = await this.client.hGetAll(this._apiKeyRecordKey(apiKeyId));
+		if (!data || Object.keys(data).length === 0) {
+			return false;
+		}
+		const parsed = this._deserializeHash(data);
+		if (!parsed || parsed.type !== 'v2_access_key' || parsed.ownerId !== ownerId || parsed.uid !== uid) {
+			return false;
+		}
+		if (parsed.revoked) {
+			return false; // Cannot update a revoked key
+		}
+		await this.client.hSet(this._apiKeyRecordKey(apiKeyId), this._serializeHash({ permissions }));
+		return true;
+	}
+
 	async resolveV2AccessKey(apiKey) {
 		if (!apiKey) {
 			return null;
 		}
 		const apiKeyId = this._getApiKeyId(apiKey);
 
-		const data = await this.client.hGetAll(this._apiKeyRecordKey(apiKeyId));
+		let data = await this.client.hGetAll(this._apiKeyRecordKey(apiKeyId));
+
+		// Old hash-secret fallback: record stored under previous KEY_HASH_SECRET
+		if (!data || Object.keys(data).length === 0) {
+			const oldResult = await this._tryOldSecretFallback(
+				'apiKey', apiKey, this._apiKeyRecordKey.bind(this)
+			);
+			if (oldResult) {
+				data = oldResult.data;
+			}
+		}
+
 		if (data && Object.keys(data).length > 0) {
 			if (data.revoked === 'true') {
 				return null;
+			}
+			if (data.paused === 'true') {
+				return null; // Paused keys are temporarily inactive
 			}
 			const parsed = this._deserializeHash(data);
 			if (!parsed || parsed.type !== 'v2_access_key' || parsed.authVersion !== 2) {
@@ -1307,7 +1426,18 @@ class RedisClient {
 		const tokenId = this._getSessionTokenId(token);
 		const recordKey = this._sessionTokenRecordKey(tokenId);
 
-		const data = await this.client.hGetAll(recordKey);
+		let data = await this.client.hGetAll(recordKey);
+
+		// Old hash-secret fallback: record stored under previous KEY_HASH_SECRET
+		if (!data || Object.keys(data).length === 0) {
+			const oldResult = await this._tryOldSecretFallback(
+				'sessionToken', token, this._sessionTokenRecordKey.bind(this)
+			);
+			if (oldResult) {
+				data = oldResult.data;
+			}
+		}
+
 		if (data && Object.keys(data).length > 0) {
 			// One-time use
 			await this.client.del(recordKey);
@@ -1565,6 +1695,175 @@ class RedisClient {
 
 	async getAllocatedSwitchNameCount() {
 		return await this.client.sCard(this._switchNamesKey());
+	}
+
+	// ── Owner Tier & Promo-Code Management ────────────────────────────────────────
+
+	_ownerTierKey(ownerId) {
+		return `owner_tier:${ownerId}`;
+	}
+
+	_promoCodeKey(code) {
+		return `promo:${String(code).toLowerCase().trim()}`;
+	}
+
+	/**
+	 * Get the current tier for an owner.
+	 * Returns { tier: 'premium', expiresAt, promoCode } or { tier: 'free' }.
+	 */
+	async getOwnerTier(ownerId) {
+		if (!ownerId) return { tier: 'free' };
+		const data = await this.client.hGetAll(this._ownerTierKey(ownerId));
+		if (!data || Object.keys(data).length === 0) {
+			return { tier: 'free' };
+		}
+		const parsed = this._deserializeHash(data);
+		// Check expiry
+		if (parsed.expiresAt && parsed.expiresAt <= Date.now()) {
+			await this.client.del(this._ownerTierKey(ownerId));
+			return { tier: 'free' };
+		}
+		return parsed;
+	}
+
+	/**
+	 * Set the tier for an owner.
+	 */
+	async setOwnerTier(ownerId, tier, expiresAt = 0, promoCode = '') {
+		if (!ownerId || !tier) return false;
+		const data = {
+			tier,
+			expiresAt: expiresAt || 0,
+			promoCode: promoCode || '',
+			redeemedAt: Date.now()
+		};
+		await this.client.hSet(this._ownerTierKey(ownerId), this._serializeHash(data));
+		// Set Redis expiry to auto-clean if there is a time limit
+		if (expiresAt > 0) {
+			const ttlMs = expiresAt - Date.now();
+			if (ttlMs > 0) {
+				await this.client.expire(this._ownerTierKey(ownerId), Math.ceil(ttlMs / 1000));
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Create a promo code.
+	 * @param {object} opts - { code, tier, durationDays, maxRedemptions, createdBy }
+	 */
+	async createPromoCode({ code, tier = 'premium', durationDays = 90, maxRedemptions = 1, createdBy = 'admin' }) {
+		if (!code) return null;
+		const normalised = String(code).toLowerCase().trim();
+		const key = this._promoCodeKey(normalised);
+		const existing = await this.client.hGetAll(key);
+		if (existing && Object.keys(existing).length > 0) {
+			return null; // code already exists
+		}
+		const data = {
+			code: normalised,
+			tier,
+			durationDays,
+			maxRedemptions,
+			redemptions: 0,
+			createdBy,
+			createdAt: Date.now()
+		};
+		await this.client.hSet(key, this._serializeHash(data));
+		return data;
+	}
+
+	/**
+	 * Get a promo code record.
+	 */
+	async getPromoCode(code) {
+		if (!code) return null;
+		const key = this._promoCodeKey(code);
+		const data = await this.client.hGetAll(key);
+		if (!data || Object.keys(data).length === 0) return null;
+		return this._deserializeHash(data);
+	}
+
+	/**
+	 * Redeem a promo code for an owner.
+	 * Returns { success, tier, expiresAt, error? }.
+	 */
+	async redeemPromoCode(code, ownerId) {
+		if (!code || !ownerId) return { success: false, error: 'Missing code or owner' };
+		const normalised = String(code).toLowerCase().trim();
+		const promoKey = this._promoCodeKey(normalised);
+		const data = await this.client.hGetAll(promoKey);
+		if (!data || Object.keys(data).length === 0) {
+			return { success: false, error: 'Invalid promo code' };
+		}
+		const promo = this._deserializeHash(data);
+
+		// Check redemption limit
+		if (promo.maxRedemptions > 0 && promo.redemptions >= promo.maxRedemptions) {
+			return { success: false, error: 'Promo code has been fully redeemed' };
+		}
+
+		// Check if owner already has an active premium tier
+		const currentTier = await this.getOwnerTier(ownerId);
+		if (currentTier.tier === 'premium' && currentTier.expiresAt > Date.now()) {
+			return { success: false, error: 'You already have an active premium subscription' };
+		}
+
+		// Calculate expiry
+		const durationMs = (promo.durationDays || 90) * 24 * 60 * 60 * 1000;
+		const expiresAt = Date.now() + durationMs;
+
+		// Set owner tier
+		await this.setOwnerTier(ownerId, promo.tier || 'premium', expiresAt, normalised);
+
+		// Increment redemption counter
+		await this.client.hIncrBy(promoKey, 'redemptions', 1);
+
+		// If single-use, mark as fully redeemed
+		if (promo.maxRedemptions === 1) {
+			await this.client.hSet(promoKey, 'fullyRedeemed', 'true');
+		}
+
+		return {
+			success: true,
+			tier: promo.tier || 'premium',
+			expiresAt,
+			durationDays: promo.durationDays || 90
+		};
+	}
+
+	/**
+	 * List all promo codes (admin use).
+	 */
+	async listPromoCodes() {
+		const keys = [];
+		let cursor = '0';
+		do {
+			const result = await this.client.scan(cursor, { MATCH: 'promo:*', COUNT: 100 });
+			cursor = result.cursor !== undefined ? String(result.cursor) : '0';
+			if (result.keys && result.keys.length) {
+				keys.push(...result.keys);
+			}
+		} while (cursor !== '0');
+
+		const codes = [];
+		for (const key of keys) {
+			const data = await this.client.hGetAll(key);
+			if (data && Object.keys(data).length > 0) {
+				codes.push(this._deserializeHash(data));
+			}
+		}
+		return codes;
+	}
+
+	/**
+	 * Delete a promo code (admin use).
+	 */
+	async deletePromoCode(code) {
+		if (!code) return false;
+		const key = this._promoCodeKey(code);
+		const result = await this.client.del(key);
+		return result > 0;
 	}
 }
 

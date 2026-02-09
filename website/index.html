@@ -68,34 +68,6 @@
 	</header>
 
 	<main class="container">
-		<section class="intro">
-			<h2>Discover Community Switches</h2>
-			<p class="description">
-				Browse public switches shared by the VomeSync community. Copy UIDs to subscribe in your Home Assistant and monitor real-time states from around the world.
-			</p>
-		</section>
-
-		<section class="controls">
-			<div class="search-filter">
-				<input type="text" id="searchBox" placeholder="Search by name, description, location, or category...">
-				<select id="categoryFilter">
-					<option value="">All Categories</option>
-					<option value="Community">Community</option>
-					<option value="Event">Event</option>
-					<option value="Personal">Personal</option>
-					<option value="Test">Test</option>
-					<option value="Other">Other</option>
-				</select>
-				<select id="userCountFilter">
-					<option value="">All user counts</option>
-					<option value="1">1+ users</option>
-					<option value="5">5+ users</option>
-					<option value="10">10+ users</option>
-				</select>
-				<button id="refreshBtn" class="refresh-btn">🔄 Refresh</button>
-			</div>
-		</section>
-
 		<section class="stats">
 			<div class="stat-box">
 				<span class="stat-number" id="totalSwitches">-</span>
@@ -111,9 +83,19 @@
 			</div>
 		</section>
 
-		<div class="info-note">
-			<p>Public switches are visible to anyone with the UID. Toggling requires the owner or an API key holder. Avoid sensitive devices (locks, alarms, etc.).</p>
-		</div>
+		<section class="controls">
+			<div class="search-filter">
+				<input type="text" id="searchBox" placeholder="Search by name, description, location, or category...">
+				<select id="userCountFilter">
+					<option value="">All user counts</option>
+					<option value="1">1+ users</option>
+					<option value="5">5+ users</option>
+					<option value="10">10+ users</option>
+				</select>
+				<button id="refreshBtn" class="refresh-btn">🔄 Refresh</button>
+			</div>
+			<div id="categoryList" class="category-list"></div>
+		</section>
 
 		<section class="switches">
 			<div id="loadingMessage" class="loading">
@@ -135,10 +117,9 @@
 			<div id="switchesGrid" class="switches-grid"></div>
 		</section>
 
-		<section class="categories">
-			<h2>Browse by Category</h2>
-			<div id="categoryList" class="category-list"></div>
-		</section>
+		<div class="info-note">
+			<p>Public switches are visible to anyone with the UID. Toggling requires the owner or an API key holder. Avoid sensitive devices (locks, alarms, etc.).</p>
+		</div>
 
 		<section id="switchDetail" class="switch-detail hidden">
 			<div class="detail-card">

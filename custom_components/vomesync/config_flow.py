@@ -68,6 +68,23 @@ def _is_valid_uid(uid: str) -> bool:
 	return bool(uid) and " " not in uid
 
 
+def _parse_uid_key_composite(value: str) -> tuple:
+	"""Parse a uid/key composite string.
+
+	Accepts either:
+	  - "uid/key"  → (uid, key)
+	  - "uid"      → (uid, "")
+
+	The split is on the *first* '/' only, so UIDs that happen to contain '/'
+	are not supported (they don't in practice).
+	"""
+	value = (value or "").strip()
+	if "/" in value:
+		uid, _, key = value.partition("/")
+		return uid.strip(), key.strip()
+	return value, ""
+
+
 class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 	"""Handle a config flow for VomeSync."""
 
@@ -83,6 +100,7 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 		self._generate_new_key: bool = True
 		self._use_default_urls: bool = True
 		self._initial_switch_uid: Optional[str] = None
+		self._initial_switch_access_key: str = ""
 		self._pending_switch_uid: str = ""
 
 	@staticmethod
@@ -131,7 +149,11 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 			self._use_default_urls = bool(user_input.get(CONF_USE_DEFAULT_URLS, True))
 			show_advanced = (not self._generate_new_key) or (not self._use_default_urls)
 
-			self._pending_switch_uid = _normalise_uid(user_input.get(CONF_SWITCH_UID, ""))
+			raw_switch_input = _normalise_uid(user_input.get(CONF_SWITCH_UID, ""))
+			# Support uid/key composite format on initial setup
+			parsed_uid, parsed_key = _parse_uid_key_composite(raw_switch_input)
+			self._pending_switch_uid = _normalise_uid(parsed_uid)
+			self._initial_switch_access_key = parsed_key  # stored for _create_entry
 			self._initial_switch_uid = None
 
 			if self._use_default_urls:
@@ -256,6 +278,10 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 		}
 		if self._initial_switch_uid:
 			data[CONF_SWITCH_UID] = self._initial_switch_uid
+			# If a composite uid/key was pasted, pass the access key too
+			initial_key = getattr(self, "_initial_switch_access_key", "")
+			if initial_key:
+				data["initial_access_key"] = initial_key
 
 		return self.async_create_entry(
 			title=title,
@@ -824,7 +850,10 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 
 		if user_input is not None:
 			try:
-				uid = _normalise_uid(user_input.get(CONF_SWITCH_UID))
+				raw_uid = _normalise_uid(user_input.get(CONF_SWITCH_UID))
+				# Support uid/key composite format
+				uid, composite_key = _parse_uid_key_composite(raw_uid)
+				uid = _normalise_uid(uid)
 				if not _is_valid_uid(uid):
 					raise ValueError("invalid uid")
 				options = self._config_entry.options or {}
@@ -836,7 +865,8 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 				if subscription_count >= FREE_TIER_MAX_SUBSCRIPTIONS:
 					errors["base"] = "subscription_limit_reached"
 				else:
-					access_key = str(user_input.get(CONF_ACCESS_KEY, "") or "").strip()
+					# Use composite key if present, otherwise fall back to the explicit field
+					access_key = composite_key or str(user_input.get(CONF_ACCESS_KEY, "") or "").strip()
 					
 					# Get coordinator
 					coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
@@ -867,7 +897,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			data_schema=data_schema,
 			errors=errors,
 			description_placeholders={
-				"uid_info": "Enter the UID of the switch you want to subscribe to. Optional access keys allow toggling. You can find public switches at sync.vome.io"
+				"uid_info": "Enter a switch UID, or paste a uid/key composite (e.g. vs_abc123/your-access-key). Access keys allow toggling. Find public switches at sync.vome.io"
 			}
 		)
 
@@ -1439,10 +1469,8 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 			description_placeholders={"error": f"\n\nError: {error_detail}" if error_detail else ""}
 		)
 
-	async def async_step_access_keys(
-		self, user_input: Optional[Dict[str, Any]] = None
-	) -> FlowResult:
-		"""Manage delegated v2 access keys for the selected switch."""
+	def _access_keys_guard(self) -> Optional[FlowResult]:
+		"""Check preconditions for access key steps; returns abort result or None."""
 		selected_uid = self._step_data.get("selected_uid")
 		is_owner = self._step_data.get("is_owner", False)
 		if not is_owner:
@@ -1454,21 +1482,256 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 			and self._config_entry.data.get(CONF_CRYPTO_SEED)
 		):
 			return self.async_abort(reason="crypto_required")
+		return None
 
-		menu_options = ["create_access_key_v2", "list_access_keys_v2", "revoke_access_key_v2"]
-		return self.async_show_menu(step_id="access_keys", menu_options=menu_options)
+	@staticmethod
+	def _format_ts(ts_val) -> str:
+		"""Format a timestamp (ms or s) into a human-readable string."""
+		import datetime
+		if ts_val is None:
+			return "never"
+		try:
+			ts_num = int(ts_val)
+			if ts_num > 1e12:
+				ts_num = ts_num // 1000
+			return datetime.datetime.fromtimestamp(ts_num, tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+		except (ValueError, TypeError, OSError):
+			return str(ts_val)
+
+	async def _fetch_access_keys(self) -> list:
+		"""Fetch access keys for the selected switch."""
+		selected_uid = self._step_data.get("selected_uid")
+		coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+		resp = await coordinator.list_v2_access_keys(selected_uid)
+		return resp.get("keys", []) if isinstance(resp, dict) else []
+
+	async def async_step_access_keys(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Manage delegated v2 access keys – list keys to select or create new."""
+		guard = self._access_keys_guard()
+		if guard is not None:
+			return guard
+
+		# If user selected a key from the list, go to its detail page
+		if user_input is not None:
+			selected = user_input.get("selected_key")
+			if selected == "__create__":
+				return await self.async_step_create_access_key_v2()
+			if selected:
+				self._step_data["selected_key_id"] = selected
+				return await self.async_step_access_key_detail()
+			# Back / empty → return to switch actions
+			return await self.async_step_manage_switch_action()
+
+		keys = await self._fetch_access_keys()
+
+		# Build a dropdown: each key is a selectable option → detail page
+		key_options = {}
+		for k in keys:
+			kid = k.get("keyId", "")
+			if not kid:
+				continue
+			label = k.get("name", "") or "Unnamed"
+			hint = kid[:8]
+			paused = " ⏸" if k.get("paused") else ""
+			perms = ", ".join(k.get("permissions", []) or [])
+			key_options[kid] = f"{label} ({hint}…) [{perms}]{paused}"
+
+		key_options["__create__"] = "➕ Create new access key"
+
+		return self.async_show_form(
+			step_id="access_keys",
+			data_schema=vol.Schema({
+				vol.Required("selected_key"): vol.In(key_options),
+			}),
+			description_placeholders={
+				"count": str(len(keys)),
+			},
+		)
+
+	async def async_step_access_key_detail(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Show detail page for a single access key with action menu."""
+		guard = self._access_keys_guard()
+		if guard is not None:
+			return guard
+
+		key_id = self._step_data.get("selected_key_id")
+		if not key_id:
+			return await self.async_step_access_keys()
+
+		# If user picked an action
+		if user_input is not None:
+			action = user_input.get("action")
+			if action == "pause":
+				return await self.async_step_access_key_pause()
+			if action == "permissions":
+				return await self.async_step_access_key_permissions()
+			if action == "revoke":
+				return await self.async_step_revoke_access_key_v2()
+			# Back
+			return await self.async_step_access_keys()
+
+		# Fetch key details
+		keys = await self._fetch_access_keys()
+		key_data = next((k for k in keys if k.get("keyId") == key_id), None)
+		if not key_data:
+			return self.async_abort(reason="no_access_keys")
+
+		label = key_data.get("name", "") or "Unnamed"
+		perms = ", ".join(key_data.get("permissions", []) or []) or "none"
+		created = self._format_ts(key_data.get("created"))
+		last_used = self._format_ts(key_data.get("lastUsed"))
+		paused = key_data.get("paused", False)
+		status = "⏸ Paused" if paused else "✅ Active"
+
+		info_lines = [
+			f"**{label}**",
+			f"ID: `{key_id[:8]}…`",
+			f"Status: {status}",
+			f"Permissions: {perms}",
+			f"Created: {created}",
+			f"Last used: {last_used}",
+		]
+		info = "\n".join(info_lines)
+
+		action_options = {}
+		if paused:
+			action_options["pause"] = "▶️ Unpause key"
+		else:
+			action_options["pause"] = "⏸ Pause key"
+		action_options["permissions"] = "🔑 Change permissions"
+		action_options["revoke"] = "🗑️ Revoke key"
+
+		return self.async_show_form(
+			step_id="access_key_detail",
+			data_schema=vol.Schema({
+				vol.Required("action"): vol.In(action_options),
+			}),
+			description_placeholders={"info": info},
+		)
+
+	async def async_step_access_key_pause(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Toggle pause/unpause on the selected access key."""
+		guard = self._access_keys_guard()
+		if guard is not None:
+			return guard
+
+		selected_uid = self._step_data.get("selected_uid")
+		key_id = self._step_data.get("selected_key_id")
+		if not key_id or not selected_uid:
+			return await self.async_step_access_keys()
+
+		# Determine current pause state
+		keys = await self._fetch_access_keys()
+		key_data = next((k for k in keys if k.get("keyId") == key_id), None)
+		if not key_data:
+			return self.async_abort(reason="no_access_keys")
+
+		currently_paused = key_data.get("paused", False)
+		new_paused = not currently_paused
+
+		if user_input is not None:
+			if user_input.get("confirm", False):
+				coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+				ok = await coordinator.pause_v2_access_key(selected_uid, key_id, new_paused)
+				if not ok:
+					return self.async_show_form(
+						step_id="access_key_pause",
+						data_schema=vol.Schema({
+							vol.Required("confirm", default=False): bool,
+						}),
+						errors={"base": "access_key_pause_failed"},
+						description_placeholders={
+							"action": "pause" if new_paused else "unpause",
+							"key_name": key_data.get("name") or "Unnamed",
+							"key_hint": key_id[:8],
+						},
+					)
+			# Success or user declined – back to detail
+			return await self.async_step_access_key_detail()
+
+		action_word = "Pause" if new_paused else "Unpause"
+		return self.async_show_form(
+			step_id="access_key_pause",
+			data_schema=vol.Schema({
+				vol.Required("confirm", default=False): bool,
+			}),
+			description_placeholders={
+				"action": action_word.lower(),
+				"key_name": key_data.get("name") or "Unnamed",
+				"key_hint": key_id[:8],
+			},
+		)
+
+	async def async_step_access_key_permissions(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Update permissions on the selected access key."""
+		guard = self._access_keys_guard()
+		if guard is not None:
+			return guard
+
+		selected_uid = self._step_data.get("selected_uid")
+		key_id = self._step_data.get("selected_key_id")
+		if not key_id or not selected_uid:
+			return await self.async_step_access_keys()
+
+		errors: Dict[str, str] = {}
+		permission_options = {
+			"toggle": "Toggle",
+			"comment": "Comment",
+			"metadata": "Metadata (icon/banner/link)",
+		}
+
+		# Fetch current permissions
+		keys = await self._fetch_access_keys()
+		key_data = next((k for k in keys if k.get("keyId") == key_id), None)
+		if not key_data:
+			return self.async_abort(reason="no_access_keys")
+
+		current_perms = key_data.get("permissions", []) or ["toggle"]
+
+		if user_input is not None:
+			new_perms = user_input.get("permissions")
+			if not new_perms:
+				errors["base"] = "access_key_permissions_empty"
+			else:
+				new_perms_list = list(new_perms) if not isinstance(new_perms, list) else new_perms
+				coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+				ok = await coordinator.update_v2_access_key_permissions(
+					selected_uid, key_id, new_perms_list
+				)
+				if not ok:
+					errors["base"] = "access_key_permissions_failed"
+				else:
+					return await self.async_step_access_key_detail()
+
+		return self.async_show_form(
+			step_id="access_key_permissions",
+			data_schema=vol.Schema({
+				vol.Optional("permissions", default=list(current_perms)): cv.multi_select(permission_options),
+			}),
+			errors=errors,
+			description_placeholders={
+				"key_name": key_data.get("name") or "Unnamed",
+				"key_hint": key_id[:8],
+			},
+		)
 
 	async def async_step_create_access_key_v2(
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:
 		"""Create a new delegated v2 access key for the selected switch."""
-		selected_uid = self._step_data.get("selected_uid")
-		is_owner = self._step_data.get("is_owner", False)
-		if not is_owner:
-			return self.async_abort(reason="not_owner")
-		if not isinstance(selected_uid, str) or not selected_uid.startswith("vs_"):
-			return self.async_abort(reason="not_v2_switch")
+		guard = self._access_keys_guard()
+		if guard is not None:
+			return guard
 
+		selected_uid = self._step_data.get("selected_uid")
 		errors: Dict[str, str] = {}
 		permission_options = {
 			"toggle": "Toggle",
@@ -1485,11 +1748,14 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 				errors["base"] = "access_key_create_failed"
 			else:
 				api_key = created.get("apiKey", "")
-				self._step_data["created_access_key_v2"] = api_key
+				composite_key = f"{selected_uid}/{api_key}"
+				self._step_data["created_access_key"] = api_key
+				self._step_data["created_access_key_composite"] = composite_key
 				return self.async_show_form(
 					step_id="create_access_key_v2_success",
 					data_schema=vol.Schema({
-						vol.Required("api_key", default=api_key): str
+						vol.Required("api_key", default=api_key): str,
+						vol.Required("api_key_with_uid", default=composite_key): str,
 					}),
 					description_placeholders={
 						"info": "Save this access key securely. It won't be shown again.",
@@ -1512,81 +1778,42 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 		if user_input is not None:
 			return await self.async_step_access_keys()
 
-		# Default value is already baked into the previous step; keep a simple view here.
 		return self.async_show_form(
 			step_id="create_access_key_v2_success",
 			data_schema=vol.Schema({
-				vol.Required("api_key", default=self._step_data.get("created_access_key_v2", "")): str
+				vol.Required("api_key", default=self._step_data.get("created_access_key", "")): str,
+				vol.Required("api_key_with_uid", default=self._step_data.get("created_access_key_composite", "")): str,
 			}),
 			description_placeholders={
 				"info": "Save this access key securely. It won't be shown again.",
 			}
 		)
 
-	async def async_step_list_access_keys_v2(
-		self, user_input: Optional[Dict[str, Any]] = None
-	) -> FlowResult:
-		"""List delegated v2 access keys for the selected switch."""
-		selected_uid = self._step_data.get("selected_uid")
-		is_owner = self._step_data.get("is_owner", False)
-		if not is_owner:
-			return self.async_abort(reason="not_owner")
-		if not isinstance(selected_uid, str) or not selected_uid.startswith("vs_"):
-			return self.async_abort(reason="not_v2_switch")
-
-		if user_input is not None:
-			return await self.async_step_access_keys()
-
-		coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
-		resp = await coordinator.list_v2_access_keys(selected_uid)
-		keys = resp.get("keys", []) if isinstance(resp, dict) else []
-		lines = []
-		for k in keys:
-			key_id = k.get("keyId", "")
-			label = k.get("name", "") or "Unnamed"
-			perms = ", ".join(k.get("permissions", []) or [])
-			hint = f"{str(key_id)[:8]}..." if key_id else "unknown"
-			lines.append(f"- {label}: {hint} ({perms})")
-		info = "\n".join(lines) if lines else "No access keys found for this switch."
-
-		return self.async_show_form(
-			step_id="list_access_keys_v2",
-			data_schema=vol.Schema({}),
-			description_placeholders={
-				"info": info
-			}
-		)
-
 	async def async_step_revoke_access_key_v2(
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:
-		"""Revoke a delegated v2 access key for the selected switch."""
+		"""Revoke the selected access key (from detail page)."""
+		guard = self._access_keys_guard()
+		if guard is not None:
+			return guard
+
 		selected_uid = self._step_data.get("selected_uid")
-		is_owner = self._step_data.get("is_owner", False)
-		if not is_owner:
-			return self.async_abort(reason="not_owner")
-		if not isinstance(selected_uid, str) or not selected_uid.startswith("vs_"):
-			return self.async_abort(reason="not_v2_switch")
+		key_id = self._step_data.get("selected_key_id")
+		if not key_id or not selected_uid:
+			return await self.async_step_access_keys()
 
 		errors: Dict[str, str] = {}
-		coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
-		resp = await coordinator.list_v2_access_keys(selected_uid)
-		keys = resp.get("keys", []) if isinstance(resp, dict) else []
-		if not keys:
+
+		# Fetch key info for display
+		keys = await self._fetch_access_keys()
+		key_data = next((k for k in keys if k.get("keyId") == key_id), None)
+		if not key_data:
 			return self.async_abort(reason="no_access_keys")
 
-		key_options = {
-			k.get("keyId"): f"{(k.get('name') or 'Unnamed')} ({str(k.get('keyId'))[:8]}...)"
-			for k in keys
-			if k.get("keyId")
-		}
-
 		if user_input is not None:
-			api_key = user_input.get("api_key")
-			if not api_key:
-				errors["base"] = "access_key_revoke_failed"
-			else:
-				ok = await coordinator.revoke_v2_access_key(selected_uid, api_key)
+			if user_input.get("confirm", False):
+				coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+				ok = await coordinator.revoke_v2_access_key(selected_uid, key_id)
 				if not ok:
 					errors["base"] = "access_key_revoke_failed"
 				else:
@@ -1594,16 +1821,23 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 						step_id="revoke_access_key_v2_success",
 						data_schema=vol.Schema({}),
 						description_placeholders={
-							"info": f"Access key revoked: {str(api_key)[:8]}..."
+							"info": f"Access key **{key_data.get('name') or 'Unnamed'}** ({key_id[:8]}…) has been permanently revoked."
 						}
 					)
+			else:
+				# User declined
+				return await self.async_step_access_key_detail()
 
 		return self.async_show_form(
 			step_id="revoke_access_key_v2",
 			data_schema=vol.Schema({
-				vol.Required("api_key"): vol.In(key_options)
+				vol.Required("confirm", default=False): bool,
 			}),
-			errors=errors
+			errors=errors,
+			description_placeholders={
+				"key_name": key_data.get("name") or "Unnamed",
+				"key_hint": key_id[:8],
+			},
 		)
 
 	async def async_step_revoke_access_key_v2_success(

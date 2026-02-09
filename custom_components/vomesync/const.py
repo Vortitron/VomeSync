@@ -60,6 +60,8 @@ API_V2_UPDATE_SWITCH = "/api/v2/switch/{uid}"
 API_V2_ACCESS_KEYS_CREATE = "/api/v2/switch/{uid}/access-keys"
 API_V2_ACCESS_KEYS_LIST = "/api/v2/switch/{uid}/access-keys/list"
 API_V2_ACCESS_KEYS_REVOKE = "/api/v2/switch/{uid}/access-keys/revoke"
+API_V2_ACCESS_KEYS_PAUSE = "/api/v2/switch/{uid}/access-keys/pause"
+API_V2_ACCESS_KEYS_PERMISSIONS = "/api/v2/switch/{uid}/access-keys/permissions"
 API_V2_TOGGLE = "/api/v2/switch/{uid}/toggle"
 
 # WebSocket message types

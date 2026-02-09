@@ -19,6 +19,8 @@ from .const import (
 	API_V2_ACCESS_KEYS_CREATE,
 	API_V2_ACCESS_KEYS_LIST,
 	API_V2_ACCESS_KEYS_REVOKE,
+	API_V2_ACCESS_KEYS_PAUSE,
+	API_V2_ACCESS_KEYS_PERMISSIONS,
 	API_V2_TOGGLE,
 	AUTH_MODE_CRYPTO,
 )
@@ -31,6 +33,8 @@ from .crypto import (
 	build_v2_create_access_key_request,
 	build_v2_list_access_keys_request,
 	build_v2_revoke_access_key_request,
+	build_v2_pause_access_key_request,
+	build_v2_update_access_key_permissions_request,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -336,6 +340,42 @@ class VomeSyncAPIClient:
 
 		req = build_v2_revoke_access_key_request(self.crypto_seed, uid=uid, api_key=api_key, key_id=key_id)
 		endpoint = API_V2_ACCESS_KEYS_REVOKE.format(uid=uid)
+		await self._make_request("POST", endpoint, req, require_auth=False)
+		return True
+
+	async def pause_v2_access_key(self, uid: str, key_id: str, paused: bool) -> bool:
+		"""Pause or unpause a delegated v2 access key (signed by owner key)."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode is not enabled for this client")
+		if not isinstance(uid, str) or not uid:
+			raise VomeSyncAPIError("UID required")
+		if not isinstance(key_id, str) or not key_id:
+			raise VomeSyncAPIError("Key ID required")
+
+		req = build_v2_pause_access_key_request(
+			self.crypto_seed, uid=uid, key_id=key_id, paused=paused
+		)
+		endpoint = API_V2_ACCESS_KEYS_PAUSE.format(uid=uid)
+		await self._make_request("POST", endpoint, req, require_auth=False)
+		return True
+
+	async def update_v2_access_key_permissions(
+		self, uid: str, key_id: str, permissions: list[str]
+	) -> bool:
+		"""Update permissions on a delegated v2 access key (signed by owner key)."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode is not enabled for this client")
+		if not isinstance(uid, str) or not uid:
+			raise VomeSyncAPIError("UID required")
+		if not isinstance(key_id, str) or not key_id:
+			raise VomeSyncAPIError("Key ID required")
+		if not isinstance(permissions, list) or not permissions:
+			raise VomeSyncAPIError("Permissions list required")
+
+		req = build_v2_update_access_key_permissions_request(
+			self.crypto_seed, uid=uid, key_id=key_id, permissions=permissions
+		)
+		endpoint = API_V2_ACCESS_KEYS_PERMISSIONS.format(uid=uid)
 		await self._make_request("POST", endpoint, req, require_auth=False)
 		return True
 

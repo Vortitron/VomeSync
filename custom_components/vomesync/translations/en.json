@@ -5,7 +5,7 @@
 				"title": "Set up VomeSync",
 				"description": "VomeSync uses **keypair authentication** with a locally stored signing key.\n\nUse **Generate new user key** to create a fresh signing key, or untick to paste an existing one after submit. After setup, back up the signing key from **More → Backup signing key**.\n\n⚠️ Anyone with the UID can view switch state and activity in Public mode.",
 				"data": {
-					"uid": "Switch UID (optional)",
+					"uid": "Switch UID or uid/key (optional)",
 					"generate_new_key": "Generate new user key",
 					"use_default_urls": "Default URLs (sync.vome.io)",
 					"server_url": "Server URL",
@@ -111,9 +111,9 @@
 			},
 			"subscribe_switch": {
 				"title": "Subscribe to a switch",
-				"description": "Enter a switch UID to subscribe to. The name will be fetched automatically, and you can rename the entity afterwards in Home Assistant.\n\nYou can find public UIDs at sync.vome.io.",
+				"description": "Enter a switch UID, or paste a **uid/key** composite (e.g. `vs_abc123/your-access-key`). The name will be fetched automatically.\n\nAccess keys enable toggling. Find public switches at sync.vome.io.",
 				"data": {
-					"uid": "Switch UID",
+					"uid": "Switch UID (or uid/key)",
 					"access_key": "Access key (optional, enables toggling)"
 				}
 			},
@@ -148,12 +148,31 @@
 				}
 			},
 			"access_keys": {
-				"title": "Access keys",
-				"description": "Create and manage delegated access keys for this v2 switch.",
-				"menu_options": {
-					"create_access_key_v2": "➕ Create access key",
-					"list_access_keys_v2": "📋 List access keys",
-					"revoke_access_key_v2": "🗑️ Revoke access key"
+				"title": "Access keys ({count})",
+				"description": "Select an access key to view details, or create a new one.",
+				"data": {
+					"selected_key": "Access key"
+				}
+			},
+			"access_key_detail": {
+				"title": "Access key details",
+				"description": "{info}",
+				"data": {
+					"action": "Action"
+				}
+			},
+			"access_key_pause": {
+				"title": "Confirm {action}",
+				"description": "Are you sure you want to {action} access key **{key_name}** ({key_hint}…)?",
+				"data": {
+					"confirm": "Confirm"
+				}
+			},
+			"access_key_permissions": {
+				"title": "Update permissions",
+				"description": "Change permissions for **{key_name}** ({key_hint}…).",
+				"data": {
+					"permissions": "Permissions"
 				}
 			},
 			"create_access_key_v2": {
@@ -168,18 +187,15 @@
 				"title": "Access key created",
 				"description": "{info}",
 				"data": {
-					"api_key": "Access key (copy and save)"
+					"api_key": "Access key",
+					"api_key_with_uid": "Access key with UID (uid/key format)"
 				}
-			},
-			"list_access_keys_v2": {
-				"title": "Access keys",
-				"description": "{info}"
 			},
 			"revoke_access_key_v2": {
 				"title": "Revoke access key",
-				"description": "Select an access key to revoke. This cannot be undone.",
+				"description": "Permanently revoke **{key_name}** ({key_hint}…)? This cannot be undone.",
 				"data": {
-					"api_key": "Access key ID"
+					"confirm": "Confirm revocation"
 				}
 			},
 			"revoke_access_key_v2_success": {
@@ -313,6 +329,9 @@
 			"backup_required": "Please confirm you have backed up your signing key.",
 			"access_key_create_failed": "Failed to create access key. Check connectivity and try again.",
 			"access_key_revoke_failed": "Failed to revoke access key. Check connectivity and try again.",
+			"access_key_pause_failed": "Failed to pause/unpause access key. Check connectivity and try again.",
+			"access_key_permissions_failed": "Failed to update access key permissions. Check connectivity and try again.",
+			"access_key_permissions_empty": "At least one permission must be selected.",
 			"subscribe_failed": "Failed to subscribe to switch.",
 			"subscription_limit_reached": "Subscription limit reached for the free tier.",
 			"connect_failed": "Failed to create session token. Check server URL/key and try again.",
@@ -323,7 +342,7 @@
 		"abort": {
 			"no_switches": "No switches to manage. Create or subscribe to switches first.",
 			"not_owner": "Only switch owners can edit settings.",
-			"not_v2_switch": "This action is only available for v2 (crypto) switches.",
+			"not_v2_switch": "This action is only available for crypto-authenticated switches.",
 			"crypto_required": "This action requires crypto mode to be enabled for this integration.",
 			"no_access_keys": "No access keys exist for this switch.",
 			"no_linkable_entities": "No linkable entities found. Add switches, lights, or other controllable entities first.",

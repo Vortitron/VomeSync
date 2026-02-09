@@ -12,11 +12,19 @@ const redactFormat = winston.format((info) => {
 	}
 });
 
+const consoleFormat = winston.format.printf(({ level, message, timestamp: ts, stack, ...rest }) => {
+	const meta = Object.keys(rest).filter(k => k !== 'service').length > 0
+		? ' ' + JSON.stringify(Object.fromEntries(Object.entries(rest).filter(([k]) => k !== 'service')))
+		: '';
+	const msg = stack || message;
+	return `${ts} ${level}: ${msg}${meta}`;
+});
+
 const logger = winston.createLogger({
 	level: config.logging.level,
 	format: winston.format.combine(
 		redactFormat(),
-		winston.format.timestamp(),
+		winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
 		winston.format.errors({ stack: true }),
 		winston.format.json()
 	),
@@ -25,8 +33,9 @@ const logger = winston.createLogger({
 		new winston.transports.Console({
 			format: winston.format.combine(
 				redactFormat(),
+				winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
 				winston.format.colorize(),
-				winston.format.simple()
+				consoleFormat
 			)
 		})
 	]

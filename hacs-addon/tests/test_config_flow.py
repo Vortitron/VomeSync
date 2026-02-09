@@ -27,9 +27,11 @@ from custom_components.vomesync.const import (
 	CONF_ACCESS_KEY,
 	CONF_SWITCH_ADVANCED,
 	CONF_SHOW_SIGNING_KEY_AFTER,
+	CONF_PERSONAL_KEY,
 	DOMAIN,
 	FREE_TIER_MAX_SUBSCRIPTIONS,
 )
+from flow_test_framework import MockHASSFactory
 
 
 @pytest.mark.asyncio
@@ -490,13 +492,17 @@ async def test_options_flow_manage_switch_action_includes_v2_access_keys(hass, c
 
 @pytest.mark.asyncio
 async def test_options_flow_access_keys_menu(hass, config_entry):
-	"""Access-keys menu should be available for owned v2 switches in crypto mode."""
+	"""Access-keys step should list existing keys and offer create option."""
 	config_entry.data = {
 		**(config_entry.data or {}),
 		"auth_mode": "crypto",
 		"crypto_seed": "test-seed",
 	}
 	mock_coordinator = MagicMock()
+	mock_coordinator.list_v2_access_keys = AsyncMock(return_value={
+		"keys": [{"keyId": "a" * 64, "name": "Friend", "permissions": ["toggle"], "paused": False}],
+		"count": 1
+	})
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
 
 	flow = VomeSyncOptionsFlow(config_entry)
@@ -507,11 +513,11 @@ async def test_options_flow_access_keys_menu(hass, config_entry):
 	}
 
 	result = await flow.async_step_access_keys(None)
-	assert result["type"] == FlowResultType.MENU
+	assert result["type"] == FlowResultType.FORM
 	assert result["step_id"] == "access_keys"
-	assert "create_access_key_v2" in result["menu_options"]
-	assert "list_access_keys_v2" in result["menu_options"]
-	assert "revoke_access_key_v2" in result["menu_options"]
+	# The dropdown should contain the key and a create option
+	schema_keys = list(result["data_schema"].schema.keys())
+	assert any("selected_key" in str(k) for k in schema_keys)
 
 
 @pytest.mark.asyncio
@@ -644,8 +650,8 @@ async def test_options_flow_create_access_key_v2(hass, config_entry):
 
 
 @pytest.mark.asyncio
-async def test_options_flow_list_access_keys_v2(hass, config_entry):
-	"""Listing v2 access keys should show the keys in the description."""
+async def test_options_flow_access_key_detail(hass, config_entry):
+	"""Selecting a key from the list should show its detail page with actions."""
 	config_entry.data = {
 		**(config_entry.data or {}),
 		"auth_mode": "crypto",
@@ -653,7 +659,7 @@ async def test_options_flow_list_access_keys_v2(hass, config_entry):
 	}
 	mock_coordinator = MagicMock()
 	mock_coordinator.list_v2_access_keys = AsyncMock(return_value={
-		"keys": [{"keyId": "a" * 64, "name": "Friend", "permissions": ["toggle"]}],
+		"keys": [{"keyId": "a" * 64, "name": "Friend", "permissions": ["toggle"], "paused": False, "created": 1700000000000, "lastUsed": 1700001000000}],
 		"count": 1
 	})
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
@@ -663,12 +669,14 @@ async def test_options_flow_list_access_keys_v2(hass, config_entry):
 	flow._step_data = {
 		"selected_uid": "vs_test_uid",
 		"is_owner": True,
+		"selected_key_id": "a" * 64,
 	}
 
-	result = await flow.async_step_list_access_keys_v2(None)
+	result = await flow.async_step_access_key_detail(None)
 	assert result["type"] == FlowResultType.FORM
-	assert result["step_id"] == "list_access_keys_v2"
-	assert "aaaaaaaa..." in result["description_placeholders"]["info"]
+	assert result["step_id"] == "access_key_detail"
+	assert "Friend" in result["description_placeholders"]["info"]
+	assert "Active" in result["description_placeholders"]["info"]
 
 
 @pytest.mark.asyncio
@@ -679,9 +687,10 @@ async def test_options_flow_revoke_access_key_v2(hass, config_entry):
 		"auth_mode": "crypto",
 		"crypto_seed": "test-seed",
 	}
+	key_id = "a" * 64
 	mock_coordinator = MagicMock()
 	mock_coordinator.list_v2_access_keys = AsyncMock(return_value={
-		"keys": [{"keyId": "a" * 64, "name": "Friend", "permissions": ["toggle"]}],
+		"keys": [{"keyId": key_id, "name": "Friend", "permissions": ["toggle"], "paused": False}],
 		"count": 1
 	})
 	mock_coordinator.revoke_v2_access_key = AsyncMock(return_value=True)
@@ -692,12 +701,260 @@ async def test_options_flow_revoke_access_key_v2(hass, config_entry):
 	flow._step_data = {
 		"selected_uid": "vs_test_uid",
 		"is_owner": True,
+		"selected_key_id": key_id,
 	}
 
-	result = await flow.async_step_revoke_access_key_v2({"api_key": "a" * 64})
+	result = await flow.async_step_revoke_access_key_v2({"confirm": True})
 	assert result["type"] == FlowResultType.FORM
 	assert result["step_id"] == "revoke_access_key_v2_success"
-	mock_coordinator.revoke_v2_access_key.assert_called_once_with("vs_test_uid", "a" * 64)
+	mock_coordinator.revoke_v2_access_key.assert_called_once_with("vs_test_uid", key_id)
+
+
+@pytest.mark.asyncio
+async def test_options_flow_subscribe_composite_uid_key(hass, config_entry):
+	"""Subscribe with a uid/key composite should parse and pass both."""
+	mock_coordinator = MagicMock()
+	mock_coordinator.subscribe_to_switch = AsyncMock(return_value=True)
+	mock_coordinator.subscriptions = {}
+
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+	hass.config_entries = MagicMock()
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_subscribe_switch({
+		CONF_SWITCH_UID: "vs_abc123/secret-key-456",
+		CONF_ACCESS_KEY: "",
+	})
+
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+	mock_coordinator.subscribe_to_switch.assert_called_once_with(
+		"vs_abc123", access_key="secret-key-456"
+	)
+
+
+@pytest.mark.asyncio
+async def test_options_flow_subscribe_composite_explicit_key_wins(hass, config_entry):
+	"""When explicit access_key field is filled, it should override composite key."""
+	mock_coordinator = MagicMock()
+	mock_coordinator.subscribe_to_switch = AsyncMock(return_value=True)
+	mock_coordinator.subscriptions = {}
+
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+	hass.config_entries = MagicMock()
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	# Composite has a key, but explicit field also has one – composite wins
+	# because the code does: composite_key or explicit_key
+	result = await flow.async_step_subscribe_switch({
+		CONF_SWITCH_UID: "vs_abc123/composite-key",
+		CONF_ACCESS_KEY: "explicit-key",
+	})
+
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+	mock_coordinator.subscribe_to_switch.assert_called_once_with(
+		"vs_abc123", access_key="composite-key"
+	)
+
+
+@pytest.mark.asyncio
+async def test_config_flow_composite_uid_key_initial_setup(hass):
+	"""Test initial setup with a uid/key composite stores both uid and access key."""
+	flow = VomeSyncConfigFlow()
+	flow.hass = hass
+
+	with patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.get_switch_status",
+		new=AsyncMock(return_value={"uid": "vs_test123"}),
+	), patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.close",
+		new=AsyncMock(),
+	):
+		result = await flow.async_step_user({
+			CONF_USE_DEFAULT_URLS: False,
+			CONF_GENERATE_NEW_KEY: True,
+			CONF_SERVER_URL: "https://test.com",
+			CONF_SWITCH_UID: "vs_test123/my-access-key",
+		})
+
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+	assert result["data"][CONF_SWITCH_UID] == "vs_test123"
+	assert result["data"]["initial_access_key"] == "my-access-key"
+
+
+@pytest.mark.asyncio
+async def test_config_flow_plain_uid_no_access_key(hass):
+	"""Test initial setup with plain UID does not set access key."""
+	flow = VomeSyncConfigFlow()
+	flow.hass = hass
+
+	with patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.get_switch_status",
+		new=AsyncMock(return_value={"uid": "vs_test123"}),
+	), patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.close",
+		new=AsyncMock(),
+	):
+		result = await flow.async_step_user({
+			CONF_USE_DEFAULT_URLS: False,
+			CONF_GENERATE_NEW_KEY: True,
+			CONF_SERVER_URL: "https://test.com",
+			CONF_SWITCH_UID: "vs_test123",
+		})
+
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+	assert result["data"][CONF_SWITCH_UID] == "vs_test123"
+	assert "initial_access_key" not in result["data"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_pause_access_key(hass, config_entry):
+	"""Pausing an access key should call coordinator.pause_v2_access_key."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+	key_id = "b" * 64
+	mock_coordinator = MagicMock()
+	mock_coordinator.list_v2_access_keys = AsyncMock(return_value={
+		"keys": [{"keyId": key_id, "name": "PauseMe", "permissions": ["toggle"], "paused": False, "created": 1700000000000, "lastUsed": None}],
+		"count": 1
+	})
+	mock_coordinator.pause_v2_access_key = AsyncMock(return_value=True)
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "vs_test_uid",
+		"is_owner": True,
+		"selected_key_id": key_id,
+	}
+
+	# Show form first (should show Pause since paused=False)
+	result = await flow.async_step_access_key_pause(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "access_key_pause"
+	assert result["description_placeholders"]["action"].lower() == "pause"
+
+	# Confirm pause
+	result = await flow.async_step_access_key_pause({"confirm": True})
+	# Should return to detail view on success
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "access_key_detail"
+	mock_coordinator.pause_v2_access_key.assert_called_once_with("vs_test_uid", key_id, True)
+
+
+@pytest.mark.asyncio
+async def test_options_flow_unpause_access_key(hass, config_entry):
+	"""Unpausing a paused access key should call coordinator with paused=False."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+	key_id = "c" * 64
+	mock_coordinator = MagicMock()
+	mock_coordinator.list_v2_access_keys = AsyncMock(return_value={
+		"keys": [{"keyId": key_id, "name": "UnpauseMe", "permissions": ["toggle"], "paused": True, "created": 1700000000000, "lastUsed": None}],
+		"count": 1
+	})
+	mock_coordinator.pause_v2_access_key = AsyncMock(return_value=True)
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "vs_test_uid",
+		"is_owner": True,
+		"selected_key_id": key_id,
+	}
+
+	# Show form first (should show Unpause since paused=True)
+	result = await flow.async_step_access_key_pause(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["description_placeholders"]["action"].lower() == "unpause"
+
+	# Confirm unpause
+	result = await flow.async_step_access_key_pause({"confirm": True})
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "access_key_detail"
+	mock_coordinator.pause_v2_access_key.assert_called_once_with("vs_test_uid", key_id, False)
+
+
+@pytest.mark.asyncio
+async def test_options_flow_update_access_key_permissions(hass, config_entry):
+	"""Updating access key permissions should call coordinator."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+	key_id = "d" * 64
+	mock_coordinator = MagicMock()
+	mock_coordinator.list_v2_access_keys = AsyncMock(return_value={
+		"keys": [{"keyId": key_id, "name": "PermKey", "permissions": ["toggle"], "paused": False, "created": 1700000000000, "lastUsed": None}],
+		"count": 1
+	})
+	mock_coordinator.update_v2_access_key_permissions = AsyncMock(return_value=True)
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "vs_test_uid",
+		"is_owner": True,
+		"selected_key_id": key_id,
+	}
+
+	# Show form first (should show current permissions)
+	result = await flow.async_step_access_key_permissions(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "access_key_permissions"
+
+	# Submit new permissions
+	result = await flow.async_step_access_key_permissions({"permissions": ["toggle", "comment"]})
+	# Should return to detail view on success
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "access_key_detail"
+	mock_coordinator.update_v2_access_key_permissions.assert_called_once_with(
+		"vs_test_uid", key_id, ["toggle", "comment"]
+	)
+
+
+@pytest.mark.asyncio
+async def test_options_flow_update_permissions_empty_fails(hass, config_entry):
+	"""Submitting empty permissions should show an error."""
+	config_entry.data = {
+		**(config_entry.data or {}),
+		"auth_mode": "crypto",
+		"crypto_seed": "test-seed",
+	}
+	key_id = "e" * 64
+	mock_coordinator = MagicMock()
+	mock_coordinator.list_v2_access_keys = AsyncMock(return_value={
+		"keys": [{"keyId": key_id, "name": "PermKey", "permissions": ["toggle"], "paused": False, "created": 1700000000000, "lastUsed": None}],
+		"count": 1
+	})
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "vs_test_uid",
+		"is_owner": True,
+		"selected_key_id": key_id,
+	}
+
+	# Submit empty permissions
+	result = await flow.async_step_access_key_permissions({"permissions": []})
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "access_key_permissions"
+	assert result["errors"]["base"] == "access_key_permissions_empty"
 
 
 @pytest.mark.asyncio
@@ -863,3 +1120,615 @@ async def test_options_flow_edit_connection_urls(hass, config_entry):
 
 	assert result["type"] == FlowResultType.CREATE_ENTRY
 	hass.config_entries.async_update_entry.assert_called_once()
+
+
+# ============================================================================
+# Tests for previously untested steps
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_config_flow_generate_key_aborts(hass):
+	"""generate_key step is deprecated and should abort."""
+	flow = VomeSyncConfigFlow()
+	flow.hass = hass
+
+	result = await flow.async_step_generate_key(None)
+	assert result["type"] == FlowResultType.ABORT
+	assert result["reason"] == "not_supported"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_init_shows_menu(hass, config_entry):
+	"""Init step should show the main menu."""
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_init(None)
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "init"
+	assert "create_switch" in result["menu_options"]
+	assert "subscribe_switch" in result["menu_options"]
+	assert "manage_switches" in result["menu_options"]
+	assert "more" in result["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_more_shows_submenu(hass, config_entry):
+	"""More step should show secondary menu options."""
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_more(None)
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "more"
+	assert "backup_signing_key" in result["menu_options"]
+	assert "import_switches" in result["menu_options"]
+	assert "edit_connection" in result["menu_options"]
+	assert "back" in result["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_back_returns_to_init(hass, config_entry):
+	"""Back step should return to the init menu."""
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_back(None)
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "init"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_backup_signing_key_shows_key(hass):
+	"""Backup signing key step should display the key in description."""
+	config_entry = MockHASSFactory.create_crypto_config_entry(crypto_seed="my-secret-seed")
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_backup_signing_key(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "backup_signing_key"
+	assert "my-secret-seed" in result["description_placeholders"]["info"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_backup_signing_key_submit_creates_entry(hass):
+	"""Submitting backup signing key step should create entry."""
+	config_entry = MockHASSFactory.create_crypto_config_entry()
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_backup_signing_key({})
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
+@pytest.mark.asyncio
+async def test_options_flow_backup_signing_key_aborts_without_crypto(hass, config_entry):
+	"""Backup signing key should abort if not in crypto mode."""
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_backup_signing_key(None)
+	assert result["type"] == FlowResultType.ABORT
+	assert result["reason"] == "crypto_required"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_confirm_backup_signing_key_shows_menu(hass):
+	"""Confirm backup step should show a menu."""
+	config_entry = MockHASSFactory.create_crypto_config_entry()
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_confirm_backup_signing_key(None)
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "confirm_backup_signing_key"
+	assert "reveal_signing_key" in result["menu_options"]
+	assert "confirm_backup_signing_key_done" in result["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_confirm_backup_done_sets_flag(hass):
+	"""Confirm backup done should set the flag and proceed to create switch."""
+	config_entry = MockHASSFactory.create_crypto_config_entry()
+	hass.config_entries = MagicMock()
+	def _update_entry(entry, options=None):
+		entry.options = options or {}
+	hass.config_entries.async_update_entry = MagicMock(side_effect=_update_entry)
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_confirm_backup_signing_key_done(None)
+	# Should proceed to create_switch form after setting flag
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "create_switch"
+	assert config_entry.options.get("signing_key_backup_confirmed") is True
+
+
+@pytest.mark.asyncio
+async def test_options_flow_connect_website_shows_login_link(hass, config_entry):
+	"""Connect website should create a session token and show login URL."""
+	with patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.create_session_token",
+		new=AsyncMock(return_value={"token": "abc123"}),
+	), patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.close",
+		new=AsyncMock(),
+	):
+		flow = VomeSyncOptionsFlow(config_entry)
+		flow.hass = hass
+
+		result = await flow.async_step_connect_website(None)
+		assert result["type"] == FlowResultType.FORM
+		assert result["step_id"] == "connect_website"
+		assert "abc123" in result["description_placeholders"]["session_token"]
+		assert "login" in result["description_placeholders"]["login_url"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_connect_website_submit_creates_entry(hass, config_entry):
+	"""Submitting connect website should create entry."""
+	with patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.create_session_token",
+		new=AsyncMock(return_value={"token": "abc123"}),
+	), patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.close",
+		new=AsyncMock(),
+	):
+		flow = VomeSyncOptionsFlow(config_entry)
+		flow.hass = hass
+
+		result = await flow.async_step_connect_website({"dummy": True})
+		assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
+@pytest.mark.asyncio
+async def test_options_flow_manage_api_keys_shows_form(hass, config_entry):
+	"""Manage API keys should show a form with create option."""
+	with patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.get_api_keys",
+		new=AsyncMock(return_value=[]),
+	), patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.close",
+		new=AsyncMock(),
+	):
+		flow = VomeSyncOptionsFlow(config_entry)
+		flow.hass = hass
+
+		result = await flow.async_step_manage_api_keys(None)
+		assert result["type"] == FlowResultType.FORM
+		assert result["step_id"] == "manage_api_keys"
+		assert result["description_placeholders"]["api_key_count"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_create_api_key_shows_form(hass, config_entry):
+	"""Create API key should show a label form."""
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_create_api_key(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "create_api_key"
+	assert "label" in result["data_schema"].schema
+
+
+@pytest.mark.asyncio
+async def test_options_flow_create_api_key_submit_shows_success(hass, config_entry):
+	"""Submitting create API key should show success form with new key."""
+	with patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.create_api_key",
+		new=AsyncMock(return_value={"apiKey": "new-key-abc"}),
+	), patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.close",
+		new=AsyncMock(),
+	):
+		flow = VomeSyncOptionsFlow(config_entry)
+		flow.hass = hass
+
+		result = await flow.async_step_create_api_key({"label": "Test Key"})
+		assert result["type"] == FlowResultType.FORM
+		assert result["step_id"] == "create_api_key_success"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_create_api_key_success_returns_to_manage(hass, config_entry):
+	"""Create API key success step should return to manage API keys on submit."""
+	with patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.get_api_keys",
+		new=AsyncMock(return_value=[]),
+	), patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.close",
+		new=AsyncMock(),
+	):
+		flow = VomeSyncOptionsFlow(config_entry)
+		flow.hass = hass
+		flow._step_data = {"new_api_key": "key-123"}
+
+		result = await flow.async_step_create_api_key_success({"api_key": "key-123"})
+		assert result["type"] == FlowResultType.FORM
+		assert result["step_id"] == "manage_api_keys"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_delete_api_key_shows_confirm(hass, config_entry):
+	"""Delete API key should show confirmation form."""
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {"delete_key": "key-to-delete"}
+
+	result = await flow.async_step_delete_api_key(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "delete_api_key"
+	assert "confirm" in result["data_schema"].schema
+
+
+@pytest.mark.asyncio
+async def test_options_flow_delete_api_key_confirm(hass, config_entry):
+	"""Confirming delete API key should call the API and return to manage."""
+	with patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.delete_api_key",
+		new=AsyncMock(return_value=True),
+	), patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.get_api_keys",
+		new=AsyncMock(return_value=[]),
+	), patch(
+		"custom_components.vomesync.config_flow.VomeSyncAPIClient.close",
+		new=AsyncMock(),
+	):
+		flow = VomeSyncOptionsFlow(config_entry)
+		flow.hass = hass
+		flow._step_data = {"delete_key": "key-to-delete"}
+
+		result = await flow.async_step_delete_api_key({"confirm": True})
+		assert result["type"] == FlowResultType.FORM
+		assert result["step_id"] == "manage_api_keys"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_view_switch_owner(hass, config_entry):
+	"""View switch step for an owner should show webhook URL and details."""
+	config_entry.options = {
+		"imported_switches": {
+			"uid-view": {"name": "My Switch", "is_owner": True, "cached_data": {}}
+		}
+	}
+
+	mock_coordinator = MagicMock()
+	mock_coordinator.switches = {
+		"uid-view": {
+			"name": "My Switch",
+			"description": "A test switch",
+			"location": "Test City",
+			"category": "Test",
+			"lastToggled": 1640995200000,
+			"createdAt": 1640995100000,
+			"publicize": False,
+		}
+	}
+	mock_coordinator.subscriptions = {}
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	mock_entity_reg = MagicMock()
+	mock_entity_reg.entities = MagicMock()
+	mock_entity_reg.entities.values.return_value = []
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "uid-view",
+		"selected_name": "My Switch",
+		"is_owner": True,
+	}
+
+	with patch("custom_components.vomesync.config_flow.er.async_get", return_value=mock_entity_reg):
+		result = await flow.async_step_view_switch(None)
+
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "view_switch"
+	assert "My Switch" in result["description_placeholders"]["info"]
+	assert "(Owner)" in result["description_placeholders"]["info"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_view_switch_subscriber(hass, config_entry):
+	"""View switch step for a subscriber should show access key field."""
+	config_entry.options = {
+		"imported_switches": {
+			"uid-sub": {"name": "Sub Switch", "is_owner": False, "cached_data": {}}
+		}
+	}
+
+	mock_coordinator = MagicMock()
+	mock_coordinator.switches = {}
+	mock_coordinator.subscriptions = {
+		"uid-sub": {"name": "Sub Switch", "lastToggled": None, "createdAt": None}
+	}
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	mock_entity_reg = MagicMock()
+	mock_entity_reg.entities = MagicMock()
+	mock_entity_reg.entities.values.return_value = []
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "uid-sub",
+		"selected_name": "Sub Switch",
+		"is_owner": False,
+	}
+
+	with patch("custom_components.vomesync.config_flow.er.async_get", return_value=mock_entity_reg):
+		result = await flow.async_step_view_switch(None)
+
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "view_switch"
+	assert "(Subscribed)" in result["description_placeholders"]["info"]
+	# Should have access_key field in schema
+	schema_keys = [str(k) for k in result["data_schema"].schema.keys()]
+	assert any("access_key" in k for k in schema_keys)
+
+
+@pytest.mark.asyncio
+async def test_options_flow_view_switch_submit_creates_entry(hass, config_entry):
+	"""Submitting view switch as owner should create entry."""
+	config_entry.options = {
+		"imported_switches": {
+			"uid-view": {"name": "My Switch", "is_owner": True, "cached_data": {}}
+		}
+	}
+	mock_coordinator = MagicMock()
+	mock_coordinator.switches = {"uid-view": {"name": "My Switch"}}
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	mock_entity_reg = MagicMock()
+	mock_entity_reg.entities = MagicMock()
+	mock_entity_reg.entities.values.return_value = []
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "uid-view",
+		"selected_name": "My Switch",
+		"is_owner": True,
+	}
+
+	with patch("custom_components.vomesync.config_flow.er.async_get", return_value=mock_entity_reg):
+		result = await flow.async_step_view_switch({"uid": "uid-view"})
+
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
+@pytest.mark.asyncio
+async def test_options_flow_edit_switch_shows_form(hass, config_entry):
+	"""Edit switch step should show a form with current values."""
+	mock_coordinator = MagicMock()
+	mock_coordinator.switches = {
+		"uid-edit": {
+			"name": "Editable Switch",
+			"description": "Some desc",
+			"location": "City",
+			"category": "Other",
+			"publicize": False,
+			"link": "",
+			"iconUrl": "",
+			"bannerUrl": "",
+		}
+	}
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "uid-edit",
+		"selected_name": "Editable Switch",
+		"is_owner": True,
+	}
+
+	result = await flow.async_step_edit_switch(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "edit_switch"
+	assert CONF_SWITCH_NAME in result["data_schema"].schema
+
+
+@pytest.mark.asyncio
+async def test_options_flow_edit_switch_not_owner_aborts(hass, config_entry):
+	"""Edit switch step should abort if not owner."""
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "uid-edit",
+		"selected_name": "Not My Switch",
+		"is_owner": False,
+	}
+
+	result = await flow.async_step_edit_switch(None)
+	assert result["type"] == FlowResultType.ABORT
+	assert result["reason"] == "not_owner"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_edit_switch_submit_updates(hass, config_entry):
+	"""Submitting edit switch should call update_switch_metadata."""
+	mock_coordinator = MagicMock()
+	mock_coordinator.switches = {
+		"uid-edit": {
+			"name": "Old Name",
+			"description": "",
+			"location": "",
+			"category": "Other",
+			"publicize": False,
+			"link": "",
+			"iconUrl": "",
+			"bannerUrl": "",
+		}
+	}
+	mock_coordinator.update_switch_metadata = AsyncMock(return_value=True)
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+	hass.config_entries = MagicMock()
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	flow._step_data = {
+		"selected_uid": "uid-edit",
+		"selected_name": "Old Name",
+		"is_owner": True,
+	}
+
+	result = await flow.async_step_edit_switch({
+		CONF_SWITCH_NAME: "New Name",
+		"description": "",
+		"location": "",
+		"category": "Other",
+		"publicize": False,
+		CONF_SWITCH_LINK: "",
+		CONF_SWITCH_ICON_URL: "",
+		CONF_SWITCH_BANNER_URL: "",
+		CONF_CAPTCHA_TOKEN: "",
+	})
+
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+	mock_coordinator.update_switch_metadata.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_options_flow_reannounce_shows_form(hass):
+	"""Reannounce step should show confirmation form."""
+	config_entry = MockHASSFactory.create_crypto_config_entry(
+		options={
+			"imported_switches": {
+				"vs_test1": {"name": "Switch 1", "is_owner": True, "crypto_index": 0, "cached_data": {}}
+			}
+		}
+	)
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_reannounce_owned_switches(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "reannounce_owned_switches"
+	assert "confirm" in result["data_schema"].schema
+	assert "1" in result["description_placeholders"]["info"]  # owned count
+
+
+@pytest.mark.asyncio
+async def test_options_flow_reannounce_confirm_calls_coordinator(hass):
+	"""Confirming reannounce should call coordinator."""
+	config_entry = MockHASSFactory.create_crypto_config_entry(
+		options={
+			"imported_switches": {
+				"vs_test1": {"name": "Switch 1", "is_owner": True, "crypto_index": 0, "cached_data": {}}
+			}
+		}
+	)
+	mock_coordinator = MockHASSFactory.create_coordinator()
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_reannounce_owned_switches({"confirm": True})
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "reannounce_owned_switches_result"
+	mock_coordinator.reannounce_owned_switches.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_options_flow_reannounce_decline_creates_entry(hass):
+	"""Declining reannounce should create entry without action."""
+	config_entry = MockHASSFactory.create_crypto_config_entry()
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_reannounce_owned_switches({"confirm": False})
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
+@pytest.mark.asyncio
+async def test_options_flow_reannounce_result_creates_entry(hass):
+	"""Reannounce result step should create entry."""
+	config_entry = MockHASSFactory.create_crypto_config_entry()
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_reannounce_owned_switches_result({})
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
+@pytest.mark.asyncio
+async def test_options_flow_cleanup_orphaned_devices_no_orphans(hass, config_entry):
+	"""Cleanup should abort if no orphaned devices."""
+	mock_device_reg = MagicMock()
+	mock_entity_reg = MagicMock()
+
+	with patch("homeassistant.helpers.device_registry.async_get", return_value=mock_device_reg), \
+		 patch("homeassistant.helpers.entity_registry.async_get", return_value=mock_entity_reg), \
+		 patch("homeassistant.helpers.device_registry.async_entries_for_config_entry", return_value=[]):
+		flow = VomeSyncOptionsFlow(config_entry)
+		flow.hass = hass
+
+		result = await flow.async_step_cleanup_orphaned_devices(None)
+
+	assert result["type"] == FlowResultType.ABORT
+	assert result["reason"] == "no_orphaned_devices"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_cleanup_orphaned_devices_shows_form(hass, config_entry):
+	"""Cleanup should show form with orphaned devices."""
+	mock_device_reg = MagicMock()
+	mock_entity_reg = MagicMock()
+
+	# Create an orphan device (no entities)
+	orphan_dev = MagicMock()
+	orphan_dev.id = "dev-orphan-1"
+	orphan_dev.name = "Orphan Device"
+	orphan_dev.name_by_user = None
+	orphan_dev.identifiers = {(DOMAIN, "vs_orphan_uid")}
+
+	with patch("homeassistant.helpers.device_registry.async_get", return_value=mock_device_reg), \
+		 patch("homeassistant.helpers.entity_registry.async_get", return_value=mock_entity_reg), \
+		 patch("homeassistant.helpers.device_registry.async_entries_for_config_entry", return_value=[orphan_dev]), \
+		 patch("homeassistant.helpers.entity_registry.async_entries_for_device", return_value=[]):
+		flow = VomeSyncOptionsFlow(config_entry)
+		flow.hass = hass
+
+		result = await flow.async_step_cleanup_orphaned_devices(None)
+
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "cleanup_orphaned_devices"
+	assert "devices" in result["data_schema"].schema
+
+
+@pytest.mark.asyncio
+async def test_options_flow_cleanup_orphaned_devices_removes_selected(hass, config_entry):
+	"""Selecting and confirming should remove the orphaned device."""
+	config_entry.options = {
+		"imported_switches": {
+			"vs_orphan_uid": {"name": "Orphan", "is_owner": True, "cached_data": {}}
+		}
+	}
+	hass.config_entries = MagicMock()
+
+	mock_device_reg = MagicMock()
+	mock_entity_reg = MagicMock()
+
+	orphan_dev = MagicMock()
+	orphan_dev.id = "dev-orphan-1"
+	orphan_dev.name = "Orphan Device"
+	orphan_dev.name_by_user = None
+	orphan_dev.identifiers = {(DOMAIN, "vs_orphan_uid")}
+
+	with patch("homeassistant.helpers.device_registry.async_get", return_value=mock_device_reg), \
+		 patch("homeassistant.helpers.entity_registry.async_get", return_value=mock_entity_reg), \
+		 patch("homeassistant.helpers.device_registry.async_entries_for_config_entry", return_value=[orphan_dev]), \
+		 patch("homeassistant.helpers.entity_registry.async_entries_for_device", return_value=[]):
+		flow = VomeSyncOptionsFlow(config_entry)
+		flow.hass = hass
+
+		result = await flow.async_step_cleanup_orphaned_devices({"devices": ["dev-orphan-1"]})
+
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+	mock_device_reg.async_remove_device.assert_called_once_with("dev-orphan-1")

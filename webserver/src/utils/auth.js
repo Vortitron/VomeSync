@@ -21,6 +21,16 @@ class AuthManager {
 			const decoded = jwt.verify(token, config.security.jwtSecret);
 			return decoded;
 		} catch (error) {
+			// Dual-secret rotation: try the old secret before giving up
+			if (config.security.jwtSecretOld) {
+				try {
+					const decoded = jwt.verify(token, config.security.jwtSecretOld);
+					logger.info('JWT verified with old secret (rotation in progress)');
+					return decoded;
+				} catch (_rotationErr) {
+					// Both secrets failed
+				}
+			}
 			logger.warn('JWT verification failed:', error.message);
 			return null;
 		}
@@ -233,7 +243,7 @@ class AuthManager {
 					return res.status(403).json({ success: false, error: 'Owner blocked' });
 				}
 				if (switchData.authVersion !== 2) {
-					return res.status(400).json({ success: false, error: 'Switch is not v2 (crypto) enabled' });
+					return res.status(400).json({ success: false, error: 'Switch is not crypto-authenticated' });
 				}
 				if (switchData.ownerId && keyData.ownerId && switchData.ownerId !== keyData.ownerId) {
 					return res.status(401).json({ success: false, error: 'Unauthorized: API key is not valid for this switch' });
@@ -279,7 +289,10 @@ class AuthManager {
 	}
 
 	// Rate limiting middleware
-	rateLimit(action, limit = null, windowMs = null) {
+	// Options:
+	//   perKey: true  — also rate-limit per bearer API key (for access-key endpoints)
+	//   keyLimit:      — per-key limit (defaults to Math.ceil(limit / 4))
+	rateLimit(action, limit = null, windowMs = null, options = {}) {
 		// Disable rate limiting during automated tests
 		if (process.env.NODE_ENV === 'test') {
 			return (_req, res, next) => {
@@ -312,6 +325,23 @@ class AuthManager {
 					error: 'Rate limit exceeded',
 					retryAfter: Math.ceil((rateLimitResult.resetTime - Date.now()) / 1000)
 				});
+			}
+
+			// Per-key rate limiting for bearer-token endpoints (defence in depth)
+			if (options.perKey) {
+				const apiKey = req.body.apiKey || req.headers['x-api-key'] || req.query.apiKey || '';
+				if (apiKey) {
+					const keyId = redisClient.getApiKeyId(apiKey);
+					const keyLimit = options.keyLimit || Math.ceil(effectiveLimit / 4);
+					const keyResult = await this.checkRateLimit(keyId, `${action}:key`, keyLimit, effectiveWindow);
+					if (!keyResult.allowed) {
+						return res.status(429).json({
+							success: false,
+							error: 'Rate limit exceeded for this key',
+							retryAfter: Math.ceil((keyResult.resetTime - Date.now()) / 1000)
+						});
+					}
+				}
 			}
 
 			next();

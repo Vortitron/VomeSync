@@ -26,9 +26,13 @@ const config = {
 	},
 	security: {
 		jwtSecret: process.env.JWT_SECRET || 'dev-secret-change-in-production',
+		// Previous JWT secret (accepted during rotation window). Leave empty when not rotating.
+		jwtSecretOld: process.env.JWT_SECRET_OLD || '',
 		// Used to derive stable, non-reversible IDs for bearer secrets stored in Redis.
 		// Defaults to JWT_SECRET so existing deployments don't require extra config.
 		keyHashSecret: process.env.KEY_HASH_SECRET || process.env.JWT_SECRET || 'dev-secret-change-in-production',
+		// Previous hash secret (keys derived with old secret are still recognised during rotation).
+		keyHashSecretOld: process.env.KEY_HASH_SECRET_OLD || '',
 		rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 900000, // 15 minutes
 		rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS, 10) || 100,
 		legacyApiEnabled: process.env.LEGACY_API_ENABLED === 'true',
@@ -57,7 +61,9 @@ const config = {
 	limits: {
 		freeTierEnabled: process.env.FREE_TIER_LIMITS_ENABLED !== 'false',
 		freeTierMaxSwitches: parsePositiveInt(process.env.FREE_TIER_MAX_SWITCHES, 8),
-		freeTierMaxPublicSwitches: parsePositiveInt(process.env.FREE_TIER_MAX_PUBLIC_SWITCHES, 4)
+		freeTierMaxPublicSwitches: parsePositiveInt(process.env.FREE_TIER_MAX_PUBLIC_SWITCHES, 4),
+		premiumMaxSwitches: parsePositiveInt(process.env.PREMIUM_MAX_SWITCHES, 50),
+		premiumMaxPublicSwitches: parsePositiveInt(process.env.PREMIUM_MAX_PUBLIC_SWITCHES, 25)
 	}
 };
 

@@ -797,6 +797,36 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			_LOGGER.error("Failed to revoke v2 access key uid=%s: %s", uid, ex)
 			return False
 
+	async def pause_v2_access_key(self, uid: str, key_id: str, paused: bool) -> bool:
+		"""Pause or unpause a delegated v2 access key (owner-only)."""
+		if not self.crypto_enabled:
+			_LOGGER.warning("Cannot pause v2 access key: crypto mode not enabled")
+			return False
+		if not self.is_switch_owner(uid):
+			_LOGGER.warning("Cannot pause v2 access key: not owner (uid=%s)", uid)
+			return False
+		try:
+			return await self.api_client.pause_v2_access_key(uid, key_id, paused)
+		except VomeSyncAPIError as ex:
+			_LOGGER.error("Failed to pause v2 access key uid=%s: %s", uid, ex)
+			return False
+
+	async def update_v2_access_key_permissions(
+		self, uid: str, key_id: str, permissions: list[str]
+	) -> bool:
+		"""Update permissions on a delegated v2 access key (owner-only)."""
+		if not self.crypto_enabled:
+			_LOGGER.warning("Cannot update v2 access key permissions: crypto mode not enabled")
+			return False
+		if not self.is_switch_owner(uid):
+			_LOGGER.warning("Cannot update v2 access key permissions: not owner (uid=%s)", uid)
+			return False
+		try:
+			return await self.api_client.update_v2_access_key_permissions(uid, key_id, permissions)
+		except VomeSyncAPIError as ex:
+			_LOGGER.error("Failed to update v2 access key permissions uid=%s: %s", uid, ex)
+			return False
+
 	async def subscribe_to_switch(self, uid: str, access_key: Optional[str] = None) -> bool:
 		"""Subscribe to an existing switch."""
 		try:

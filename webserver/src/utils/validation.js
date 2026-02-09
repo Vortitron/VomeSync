@@ -160,6 +160,28 @@ const schemas = {
 		return value;
 	}, 'V2 revoke access key validation'),
 
+	v2PauseAccessKey: Joi.object({
+		ownerPubKey: Joi.string().max(120).required(),
+		ts: Joi.number().integer().min(0).required(),
+		nonce: Joi.string().min(8).max(128).required(),
+		sigOwner: Joi.string().max(200).required(),
+		keyId: Joi.string().hex().length(64).required(),
+		paused: Joi.boolean().required()
+	}),
+
+	v2UpdateAccessKeyPermissions: Joi.object({
+		ownerPubKey: Joi.string().max(120).required(),
+		ts: Joi.number().integer().min(0).required(),
+		nonce: Joi.string().min(8).max(128).required(),
+		sigOwner: Joi.string().max(200).required(),
+		keyId: Joi.string().hex().length(64).required(),
+		permissions: Joi.array()
+			.items(Joi.string().valid(...V2_ACCESS_KEY_PERMISSIONS))
+			.min(1)
+			.max(V2_ACCESS_KEY_PERMISSIONS.length)
+			.required()
+	}),
+
 	// V2: Update switch metadata via delegated access key (no signatures)
 	// Intentionally excludes "publicize" to avoid bypassing CAPTCHA requirements.
 	v2UpdateSwitchViaAccessKey: Joi.object({
@@ -200,7 +222,24 @@ const schemas = {
 		link: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
 		iconUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow(''),
 		bannerUrl: Joi.string().uri({ scheme: ['http', 'https'] }).max(MAX_URL_LENGTH).allow('')
-	}).min(1)
+	}).min(1),
+
+	// ── V2: Premium / promo / tier schemas ────────────────────────────────────
+
+	v2RedeemPromo: Joi.object({
+		ownerPubKey: Joi.string().max(200).required(),
+		ts: Joi.number().integer().min(0).required(),
+		nonce: Joi.string().min(8).max(128).required(),
+		sigOwner: Joi.string().max(200).required(),
+		promoCode: Joi.string().min(3).max(64).required()
+	}),
+
+	v2GetOwnerTier: Joi.object({
+		ownerPubKey: Joi.string().max(200).required(),
+		ts: Joi.number().integer().min(0).required(),
+		nonce: Joi.string().min(8).max(128).required(),
+		sigOwner: Joi.string().max(200).required()
+	})
 };
 
 const validateRequest = (schema) => {

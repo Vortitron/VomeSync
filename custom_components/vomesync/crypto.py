@@ -417,6 +417,98 @@ def build_v2_revoke_access_key_request(
 	return req
 
 
+def build_v2_pause_access_key_request(
+	master_seed_b64url: str,
+	uid: str,
+	key_id: str,
+	paused: bool,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	"""Build a signed v2 pause/unpause access key request (signed by owner key)."""
+	if not isinstance(uid, str) or not uid:
+		raise ValueError("uid must be a non-empty string")
+	if not isinstance(key_id, str) or not key_id:
+		raise ValueError("key_id must be a non-empty string")
+
+	owner_pub = owner_pubkey_b64url(master_seed_b64url)
+	if ts is None:
+		import time
+		ts_i = int(time.time() * 1000)
+	else:
+		ts_i = int(ts)
+	nonce_s = nonce or new_nonce()
+
+	payload = {
+		"v": 2,
+		"action": "pause_access_key",
+		"uid": uid,
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"keyId": key_id,
+		"paused": bool(paused),
+	}
+	canon = canonical_json(payload)
+	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
+
+	return {
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"sigOwner": sig_owner,
+		"keyId": key_id,
+		"paused": bool(paused),
+	}
+
+
+def build_v2_update_access_key_permissions_request(
+	master_seed_b64url: str,
+	uid: str,
+	key_id: str,
+	permissions: list[str],
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	"""Build a signed v2 update access key permissions request (signed by owner key)."""
+	if not isinstance(uid, str) or not uid:
+		raise ValueError("uid must be a non-empty string")
+	if not isinstance(key_id, str) or not key_id:
+		raise ValueError("key_id must be a non-empty string")
+	if not isinstance(permissions, list) or not permissions:
+		raise ValueError("permissions must be a non-empty list")
+
+	owner_pub = owner_pubkey_b64url(master_seed_b64url)
+	if ts is None:
+		import time
+		ts_i = int(time.time() * 1000)
+	else:
+		ts_i = int(ts)
+	nonce_s = nonce or new_nonce()
+
+	payload = {
+		"v": 2,
+		"action": "update_access_key_permissions",
+		"uid": uid,
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"keyId": key_id,
+		"permissions": list(permissions),
+	}
+	canon = canonical_json(payload)
+	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
+
+	return {
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"sigOwner": sig_owner,
+		"keyId": key_id,
+		"permissions": list(permissions),
+	}
+
+
 def build_v2_my_switches_request(master_seed_b64url: str, ts: Optional[int] = None, nonce: Optional[str] = None) -> Dict[str, Any]:
 	if ts is None:
 		import time

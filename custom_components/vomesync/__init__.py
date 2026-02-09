@@ -61,7 +61,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	if pending_uid:
 		uid = str(pending_uid).strip()
 		if uid:
-			ok = await coordinator.subscribe_to_switch(uid)
+			initial_access_key = str((entry.data or {}).get("initial_access_key", "") or "").strip()
+			ok = await coordinator.subscribe_to_switch(uid, access_key=initial_access_key or None)
 			if ok:
 				_LOGGER.info("Initial switch subscribed from setup (uid=%s)", uid)
 			else:
@@ -71,6 +72,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 				)
 		new_data = dict(entry.data)
 		new_data.pop(CONF_SWITCH_UID, None)
+		new_data.pop("initial_access_key", None)
 		hass.config_entries.async_update_entry(entry, data=new_data)
 	
 	_register_services(hass)
