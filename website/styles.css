@@ -1718,3 +1718,112 @@ footer {
 		font-size: 2rem;
 	}
 }
+
+/* ── Switch Stats Dialog ──────────────────────────────────────────────── */
+
+.stat-box-clickable {
+	cursor: pointer;
+	transition: border-color 0.2s, background 0.2s;
+}
+
+.stat-box-clickable:hover,
+.stat-box-clickable:focus-visible {
+	border-color: var(--primary);
+	background: rgba(59, 130, 246, 0.08);
+}
+
+.switch-stats-card {
+	width: min(780px, 100%);
+}
+
+.switch-stats-summary {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 0.75rem;
+	margin: 1.25rem 0;
+}
+
+.switch-stats-item {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	padding: 0.75rem 0.5rem;
+	border-radius: var(--radius);
+	background: var(--bg-primary);
+	border: 1px solid var(--border);
+}
+
+.switch-stats-value {
+	font-size: 1.5rem;
+	font-weight: 700;
+	color: var(--text-primary);
+	line-height: 1.2;
+}
+
+.switch-stats-label {
+	font-size: 0.75rem;
+	color: var(--text-muted);
+	margin-top: 0.25rem;
+	text-align: center;
+}
+
+.switch-stats-chart-section {
+	margin-top: 0.5rem;
+}
+
+.switch-stats-chart-title {
+	font-size: 0.95rem;
+	font-weight: 600;
+	color: var(--text-secondary);
+	margin-bottom: 0.35rem;
+}
+
+.switch-stats-chart-legend {
+	display: flex;
+	gap: 1.25rem;
+	margin-bottom: 0.5rem;
+	font-size: 0.8rem;
+	color: var(--text-muted);
+}
+
+.legend-item {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+}
+
+.legend-swatch {
+	display: inline-block;
+	width: 12px;
+	height: 12px;
+	border-radius: 2px;
+}
+
+.legend-swatch-total {
+	background: var(--primary);
+}
+
+.legend-swatch-added {
+	background: #22c55e;
+}
+
+.switch-stats-chart-wrap {
+	width: 100%;
+	overflow-x: auto;
+	border-radius: var(--radius);
+	background: var(--bg-primary);
+	border: 1px solid var(--border);
+	padding: 0.75rem;
+}
+
+.switch-stats-chart-wrap canvas {
+	display: block;
+	width: 100%;
+	height: auto;
+}
+
+@media (max-width: 600px) {
+	.switch-stats-summary {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}

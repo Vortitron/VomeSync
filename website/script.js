@@ -223,6 +223,18 @@ const authDialogKeyInput = document.getElementById('authDialogKey');
 const authDialogLoginBtn = document.getElementById('authDialogLoginBtn');
 const authDialogStatus = document.getElementById('authDialogStatus');
 
+// Switch stats dialog
+const allSwitchesStatBox = document.getElementById('allSwitchesStatBox');
+const allSwitchesCountEl = document.getElementById('allSwitchesCount');
+const switchStatsDialog = document.getElementById('switchStatsDialog');
+const switchStatsBackdrop = document.getElementById('switchStatsBackdrop');
+const switchStatsCloseBtn = document.getElementById('switchStatsClose');
+const statsTotalAllEl = document.getElementById('statsTotalAll');
+const statsTotalPublicEl = document.getElementById('statsTotalPublic');
+const statsAddedTodayEl = document.getElementById('statsAddedToday');
+const statsWsClientsEl = document.getElementById('statsWsClients');
+const switchStatsCanvas = document.getElementById('switchStatsCanvas');
+
 const DEFAULT_HERO_TITLE_HTML = heroTitleEl ? heroTitleEl.innerHTML : '';
 const DEFAULT_HERO_SUBTITLE_TEXT = heroSubtitleEl ? heroSubtitleEl.textContent : '';
 
@@ -1290,6 +1302,20 @@ function setupEventListeners() {
 			closeHaDialog();
 		});
 	}
+
+	// Switch stats dialog handlers
+	if (allSwitchesStatBox) {
+		allSwitchesStatBox.addEventListener('click', () => openSwitchStatsDialog());
+		allSwitchesStatBox.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				openSwitchStatsDialog();
+			}
+		});
+	}
+	if (switchStatsCloseBtn) switchStatsCloseBtn.addEventListener('click', closeSwitchStatsDialog);
+	if (switchStatsBackdrop) switchStatsBackdrop.addEventListener('click', closeSwitchStatsDialog);
+
 	window.addEventListener('keydown', (e) => {
 		if (e.key === 'Escape') {
 			closeQuickView();
@@ -1297,6 +1323,7 @@ function setupEventListeners() {
 			closeHacsDialog();
 			closeToggleDialog();
 			closeAuthDialog();
+			closeSwitchStatsDialog();
 		}
 	});
 
@@ -1947,10 +1974,26 @@ function hideMessages() {
 }
 
 function updateStats() {
-	const total = allSwitches.length;
+	const publicCount = allSwitches.length;
 	const active = allSwitches.filter(sw => sw.state).length;
-	totalSwitches.textContent = total;
-	activeSwitches.textContent = active;
+	if (totalSwitches) totalSwitches.textContent = publicCount;
+	if (activeSwitches) activeSwitches.textContent = active;
+	refreshTotalSwitchCount();
+}
+
+async function refreshTotalSwitchCount() {
+	try {
+		const response = await fetch(`${API_BASE_URL}/stats`);
+		if (!response.ok) return;
+		const json = await response.json();
+		if (!json.success) return;
+		const count = json.data.totalSwitchCount;
+		if (allSwitchesCountEl && typeof count === 'number') {
+			allSwitchesCountEl.textContent = count;
+		}
+	} catch {
+		// Silently ignore – the stat box keeps its last value or "-"
+	}
 }
 
 function applyFilters(options = {}) {
@@ -2075,6 +2118,178 @@ function closeAuthDialog() {
 	}
 	if (authDialogKeyInput) authDialogKeyInput.value = '';
 	pendingAuthToggle = false;
+}
+
+// ── Switch Stats Dialog ─────────────────────────────────────────────────
+
+function showSwitchStatsDialog() {
+	if (!switchStatsDialog) return;
+	switchStatsDialog.classList.remove('hidden');
+	document.body.classList.add('modal-open');
+	switchStatsDialog.setAttribute('aria-hidden', 'false');
+}
+
+function closeSwitchStatsDialog() {
+	if (!switchStatsDialog) return;
+	switchStatsDialog.classList.add('hidden');
+	document.body.classList.remove('modal-open');
+	switchStatsDialog.setAttribute('aria-hidden', 'true');
+}
+
+async function openSwitchStatsDialog() {
+	showSwitchStatsDialog();
+	try {
+		const response = await fetch(`${API_BASE_URL}/stats`);
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
+		const json = await response.json();
+		if (!json.success) throw new Error(json.error || 'Failed to load stats');
+
+		const data = json.data;
+		const totalAll = typeof data.totalSwitchCount === 'number' ? data.totalSwitchCount : '-';
+		const totalPublic = typeof data.publicSwitchCount === 'number' ? data.publicSwitchCount : '-';
+		const wsClients = data.websocket && typeof data.websocket.clients === 'number'
+			? data.websocket.clients
+			: '-';
+
+		const dailyStats = Array.isArray(data.dailyStats) ? data.dailyStats : [];
+		const todayStr = new Date().toISOString().split('T')[0];
+		const todayEntry = dailyStats.find(d => d.date === todayStr);
+		const addedToday = todayEntry ? todayEntry.added : 0;
+
+		if (statsTotalAllEl) statsTotalAllEl.textContent = totalAll;
+		if (statsTotalPublicEl) statsTotalPublicEl.textContent = totalPublic;
+		if (statsAddedTodayEl) statsAddedTodayEl.textContent = addedToday;
+		if (statsWsClientsEl) statsWsClientsEl.textContent = wsClients;
+
+		renderSwitchStatsChart(dailyStats);
+	} catch (err) {
+		console.error('Failed to load switch stats:', err);
+		if (statsTotalAllEl) statsTotalAllEl.textContent = '?';
+		if (statsTotalPublicEl) statsTotalPublicEl.textContent = '?';
+		if (statsAddedTodayEl) statsAddedTodayEl.textContent = '?';
+		if (statsWsClientsEl) statsWsClientsEl.textContent = '?';
+	}
+}
+
+function renderSwitchStatsChart(dailyStats) {
+	if (!switchStatsCanvas) return;
+	const ctx = switchStatsCanvas.getContext('2d');
+	if (!ctx) return;
+
+	const dpr = window.devicePixelRatio || 1;
+	const cssW = switchStatsCanvas.parentElement.clientWidth || 660;
+	const cssH = 220;
+	switchStatsCanvas.width = cssW * dpr;
+	switchStatsCanvas.height = cssH * dpr;
+	switchStatsCanvas.style.width = `${cssW}px`;
+	switchStatsCanvas.style.height = `${cssH}px`;
+	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+	ctx.clearRect(0, 0, cssW, cssH);
+
+	const days = Array.isArray(dailyStats) ? dailyStats : [];
+	if (days.length === 0) {
+		ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-muted').trim() || '#888';
+		ctx.font = '13px sans-serif';
+		ctx.textAlign = 'center';
+		ctx.fillText('No data available', cssW / 2, cssH / 2);
+		return;
+	}
+
+	// Use the pre-computed totals from the API
+	const addedPerDay = days.map(d => d.added || 0);
+	const totalPerDay = days.map(d => d.total || 0);
+
+	const PADDING_LEFT = 45;
+	const PADDING_RIGHT = 15;
+	const PADDING_TOP = 15;
+	const PADDING_BOTTOM = 40;
+	const chartW = cssW - PADDING_LEFT - PADDING_RIGHT;
+	const chartH = cssH - PADDING_TOP - PADDING_BOTTOM;
+
+	const maxTotal = Math.max(...totalPerDay, 1);
+	const maxAdded = Math.max(...addedPerDay, 1);
+
+	const styles = getComputedStyle(document.documentElement);
+	const primaryColour = styles.getPropertyValue('--primary').trim() || '#3b82f6';
+	const addedColour = '#22c55e';
+	const gridColour = styles.getPropertyValue('--border-light').trim() || 'rgba(255,255,255,0.08)';
+	const textColour = styles.getPropertyValue('--text-muted').trim() || '#888';
+
+	const n = days.length;
+	const barWidth = Math.max(chartW / n * 0.5, 2);
+
+	// Y-axis scale for total (left axis)
+	const ySteps = 4;
+	ctx.font = '10px sans-serif';
+	ctx.textAlign = 'right';
+	ctx.textBaseline = 'middle';
+	for (let i = 0; i <= ySteps; i++) {
+		const val = Math.round(maxTotal * i / ySteps);
+		const y = PADDING_TOP + chartH - (chartH * i / ySteps);
+		ctx.fillStyle = textColour;
+		ctx.fillText(String(val), PADDING_LEFT - 6, y);
+		ctx.strokeStyle = gridColour;
+		ctx.lineWidth = 1;
+		ctx.beginPath();
+		ctx.moveTo(PADDING_LEFT, y);
+		ctx.lineTo(cssW - PADDING_RIGHT, y);
+		ctx.stroke();
+	}
+
+	// Draw bars (added per day)
+	for (let i = 0; i < n; i++) {
+		const x = PADDING_LEFT + (i + 0.5) * (chartW / n);
+		const barH = (addedPerDay[i] / maxAdded) * chartH * 0.35;
+		ctx.fillStyle = addedColour;
+		ctx.globalAlpha = 0.6;
+		ctx.fillRect(x - barWidth / 2, PADDING_TOP + chartH - barH, barWidth, barH);
+		ctx.globalAlpha = 1.0;
+	}
+
+	// Draw line (total switches)
+	ctx.beginPath();
+	ctx.strokeStyle = primaryColour;
+	ctx.lineWidth = 2;
+	ctx.lineJoin = 'round';
+	for (let i = 0; i < n; i++) {
+		const x = PADDING_LEFT + (i + 0.5) * (chartW / n);
+		const y = PADDING_TOP + chartH - (totalPerDay[i] / maxTotal) * chartH;
+		if (i === 0) {
+			ctx.moveTo(x, y);
+		} else {
+			ctx.lineTo(x, y);
+		}
+	}
+	ctx.stroke();
+
+	// Dots on line
+	for (let i = 0; i < n; i++) {
+		const x = PADDING_LEFT + (i + 0.5) * (chartW / n);
+		const y = PADDING_TOP + chartH - (totalPerDay[i] / maxTotal) * chartH;
+		ctx.beginPath();
+		ctx.arc(x, y, 3, 0, Math.PI * 2);
+		ctx.fillStyle = primaryColour;
+		ctx.fill();
+	}
+
+	// X-axis labels (show every ~5th day to avoid overlap)
+	ctx.fillStyle = textColour;
+	ctx.font = '10px sans-serif';
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'top';
+	const labelStep = n <= 10 ? 1 : n <= 20 ? 3 : 5;
+	for (let i = 0; i < n; i += labelStep) {
+		const x = PADDING_LEFT + (i + 0.5) * (chartW / n);
+		const label = days[i].date.slice(5); // MM-DD
+		ctx.fillText(label, x, PADDING_TOP + chartH + 6);
+	}
+	// Always label the last day
+	if ((n - 1) % labelStep !== 0) {
+		const x = PADDING_LEFT + (n - 0.5) * (chartW / n);
+		const label = days[n - 1].date.slice(5);
+		ctx.fillText(label, x, PADDING_TOP + chartH + 6);
+	}
 }
 
 function openAuthDialog(shouldToggleAfter = false, message = '') {

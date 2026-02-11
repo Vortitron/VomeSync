@@ -25,6 +25,17 @@ class VomeSyncServer {
 			// Connect to Redis first
 			await redisClient.connect();
 
+			// Backfill global switch index if empty (one-off migration)
+			try {
+				const totalCount = await redisClient.getTotalSwitchCount();
+				if (totalCount === 0) {
+					logger.info('Global switch index empty – running backfill…');
+					await redisClient.backfillGlobalSwitchIndex();
+				}
+			} catch (backfillError) {
+				logger.warn('Global switch index backfill failed (non-fatal):', backfillError.message || backfillError);
+			}
+
 			// Configure Express middleware
 			this.setupMiddleware();
 

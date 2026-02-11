@@ -110,6 +110,75 @@ class MockRedisClient {
 		return Promise.resolve();
 	}
 
+	// Sorted set methods
+	async zAdd(key, ...items) {
+		const zset = this.data.get(key) || [];
+		let added = 0;
+		for (const item of items) {
+			const entries = Array.isArray(item) ? item : [item];
+			for (const entry of entries) {
+				const idx = zset.findIndex(e => e.value === entry.value);
+				if (idx >= 0) {
+					zset[idx].score = entry.score;
+				} else {
+					zset.push({ score: entry.score, value: entry.value });
+					added++;
+				}
+			}
+		}
+		zset.sort((a, b) => a.score - b.score);
+		this.data.set(key, zset);
+		return Promise.resolve(added);
+	}
+
+	async zRem(key, ...members) {
+		const zset = this.data.get(key) || [];
+		let removed = 0;
+		const flat = members.flat();
+		const filtered = zset.filter(e => {
+			if (flat.includes(e.value)) {
+				removed++;
+				return false;
+			}
+			return true;
+		});
+		this.data.set(key, filtered);
+		return Promise.resolve(removed);
+	}
+
+	async zCard(key) {
+		const zset = this.data.get(key) || [];
+		return Promise.resolve(zset.length);
+	}
+
+	async zCount(key, min, max) {
+		const zset = this.data.get(key) || [];
+		const count = zset.filter(e => e.score >= min && e.score <= max).length;
+		return Promise.resolve(count);
+	}
+
+	async zRangeWithScores(key, start, stop) {
+		const zset = this.data.get(key) || [];
+		const slice = zset.slice(start, stop === -1 ? undefined : stop + 1);
+		return Promise.resolve(slice);
+	}
+
+	async scan(cursor, options = {}) {
+		const keys = Array.from(this.data.keys());
+		const match = options.MATCH || '*';
+		let filtered = keys;
+		if (match !== '*') {
+			const prefix = match.replace(/\*/g, '');
+			filtered = keys.filter(k => k.startsWith(prefix));
+		}
+		return Promise.resolve({ cursor: 0, keys: filtered });
+	}
+
+	async hGet(key, field) {
+		const hash = this.data.get(key) || {};
+		return Promise.resolve(hash[field] !== undefined ? String(hash[field]) : null);
+	}
+
 	// Additional Redis methods for completeness
 	async keys(pattern) {
 		const keys = Array.from(this.data.keys());
@@ -190,6 +259,7 @@ const mockRedisClient = {
 
 		await this.client.hSet(`switch:${uid}`, switchData);
 		await this.client.sAdd(`user:${personalKey}`, uid);
+		await this.recordSwitchCreation(uid, switchData.createdAt);
 
 		if (switchConfig.publicize) {
 			await this.client.sAdd('public_switches', uid);
@@ -259,10 +329,41 @@ const mockRedisClient = {
 		for (const switchData of userSwitches) {
 			await this.client.del(`switch:${switchData.uid}`);
 			await this.client.sRem('public_switches', switchData.uid);
+			await this.client.zRem('all_switches', switchData.uid);
 		}
 		await this.client.del(`key:${personalKey}`);
 		await this.client.del(`user:${personalKey}`);
 		return userSwitches.length;
+	},
+
+	async recordSwitchCreation(uid, createdAt) {
+		if (!uid) return;
+		const score = Number(createdAt) || Date.now();
+		await this.client.zAdd('all_switches', { score, value: uid });
+	},
+
+	async getTotalSwitchCount() {
+		return await this.client.zCard('all_switches');
+	},
+
+	async getDailySwitchStats(days = 30) {
+		const MS_PER_DAY = 86400000;
+		const now = Date.now();
+		const stats = [];
+		for (let i = days - 1; i >= 0; i--) {
+			const dayStart = now - (i + 1) * MS_PER_DAY;
+			const dayEnd = now - i * MS_PER_DAY;
+			const todayStr = new Date(dayEnd).toISOString().split('T')[0];
+			const added = await this.client.zCount('all_switches', dayStart, dayEnd);
+			const total = await this.client.zCount('all_switches', 0, dayEnd);
+			stats.push({ date: todayStr, added, total });
+		}
+		return stats;
+	},
+
+	async backfillGlobalSwitchIndex() {
+		// No-op in tests — switches are already tracked via recordSwitchCreation
+		return 0;
 	},
 
 	async publishSwitchUpdate(uid, state) {

@@ -5,7 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>VomeSync - Public Remote Switches</title>
 	<meta name="description" content="Discover and monitor public remote switches from the VomeSync community. Connect your Home Assistant to global IoT devices.">
-	<link rel="stylesheet" href="/styles.css?v=20260128-1">
+	<link rel="stylesheet" href="/styles.css?v=20260211-1">
 	<link rel="apple-touch-icon" sizes="180x180" href="/favicon/apple-icon-180x180.png">
 	<link rel="icon" type="image/png" sizes="32x32" href="/favicon/favicon-32x32.png">
 	<link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-16x16.png">
@@ -72,6 +72,10 @@
 			<div class="stat-box">
 				<span class="stat-number" id="totalSwitches">-</span>
 				<span class="stat-label">Public Switches</span>
+			</div>
+			<div class="stat-box stat-box-clickable" id="allSwitchesStatBox" role="button" tabindex="0" title="Click for switch statistics">
+				<span class="stat-number" id="allSwitchesCount">-</span>
+				<span class="stat-label">Total Switches</span>
 			</div>
 			<div class="stat-box">
 				<span class="stat-number" id="activeSwitches">-</span>
@@ -523,7 +527,43 @@
 			</div>
 		</div>
 
+	<div id="switchStatsDialog" class="ha-dialog hidden" aria-hidden="true">
+		<div id="switchStatsBackdrop" class="ha-dialog-backdrop"></div>
+		<div class="ha-dialog-card switch-stats-card" role="dialog" aria-modal="true" aria-labelledby="switchStatsTitle">
+			<button id="switchStatsClose" type="button" class="quickview-close" aria-label="Close">✕</button>
+			<h2 id="switchStatsTitle" class="detail-title">Switch Statistics</h2>
+			<div class="switch-stats-summary">
+				<div class="switch-stats-item">
+					<span class="switch-stats-value" id="statsTotalAll">-</span>
+					<span class="switch-stats-label">Total Switches</span>
+				</div>
+				<div class="switch-stats-item">
+					<span class="switch-stats-value" id="statsTotalPublic">-</span>
+					<span class="switch-stats-label">Public</span>
+				</div>
+				<div class="switch-stats-item">
+					<span class="switch-stats-value" id="statsAddedToday">-</span>
+					<span class="switch-stats-label">Added Today</span>
+				</div>
+				<div class="switch-stats-item">
+					<span class="switch-stats-value" id="statsWsClients">-</span>
+					<span class="switch-stats-label">Live Connections</span>
+				</div>
+			</div>
+			<div class="switch-stats-chart-section">
+				<h3 class="switch-stats-chart-title">Last 30 Days</h3>
+				<div class="switch-stats-chart-legend">
+					<span class="legend-item"><span class="legend-swatch legend-swatch-total"></span> Total switches</span>
+					<span class="legend-item"><span class="legend-swatch legend-swatch-added"></span> Added that day</span>
+				</div>
+				<div class="switch-stats-chart-wrap">
+					<canvas id="switchStatsCanvas" width="660" height="220"></canvas>
+				</div>
+			</div>
+		</div>
+	</div>
+
 	<script src="/network-bg.js?v=20260114-5"></script>
-	<script src="/script.js?v=20260128-1"></script>
+	<script src="/script.js?v=20260211-2"></script>
 </body>
 </html>

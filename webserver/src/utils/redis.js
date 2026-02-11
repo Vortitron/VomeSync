@@ -20,6 +20,8 @@ const BLOCKED_PERSONAL_KEY_IDS_SET = 'blocked:personal_key_ids';
 const BLOCKED_API_KEY_IDS_SET = 'blocked:api_key_ids';
 const SWITCH_REDIRECTS_HASH = 'switch_redirects';
 const SWITCH_LISTING_OVERRIDES_PREFIX = 'switch_override:';
+const ALL_SWITCHES_SORTED_SET = 'all_switches';
+const DAILY_SWITCH_STATS_PREFIX = 'daily_switches:';
 
 function _sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -448,6 +450,9 @@ class RedisClient {
 			await this.client.sAdd('public_switches', uid);
 		}
 
+		// Track in global index for stats
+		await this.recordSwitchCreation(uid, switchData.createdAt);
+
 		return switchData;
 	}
 
@@ -487,6 +492,9 @@ class RedisClient {
 		if (switchConfig.publicize) {
 			await this.client.sAdd('public_switches', uid);
 		}
+
+		// Track in global index for stats
+		await this.recordSwitchCreation(uid, switchData.createdAt);
 
 		return switchData;
 	}
@@ -1474,6 +1482,7 @@ class RedisClient {
 		for (const switchData of userSwitches) {
 			await this.client.del(`switch:${switchData.uid}`);
 			await this.client.sRem('public_switches', switchData.uid);
+			await this.client.zRem(ALL_SWITCHES_SORTED_SET, switchData.uid);
 			await this.client.del(`switch:${switchData.uid}:users`);
 			await this.client.del(`switch:${switchData.uid}:events`);
 		}
@@ -1601,6 +1610,7 @@ class RedisClient {
 		pipeline.del(`switch:${uid}:access_keys`);
 		pipeline.del(this._switchOverrideKey(uid));
 		pipeline.sRem('public_switches', uid);
+		pipeline.zRem(ALL_SWITCHES_SORTED_SET, uid);
 		if (ownerKeyId) {
 			pipeline.sRem(`user:${ownerKeyId}:switches`, uid);
 		}
@@ -1864,6 +1874,100 @@ class RedisClient {
 		const key = this._promoCodeKey(code);
 		const result = await this.client.del(key);
 		return result > 0;
+	}
+
+	// ── Global switch tracking (all_switches sorted set) ────────────────────
+
+	/**
+	 * Record a switch creation in the global sorted set.
+	 * Score = creation timestamp (ms). Used for total count and daily stats.
+	 */
+	async recordSwitchCreation(uid, createdAt) {
+		if (!uid) return;
+		const score = Number(createdAt) || Date.now();
+		await this.client.zAdd(ALL_SWITCHES_SORTED_SET, { score, value: uid });
+	}
+
+	/**
+	 * Remove a switch from the global sorted set (on deletion).
+	 */
+	async removeSwitchFromGlobalIndex(uid) {
+		if (!uid) return;
+		await this.client.zRem(ALL_SWITCHES_SORTED_SET, uid);
+	}
+
+	/**
+	 * Get the total number of switches ever tracked.
+	 */
+	async getTotalSwitchCount() {
+		return await this.client.zCard(ALL_SWITCHES_SORTED_SET);
+	}
+
+	/**
+	 * Get daily switch statistics for the last N days.
+	 * Returns an array of { date, total, added } objects (newest first).
+	 *
+	 * - total: cumulative count of switches up to end of that day
+	 * - added: switches created on that specific day
+	 */
+	async getDailySwitchStats(days = 30) {
+		const MS_PER_DAY = 86400000;
+		const now = Date.now();
+		const results = [];
+
+		for (let i = 0; i < days; i++) {
+			const dayOffset = days - 1 - i;
+			const dayStart = now - (dayOffset + 1) * MS_PER_DAY;
+			const dayEnd = now - dayOffset * MS_PER_DAY;
+
+			// Switches created on this day (score between dayStart and dayEnd)
+			const added = await this.client.zCount(
+				ALL_SWITCHES_SORTED_SET,
+				dayStart,
+				dayEnd - 1
+			);
+
+			// Cumulative total up to end of day
+			const total = await this.client.zCount(
+				ALL_SWITCHES_SORTED_SET,
+				'-inf',
+				dayEnd - 1
+			);
+
+			const dateStr = new Date(dayEnd).toISOString().slice(0, 10);
+			results.push({ date: dateStr, total, added });
+		}
+
+		return results;
+	}
+
+	/**
+	 * Backfill the all_switches sorted set by scanning existing switch:* keys.
+	 * Idempotent – safe to run multiple times. Intended for one-off migration.
+	 */
+	async backfillGlobalSwitchIndex() {
+		let cursor = '0';
+		let backfilled = 0;
+		do {
+			const result = await this.client.scan(cursor, { MATCH: 'switch:*', COUNT: 200 });
+			cursor = result.cursor !== undefined ? String(result.cursor) : '0';
+			if (!result.keys || !result.keys.length) continue;
+
+			for (const key of result.keys) {
+				// Only process direct switch hashes, not sub-keys like switch:uid:events
+				const parts = key.split(':');
+				if (parts.length !== 2) continue;
+
+				const uid = parts[1];
+				const createdAt = await this.client.hGet(key, 'createdAt');
+				const score = Number(createdAt) || Date.now();
+				await this.client.zAdd(ALL_SWITCHES_SORTED_SET, { score, value: uid });
+				backfilled++;
+			}
+		} while (cursor !== '0');
+
+		logger.info(`Backfilled ${backfilled} switches into global index`);
+		return backfilled;
 	}
 }
 

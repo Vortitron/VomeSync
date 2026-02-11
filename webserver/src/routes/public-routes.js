@@ -149,14 +149,20 @@ router.get('/stats',
 	authManager.rateLimit('stats', 60, 900000),
 	async (req, res) => {
 		try {
-			const wsStats = webSocketManager.getStats();
-			const publicSwitches = await redisClient.getPublicSwitches();
+			const [wsStats, publicSwitches, totalSwitchCount, dailyStats] = await Promise.all([
+				webSocketManager.getStats(),
+				redisClient.getPublicSwitches(),
+				redisClient.getTotalSwitchCount(),
+				redisClient.getDailySwitchStats(30)
+			]);
 
 			return res.json({
 				success: true,
 				data: {
 					websocket: wsStats,
 					publicSwitchCount: publicSwitches.length,
+					totalSwitchCount,
+					dailyStats,
 					timestamp: Date.now()
 				}
 			});
