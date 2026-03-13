@@ -1,8 +1,8 @@
 // =============================================================================
 // VomeSync — CI Pipeline
 //
-// Stages: Lint (ESLint + flake8) → Security (npm audit) → Tests (webserver
-// unit + integration, HA integration) → Shell Check
+// Stages: Setup → Lint (ESLint + flake8) → Security (npm audit) →
+//         Tests (webserver unit + integration, HA integration) → Coverage
 //
 // Mirrors the GitHub Actions workflow from VomeSync/.github/workflows/test.yml
 // but runs inside the shared VomeHome Jenkins instance.
@@ -65,25 +65,17 @@ pipeline {
             when {
                 expression { env.RUN_MAIN_PIPELINE == 'true' }
             }
-            parallel {
-                stage('Node Setup') {
-                    steps {
-                        dir('webserver') {
-                            sh 'npm ci'
-                        }
-                    }
+            steps {
+                dir('webserver') {
+                    sh 'npm ci'
                 }
-                stage('Python Setup') {
-                    steps {
-                        sh '''
-                            python3 -m venv .venv
-                            . .venv/bin/activate
-                            python -m pip install --upgrade pip
-                            pip install flake8
-                            pip install -r hacs-addon/tests/requirements.txt
-                        '''
-                    }
-                }
+                sh '''
+                    python3 -m venv .venv
+                    . .venv/bin/activate
+                    python -m pip install --upgrade pip
+                    pip install flake8
+                    pip install -r hacs-addon/tests/requirements.txt
+                '''
             }
         }
 
@@ -159,10 +151,7 @@ pipeline {
                 stage('Webserver Unit Tests') {
                     steps {
                         dir('webserver') {
-                            sh '''
-                                export COVERAGE_FILE=".coverage.unit"
-                                npm run test:unit -- --ci --forceExit 2>&1
-                            '''
+                            sh 'npm run test:unit -- --ci --forceExit'
                         }
                     }
                 }
@@ -170,10 +159,7 @@ pipeline {
                 stage('Webserver Integration Tests') {
                     steps {
                         dir('webserver') {
-                            sh '''
-                                export COVERAGE_FILE=".coverage.integration"
-                                npm run test:integration -- --ci --forceExit 2>&1
-                            '''
+                            sh 'npm run test:integration -- --ci --forceExit'
                         }
                     }
                 }
@@ -214,9 +200,7 @@ pipeline {
             }
             steps {
                 dir('webserver') {
-                    sh '''
-                        npm run test:coverage -- --ci --forceExit 2>&1 || true
-                    '''
+                    sh 'npm run test:coverage -- --ci --forceExit || true'
                 }
             }
             post {
