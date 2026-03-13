@@ -1,8 +1,8 @@
 // =============================================================================
 // VomeSync — CI Pipeline
 //
-// Stages: Setup → Lint (ESLint + flake8) → Security (npm audit) →
-//         Tests (webserver unit + integration, HA integration) → Coverage
+// Stages: Setup → Quality Gates (ESLint, flake8, npm audit, shellcheck) →
+//         Tests (webserver unit + integration with coverage, HA integration)
 //
 // Mirrors the GitHub Actions workflow from VomeSync/.github/workflows/test.yml
 // but runs inside the shared VomeHome Jenkins instance.
@@ -66,6 +66,11 @@ pipeline {
                 expression { env.RUN_MAIN_PIPELINE == 'true' }
             }
             steps {
+                sh '''
+                    echo "── Node.js ──"
+                    node --version
+                    npm --version
+                '''
                 dir('webserver') {
                     sh 'npm ci'
                 }
@@ -89,7 +94,7 @@ pipeline {
                         dir('webserver') {
                             sh '''
                                 echo "── ESLint ──"
-                                npx eslint . --max-warnings=0 2>&1 || true
+                                npm run lint || true
                             '''
                         }
                     }
@@ -131,7 +136,7 @@ pipeline {
                         sh '''
                             echo "── shellcheck ──"
                             find scripts/ -name '*.sh' -print0 2>/dev/null | \
-                                xargs -0 shellcheck --severity=warning || true
+                                xargs -0 --no-run-if-empty shellcheck --severity=warning || true
 
                             echo ""
                             echo "── bash syntax ──"
@@ -168,8 +173,6 @@ pipeline {
                     steps {
                         sh '''
                             . .venv/bin/activate
-                            export COVERAGE_FILE=".coverage.hacs"
-                            rm -f "$COVERAGE_FILE"
                             python -m pytest hacs-addon/tests/ \
                                 --tb=short -q \
                                 --cov=custom_components/vomesync \

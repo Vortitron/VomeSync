@@ -83,22 +83,20 @@ pipeline {
             }
             steps {
                 dir('docker') {
-                    sh '''
-                        docker compose -p "$COMPOSE_PROJECT_NAME" up -d --build vomesync-redis vomesync-webserver
-                    '''
+                    sh 'docker compose -p "$COMPOSE_PROJECT_NAME" up -d --build vomesync-redis vomesync-webserver'
                 }
                 script {
-                    def apiPort = sh(
-                        script: "grep '^VOMESYNC_API_HOST_PORT=' docker/.env | cut -d= -f2 || echo 3090",
+                    def raw = sh(
+                        script: "grep '^VOMESYNC_API_HOST_PORT=' docker/.env | cut -d= -f2",
                         returnStdout: true
-                    ).trim() ?: '3090'
-                    env.E2E_API_PORT = apiPort
+                    ).trim()
+                    env.E2E_API_PORT = raw ?: '3090'
                 }
-                sh """
-                    echo "Waiting for API on port ${env.E2E_API_PORT}..."
-                    timeout 180 bash -c 'until curl -sf "http://localhost:${env.E2E_API_PORT}/api/health"; do sleep 2; done'
+                sh '''
+                    echo "Waiting for API on port $E2E_API_PORT..."
+                    timeout 180 bash -c "until curl -sf http://localhost:${E2E_API_PORT}/api/health; do sleep 2; done"
                     echo "API is healthy."
-                """
+                '''
             }
         }
 
@@ -135,14 +133,13 @@ pipeline {
         always {
             script {
                 if (env.RUN_E2E == 'true') {
-                    dir('docker') {
-                        sh """
-                            echo "── Service logs ──"
-                            docker compose -p "${env.COMPOSE_PROJECT_NAME}" logs --tail=80 || true
-                            echo "── Tearing down ──"
-                            docker compose -p "${env.COMPOSE_PROJECT_NAME}" down -v --remove-orphans || true
-                        """
-                    }
+                    sh """
+                        echo "── Service logs ──"
+                        cd docker
+                        docker compose -p "${env.COMPOSE_PROJECT_NAME}" logs --tail=80 || true
+                        echo "── Tearing down ──"
+                        docker compose -p "${env.COMPOSE_PROJECT_NAME}" down -v --remove-orphans || true
+                    """
                 }
             }
         }

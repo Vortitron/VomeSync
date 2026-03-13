@@ -59,7 +59,10 @@ pipeline {
                 expression { params.RUN_TESTS_FIRST }
             }
             steps {
-                build job: 'VomeSync/vomesync-ci', wait: true, propagate: true
+                build job: 'VomeSync/vomesync-ci',
+                      wait: true,
+                      propagate: true,
+                      parameters: [booleanParam(name: 'FORCE_RUN', value: true)]
             }
         }
 
@@ -77,14 +80,14 @@ pipeline {
                 expression { params.PULL_LATEST }
             }
             steps {
-                sh """
-                    cd "${env.VOMESYNC_DIR}"
+                sh '''
+                    cd /var/www/VomeSync
                     if git diff --quiet && git diff --cached --quiet; then
                         git pull --ff-only || echo "WARNING: git pull failed; continuing with existing working copy"
                     else
                         echo "WARNING: Git working tree has local changes; skipping git pull"
                     fi
-                """
+                '''
             }
         }
 
@@ -93,14 +96,14 @@ pipeline {
                 expression { params.BACKUP_BEFORE_DEPLOY && (params.TARGET == 'live' || params.TARGET == 'all') }
             }
             steps {
-                sh """
-                    cd "${env.DOCKER_DIR}"
-                    BACKUP_DIR="${env.VOMESYNC_DIR}/backups/\$(date +%Y%m%d_%H%M%S)"
-                    mkdir -p "\$BACKUP_DIR"
-                    docker compose exec -T vomesync-redis redis-cli --rdb - > "\$BACKUP_DIR/redis_dump.rdb" 2>/dev/null || true
-                    cp "${env.DOCKER_DIR}/.env" "\$BACKUP_DIR/" 2>/dev/null || true
-                    echo "Backup created: \$BACKUP_DIR"
-                """
+                sh '''
+                    cd /var/www/VomeSync/docker
+                    BACKUP_DIR="/var/www/VomeSync/backups/$(date +%Y%m%d_%H%M%S)"
+                    mkdir -p "$BACKUP_DIR"
+                    docker compose exec -T vomesync-redis redis-cli --rdb - > "$BACKUP_DIR/redis_dump.rdb" 2>/dev/null || true
+                    cp /var/www/VomeSync/docker/.env "$BACKUP_DIR/" 2>/dev/null || true
+                    echo "Backup created: $BACKUP_DIR"
+                '''
             }
         }
 
@@ -109,13 +112,16 @@ pipeline {
                 expression { params.TARGET == 'dev' || params.TARGET == 'all' }
             }
             steps {
-                sh """
-                    cd "${env.DOCKER_DIR}"
-                    echo "Building DEV services..."
-                    docker compose build ${params.NO_CACHE ? '--no-cache' : ''} vomesync-webserver-dev
-                    echo "Starting DEV services..."
-                    docker compose up -d --force-recreate vomesync-redis-dev vomesync-webserver-dev vomesync-website-dev
-                """
+                script {
+                    def cacheFlag = params.NO_CACHE ? '--no-cache' : ''
+                    sh """
+                        cd /var/www/VomeSync/docker
+                        echo "Building DEV services..."
+                        docker compose build ${cacheFlag} vomesync-webserver-dev
+                        echo "Starting DEV services..."
+                        docker compose up -d --force-recreate vomesync-redis-dev vomesync-webserver-dev vomesync-website-dev
+                    """
+                }
             }
         }
 
@@ -124,13 +130,16 @@ pipeline {
                 expression { params.TARGET == 'live' || params.TARGET == 'all' }
             }
             steps {
-                sh """
-                    cd "${env.DOCKER_DIR}"
-                    echo "Building LIVE services..."
-                    docker compose build ${params.NO_CACHE ? '--no-cache' : ''} vomesync-webserver
-                    echo "Starting LIVE services..."
-                    docker compose up -d --force-recreate vomesync-redis vomesync-webserver vomesync-website vomesync-proxy
-                """
+                script {
+                    def cacheFlag = params.NO_CACHE ? '--no-cache' : ''
+                    sh """
+                        cd /var/www/VomeSync/docker
+                        echo "Building LIVE services..."
+                        docker compose build ${cacheFlag} vomesync-webserver
+                        echo "Starting LIVE services..."
+                        docker compose up -d --force-recreate vomesync-redis vomesync-webserver vomesync-website vomesync-proxy
+                    """
+                }
             }
         }
 
@@ -139,16 +148,17 @@ pipeline {
                 script {
                     sleep(time: 8, unit: 'SECONDS')
 
+                    def hostIp = sh(
+                        script: "getent hosts host.docker.internal | awk '{print \$1}' || ip route | awk '/default/ {print \$3}' || echo '172.17.0.1'",
+                        returnStdout: true
+                    ).trim() ?: '172.17.0.1'
+
                     if (params.TARGET == 'dev' || params.TARGET == 'all') {
                         def devPort = sh(
-                            script: "grep '^VOMESYNC_API_DEV_HOST_PORT=' ${env.DOCKER_DIR}/.env | cut -d= -f2 || echo 3091",
+                            script: "grep '^VOMESYNC_API_DEV_HOST_PORT=' /var/www/VomeSync/docker/.env | cut -d= -f2",
                             returnStdout: true
                         ).trim() ?: '3091'
-                        def devHost = sh(
-                            script: "getent hosts host.docker.internal | awk '{print \$1}' || ip route | awk '/default/ {print \$3}' || echo '172.17.0.1'",
-                            returnStdout: true
-                        ).trim() ?: '172.17.0.1'
-                        def devUrl = "http://${devHost}:${devPort}/api/health"
+                        def devUrl = "http://${hostIp}:${devPort}/api/health"
                         echo "Smoke testing DEV at ${devUrl} ..."
                         def devStatus = sh(
                             script: "curl -sf -o /dev/null -w '%{http_code}' --connect-timeout 5 '${devUrl}' || echo 000",
@@ -163,14 +173,10 @@ pipeline {
 
                     if (params.TARGET == 'live' || params.TARGET == 'all') {
                         def livePort = sh(
-                            script: "grep '^VOMESYNC_API_HOST_PORT=' ${env.DOCKER_DIR}/.env | cut -d= -f2 || echo 3090",
+                            script: "grep '^VOMESYNC_API_HOST_PORT=' /var/www/VomeSync/docker/.env | cut -d= -f2",
                             returnStdout: true
                         ).trim() ?: '3090'
-                        def liveHost = sh(
-                            script: "getent hosts host.docker.internal | awk '{print \$1}' || ip route | awk '/default/ {print \$3}' || echo '172.17.0.1'",
-                            returnStdout: true
-                        ).trim() ?: '172.17.0.1'
-                        def liveUrl = "http://${liveHost}:${livePort}/api/health"
+                        def liveUrl = "http://${hostIp}:${livePort}/api/health"
                         echo "Smoke testing LIVE at ${liveUrl} ..."
                         def liveStatus = sh(
                             script: "curl -sf -o /dev/null -w '%{http_code}' --connect-timeout 5 '${liveUrl}' || echo 000",
@@ -188,11 +194,11 @@ pipeline {
 
         stage('Status') {
             steps {
-                sh """
-                    cd "${env.DOCKER_DIR}"
+                sh '''
+                    cd /var/www/VomeSync/docker
                     echo "── Container Status ──"
                     docker compose ps
-                """
+                '''
             }
         }
     }
