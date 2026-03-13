@@ -2,10 +2,15 @@
 // VomeSync — CI Pipeline
 //
 // Stages: Setup → Quality Gates (ESLint, flake8, npm audit, shellcheck) →
-//         Tests (webserver unit + integration with coverage, HA integration)
+//         Tests (webserver unit + integration, HA integration with coverage)
 //
 // Mirrors the GitHub Actions workflow from VomeSync/.github/workflows/test.yml
 // but runs inside the shared VomeHome Jenkins instance.
+//
+// Python note: homeassistant==2023.7.3 pins aiohttp/yarl versions whose C
+// extensions are incompatible with Python 3.13. The HA integration tests
+// therefore use a Python 3.11 venv (.venv-ha) while linting uses the system
+// Python (.venv-lint).
 // =============================================================================
 
 pipeline {
@@ -70,15 +75,24 @@ pipeline {
                     echo "── Node.js ──"
                     node --version
                     npm --version
+                    echo "── Python (system) ──"
+                    python3 --version
+                    echo "── Python 3.11 ──"
+                    python3.11 --version
                 '''
                 dir('webserver') {
                     sh 'npm ci'
                 }
                 sh '''
-                    python3 -m venv .venv
-                    . .venv/bin/activate
+                    python3 -m venv .venv-lint
+                    . .venv-lint/bin/activate
                     python -m pip install --upgrade pip
                     pip install flake8
+                    deactivate
+
+                    python3.11 -m venv .venv-ha
+                    . .venv-ha/bin/activate
+                    python -m pip install --upgrade pip
                     pip install -r hacs-addon/tests/requirements.txt
                 '''
             }
@@ -103,7 +117,7 @@ pipeline {
                 stage('Python Lint') {
                     steps {
                         sh '''
-                            . .venv/bin/activate
+                            . .venv-lint/bin/activate
                             echo "── flake8 ──"
                             flake8 custom_components hacs-addon/tests tests \
                                 --max-line-length=100 \
@@ -172,7 +186,7 @@ pipeline {
                 stage('HA Integration Tests') {
                     steps {
                         sh '''
-                            . .venv/bin/activate
+                            . .venv-ha/bin/activate
                             python -m pytest hacs-addon/tests/ \
                                 --tb=short -q \
                                 --cov=custom_components/vomesync \
