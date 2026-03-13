@@ -2211,7 +2211,7 @@ function renderSwitchStatsChart(dailyStats) {
 	const maxAdded = Math.max(...addedPerDay, 1);
 
 	const styles = getComputedStyle(document.documentElement);
-	const primaryColour = styles.getPropertyValue('--primary').trim() || '#3b82f6';
+	const primaryColour = styles.getPropertyValue('--primary').trim() || '#FF9800';
 	const addedColour = '#22c55e';
 	const gridColour = styles.getPropertyValue('--border-light').trim() || 'rgba(255,255,255,0.08)';
 	const textColour = styles.getPropertyValue('--text-muted').trim() || '#888';

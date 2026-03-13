@@ -35,10 +35,10 @@ class NetworkBackground {
 		gradient.setAttribute('gradientUnits', 'userSpaceOnUse');
 		const stop1 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
 		stop1.setAttribute('offset', '0%');
-		stop1.setAttribute('style', 'stop-color:#3b82f6;stop-opacity:0.4');
+		stop1.setAttribute('style', 'stop-color:#FF9800;stop-opacity:0.4');
 		const stop2 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
 		stop2.setAttribute('offset', '100%');
-		stop2.setAttribute('style', 'stop-color:#8b5cf6;stop-opacity:0.4');
+		stop2.setAttribute('style', 'stop-color:#FFB74D;stop-opacity:0.4');
 		gradient.appendChild(stop1);
 		gradient.appendChild(stop2);
 		defs.appendChild(gradient);
@@ -177,18 +177,18 @@ class NetworkBackground {
 			line.setAttribute('class', 'connection');
 			
 			if (conn.from.state && conn.to.state) {
-				line.setAttribute('stroke', 'rgba(59, 130, 246, 0.5)');
-				line.setAttribute('stroke-width', '2.5');
-			} else {
-				line.setAttribute('stroke', 'rgba(148, 163, 184, 0.2)');
-				line.setAttribute('stroke-width', '1.5');
-			}
-			
-			conn.element = line;
-			this.svg.appendChild(line);
-		});
+			line.setAttribute('stroke', 'rgba(255, 152, 0, 0.5)');
+			line.setAttribute('stroke-width', '2.5');
+		} else {
+			line.setAttribute('stroke', 'rgba(117, 117, 117, 0.2)');
+			line.setAttribute('stroke-width', '1.5');
+		}
 		
-		// Draw nodes
+		conn.element = line;
+		this.svg.appendChild(line);
+	});
+	
+	// Draw nodes
 		this.nodes.forEach(node => {
 			if (node.type === 'switch') {
 				const g = this.drawSwitch(node);
@@ -216,8 +216,8 @@ class NetworkBackground {
 		rect.setAttribute('width', 30);
 		rect.setAttribute('height', 50);
 		rect.setAttribute('rx', 4);
-		rect.setAttribute('fill', 'rgba(30, 41, 59, 0.9)');
-		rect.setAttribute('stroke', 'rgba(59, 130, 246, 0.6)');
+		rect.setAttribute('fill', 'rgba(30, 30, 30, 0.9)');
+		rect.setAttribute('stroke', 'rgba(255, 152, 0, 0.6)');
 		rect.setAttribute('stroke-width', '1.5');
 		g.appendChild(rect);
 		
@@ -228,7 +228,7 @@ class NetworkBackground {
 		indicator.setAttribute('width', 16);
 		indicator.setAttribute('height', 16);
 		indicator.setAttribute('rx', 2);
-		indicator.setAttribute('fill', node.state ? '#3b82f6' : '#475569');
+		indicator.setAttribute('fill', node.state ? '#FF9800' : '#3A3A3A');
 		indicator.setAttribute('class', 'switch-indicator');
 		g.appendChild(indicator);
 		
@@ -257,15 +257,15 @@ class NetworkBackground {
 		circle.setAttribute('class', 'light-node');
 		
 		if (node.state) {
-			circle.setAttribute('fill', '#8b5cf6');
-			circle.setAttribute('stroke', '#a78bfa');
+			circle.setAttribute('fill', '#FFB74D');
+			circle.setAttribute('stroke', '#FF9800');
 			circle.setAttribute('stroke-width', '3');
 			
 			// Add glow
-			circle.style.filter = 'drop-shadow(0 0 12px rgba(139, 92, 246, 0.8))';
+			circle.style.filter = 'drop-shadow(0 0 12px rgba(255, 152, 0, 0.8))';
 		} else {
-			circle.setAttribute('fill', 'rgba(30, 41, 59, 0.5)');
-			circle.setAttribute('stroke', 'rgba(148, 163, 184, 0.4)');
+			circle.setAttribute('fill', 'rgba(30, 30, 30, 0.5)');
+			circle.setAttribute('stroke', 'rgba(117, 117, 117, 0.4)');
 			circle.setAttribute('stroke-width', '2');
 			circle.style.filter = 'none';
 		}
@@ -337,10 +337,10 @@ class NetworkBackground {
 				conn.element.setAttribute('y2', conn.to.y);
 				
 				if (conn.from.state && conn.to.state) {
-					conn.element.setAttribute('stroke', 'rgba(59, 130, 246, 0.5)');
-					conn.element.setAttribute('stroke-width', '2.5');
-				} else {
-					conn.element.setAttribute('stroke', 'rgba(148, 163, 184, 0.2)');
+				conn.element.setAttribute('stroke', 'rgba(255, 152, 0, 0.5)');
+				conn.element.setAttribute('stroke-width', '2.5');
+			} else {
+				conn.element.setAttribute('stroke', 'rgba(117, 117, 117, 0.2)');
 					conn.element.setAttribute('stroke-width', '1.5');
 				}
 			}
@@ -356,7 +356,7 @@ class NetworkBackground {
 				if (indicator) {
 					const targetY = node.state ? 8 : -20;
 					indicator.setAttribute('y', targetY);
-					indicator.setAttribute('fill', node.state ? '#3b82f6' : '#475569');
+					indicator.setAttribute('fill', node.state ? '#FF9800' : '#3A3A3A');
 				}
 			} else if (node.type === 'light' && node.element) {
 				node.element.setAttribute('cx', node.x);
