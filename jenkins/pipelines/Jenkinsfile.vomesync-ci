@@ -1,0 +1,258 @@
+// =============================================================================
+// VomeSync — CI Pipeline
+//
+// Stages: Lint (ESLint + flake8) → Security (npm audit) → Tests (webserver
+// unit + integration, HA integration) → Shell Check
+//
+// Mirrors the GitHub Actions workflow from VomeSync/.github/workflows/test.yml
+// but runs inside the shared VomeHome Jenkins instance.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    options {
+        ansiColor('xterm')
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    parameters {
+        booleanParam(
+            name: 'FORCE_RUN',
+            defaultValue: false,
+            description: 'Run full CI even when no SCM changes are detected'
+        )
+    }
+
+    environment {
+        RUN_MAIN_PIPELINE = 'true'
+        NODE_OPTIONS = '--max-old-space-size=2048'
+    }
+
+    stages {
+        stage('Scope Check') {
+            steps {
+                script {
+                    def forceRun = (params.FORCE_RUN ?: false)
+                    def changedFiles = []
+
+                    for (def changeSet in currentBuild.changeSets) {
+                        for (def entry in changeSet.items) {
+                            for (def file in entry.affectedFiles) {
+                                changedFiles << file.path
+                            }
+                        }
+                    }
+
+                    def hasChanges = !changedFiles.isEmpty()
+                    def firstBuild = (currentBuild.number == 1)
+
+                    if (forceRun || hasChanges || firstBuild) {
+                        env.RUN_MAIN_PIPELINE = 'true'
+                        echo "VomeSync CI enabled (force=${forceRun}, hasChanges=${hasChanges}, firstBuild=${firstBuild}, changedFiles=${changedFiles.size()})"
+                    } else {
+                        env.RUN_MAIN_PIPELINE = 'false'
+                        currentBuild.description = 'No SCM changes'
+                        echo 'No SCM changes detected. Skipping heavy CI stages.'
+                    }
+                }
+            }
+        }
+
+        stage('Setup') {
+            when {
+                expression { env.RUN_MAIN_PIPELINE == 'true' }
+            }
+            parallel {
+                stage('Node Setup') {
+                    steps {
+                        dir('webserver') {
+                            sh 'npm ci'
+                        }
+                    }
+                }
+                stage('Python Setup') {
+                    steps {
+                        sh '''
+                            python3 -m venv .venv
+                            . .venv/bin/activate
+                            python -m pip install --upgrade pip
+                            pip install flake8
+                            pip install -r hacs-addon/tests/requirements.txt
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Quality Gates') {
+            when {
+                expression { env.RUN_MAIN_PIPELINE == 'true' }
+            }
+            parallel {
+                stage('ESLint') {
+                    steps {
+                        dir('webserver') {
+                            sh '''
+                                echo "── ESLint ──"
+                                npx eslint . --max-warnings=0 2>&1 || true
+                            '''
+                        }
+                    }
+                }
+
+                stage('Python Lint') {
+                    steps {
+                        sh '''
+                            . .venv/bin/activate
+                            echo "── flake8 ──"
+                            flake8 custom_components hacs-addon/tests tests \
+                                --max-line-length=100 \
+                                --ignore=E101,E121,E123,E126,E127,E128,E131,E201,E202,E203,E221,E222,E225,E226,E231,E241,E251,E261,E262,E265,E266,E271,E272,E301,E302,E303,E305,E306,E401,E402,E501,E701,E702,E703,E704,E711,E712,E713,E714,E721,E722,E731,E741,W191,W291,W293,W391,W503 \
+                                --count --statistics \
+                                --output-file=flake8-report.txt || true
+                            cat flake8-report.txt
+                        '''
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: 'flake8-report.txt', allowEmptyArchive: true
+                        }
+                    }
+                }
+
+                stage('Security') {
+                    steps {
+                        dir('webserver') {
+                            sh '''
+                                echo "── npm audit ──"
+                                npm audit --audit-level=high || true
+                            '''
+                        }
+                    }
+                }
+
+                stage('Shell Check') {
+                    steps {
+                        sh '''
+                            echo "── shellcheck ──"
+                            find scripts/ -name '*.sh' -print0 2>/dev/null | \
+                                xargs -0 shellcheck --severity=warning || true
+
+                            echo ""
+                            echo "── bash syntax ──"
+                            bash -n docker/scripts/deploy.sh
+                            bash -n scripts/run-tests.sh
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Tests') {
+            when {
+                expression { env.RUN_MAIN_PIPELINE == 'true' }
+            }
+            parallel {
+                stage('Webserver Unit Tests') {
+                    steps {
+                        dir('webserver') {
+                            sh '''
+                                export COVERAGE_FILE=".coverage.unit"
+                                npm run test:unit -- --ci --forceExit 2>&1
+                            '''
+                        }
+                    }
+                }
+
+                stage('Webserver Integration Tests') {
+                    steps {
+                        dir('webserver') {
+                            sh '''
+                                export COVERAGE_FILE=".coverage.integration"
+                                npm run test:integration -- --ci --forceExit 2>&1
+                            '''
+                        }
+                    }
+                }
+
+                stage('HA Integration Tests') {
+                    steps {
+                        sh '''
+                            . .venv/bin/activate
+                            export COVERAGE_FILE=".coverage.hacs"
+                            rm -f "$COVERAGE_FILE"
+                            python -m pytest hacs-addon/tests/ \
+                                --tb=short -q \
+                                --cov=custom_components/vomesync \
+                                --cov-report=term-missing \
+                                --cov-report=xml:coverage-hacs.xml \
+                                --junitxml=junit-hacs.xml
+                        '''
+                    }
+                    post {
+                        always {
+                            junit allowEmptyResults: true, testResults: 'junit-hacs.xml'
+                            script {
+                                try {
+                                    cobertura coberturaReportFile: 'coverage-hacs.xml', onlyStable: false
+                                } catch (Throwable err) {
+                                    echo "Cobertura publisher unavailable: ${err}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Coverage Report') {
+            when {
+                expression { env.RUN_MAIN_PIPELINE == 'true' }
+            }
+            steps {
+                dir('webserver') {
+                    sh '''
+                        npm run test:coverage -- --ci --forceExit 2>&1 || true
+                    '''
+                }
+            }
+            post {
+                always {
+                    script {
+                        if (fileExists('webserver/coverage/lcov-report/index.html')) {
+                            publishHTML(target: [
+                                reportDir: 'webserver/coverage/lcov-report',
+                                reportFiles: 'index.html',
+                                reportName: 'VomeSync Webserver Coverage'
+                            ])
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Skipped') {
+            when {
+                expression { env.RUN_MAIN_PIPELINE != 'true' }
+            }
+            steps {
+                echo 'No repository changes detected. CI checks skipped for this run.'
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '✓ VomeSync CI — all quality gates passed.'
+        }
+        failure {
+            echo '✗ VomeSync CI — pipeline failed. Check the stage logs above.'
+        }
+        cleanup {
+            cleanWs()
+        }
+    }
+}

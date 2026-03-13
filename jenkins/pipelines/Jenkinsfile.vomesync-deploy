@@ -1,0 +1,208 @@
+// =============================================================================
+// VomeSync — Deployment Pipeline
+//
+// Deploys VomeSync Docker services (Redis, webserver, website, proxy).
+// Supports DEV-only, LIVE-only, or full (all services) deploys.
+// LIVE deploys require manual approval.
+//
+// The VomeSync repo is expected at /var/www/VomeSync on the host, which is
+// bind-mounted into the Jenkins container.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'TARGET',
+            choices: ['dev', 'live', 'all'],
+            description: 'Which service tier to deploy'
+        )
+        booleanParam(
+            name: 'PULL_LATEST',
+            defaultValue: true,
+            description: 'Git pull latest changes before deploying'
+        )
+        booleanParam(
+            name: 'NO_CACHE',
+            defaultValue: false,
+            description: 'Build Docker images with --no-cache'
+        )
+        booleanParam(
+            name: 'RUN_TESTS_FIRST',
+            defaultValue: true,
+            description: 'Run CI pipeline before deploying'
+        )
+        booleanParam(
+            name: 'BACKUP_BEFORE_DEPLOY',
+            defaultValue: true,
+            description: 'Create a Redis backup before deploying live'
+        )
+    }
+
+    options {
+        ansiColor('xterm')
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        VOMESYNC_DIR = '/var/www/VomeSync'
+        DOCKER_DIR = '/var/www/VomeSync/docker'
+    }
+
+    stages {
+        stage('Pre-flight Tests') {
+            when {
+                expression { params.RUN_TESTS_FIRST }
+            }
+            steps {
+                build job: 'VomeSync/vomesync-ci', wait: true, propagate: true
+            }
+        }
+
+        stage('Approval') {
+            when {
+                expression { params.TARGET == 'live' || params.TARGET == 'all' }
+            }
+            steps {
+                input message: "Deploy VomeSync to LIVE?", ok: "Yes, deploy to production"
+            }
+        }
+
+        stage('Pull Latest') {
+            when {
+                expression { params.PULL_LATEST }
+            }
+            steps {
+                sh """
+                    cd "${env.VOMESYNC_DIR}"
+                    if git diff --quiet && git diff --cached --quiet; then
+                        git pull --ff-only || echo "WARNING: git pull failed; continuing with existing working copy"
+                    else
+                        echo "WARNING: Git working tree has local changes; skipping git pull"
+                    fi
+                """
+            }
+        }
+
+        stage('Pre-deploy Backup') {
+            when {
+                expression { params.BACKUP_BEFORE_DEPLOY && (params.TARGET == 'live' || params.TARGET == 'all') }
+            }
+            steps {
+                sh """
+                    cd "${env.DOCKER_DIR}"
+                    BACKUP_DIR="${env.VOMESYNC_DIR}/backups/\$(date +%Y%m%d_%H%M%S)"
+                    mkdir -p "\$BACKUP_DIR"
+                    docker compose exec -T vomesync-redis redis-cli --rdb - > "\$BACKUP_DIR/redis_dump.rdb" 2>/dev/null || true
+                    cp "${env.DOCKER_DIR}/.env" "\$BACKUP_DIR/" 2>/dev/null || true
+                    echo "Backup created: \$BACKUP_DIR"
+                """
+            }
+        }
+
+        stage('Deploy DEV') {
+            when {
+                expression { params.TARGET == 'dev' || params.TARGET == 'all' }
+            }
+            steps {
+                sh """
+                    cd "${env.DOCKER_DIR}"
+                    echo "Building DEV services..."
+                    docker compose build ${params.NO_CACHE ? '--no-cache' : ''} vomesync-webserver-dev
+                    echo "Starting DEV services..."
+                    docker compose up -d --force-recreate vomesync-redis-dev vomesync-webserver-dev vomesync-website-dev
+                """
+            }
+        }
+
+        stage('Deploy LIVE') {
+            when {
+                expression { params.TARGET == 'live' || params.TARGET == 'all' }
+            }
+            steps {
+                sh """
+                    cd "${env.DOCKER_DIR}"
+                    echo "Building LIVE services..."
+                    docker compose build ${params.NO_CACHE ? '--no-cache' : ''} vomesync-webserver
+                    echo "Starting LIVE services..."
+                    docker compose up -d --force-recreate vomesync-redis vomesync-webserver vomesync-website vomesync-proxy
+                """
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                script {
+                    sleep(time: 8, unit: 'SECONDS')
+
+                    if (params.TARGET == 'dev' || params.TARGET == 'all') {
+                        def devPort = sh(
+                            script: "grep '^VOMESYNC_API_DEV_HOST_PORT=' ${env.DOCKER_DIR}/.env | cut -d= -f2 || echo 3091",
+                            returnStdout: true
+                        ).trim() ?: '3091'
+                        def devHost = sh(
+                            script: "getent hosts host.docker.internal | awk '{print \$1}' || ip route | awk '/default/ {print \$3}' || echo '172.17.0.1'",
+                            returnStdout: true
+                        ).trim() ?: '172.17.0.1'
+                        def devUrl = "http://${devHost}:${devPort}/api/health"
+                        echo "Smoke testing DEV at ${devUrl} ..."
+                        def devStatus = sh(
+                            script: "curl -sf -o /dev/null -w '%{http_code}' --connect-timeout 5 '${devUrl}' || echo 000",
+                            returnStdout: true
+                        ).trim()
+                        if (devStatus == '200') {
+                            echo "DEV health check passed (HTTP ${devStatus})"
+                        } else {
+                            echo "WARNING: DEV health check returned HTTP ${devStatus}"
+                        }
+                    }
+
+                    if (params.TARGET == 'live' || params.TARGET == 'all') {
+                        def livePort = sh(
+                            script: "grep '^VOMESYNC_API_HOST_PORT=' ${env.DOCKER_DIR}/.env | cut -d= -f2 || echo 3090",
+                            returnStdout: true
+                        ).trim() ?: '3090'
+                        def liveHost = sh(
+                            script: "getent hosts host.docker.internal | awk '{print \$1}' || ip route | awk '/default/ {print \$3}' || echo '172.17.0.1'",
+                            returnStdout: true
+                        ).trim() ?: '172.17.0.1'
+                        def liveUrl = "http://${liveHost}:${livePort}/api/health"
+                        echo "Smoke testing LIVE at ${liveUrl} ..."
+                        def liveStatus = sh(
+                            script: "curl -sf -o /dev/null -w '%{http_code}' --connect-timeout 5 '${liveUrl}' || echo 000",
+                            returnStdout: true
+                        ).trim()
+                        if (liveStatus == '200') {
+                            echo "LIVE health check passed (HTTP ${liveStatus})"
+                        } else {
+                            error("LIVE health check failed (HTTP ${liveStatus})")
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Status') {
+            steps {
+                sh """
+                    cd "${env.DOCKER_DIR}"
+                    echo "── Container Status ──"
+                    docker compose ps
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "VomeSync ${params.TARGET} deployed successfully."
+        }
+        failure {
+            echo "VomeSync ${params.TARGET} deployment failed."
+        }
+    }
+}

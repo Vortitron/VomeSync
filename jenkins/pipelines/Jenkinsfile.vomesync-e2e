@@ -1,0 +1,159 @@
+// =============================================================================
+// VomeSync — End-to-End Test Pipeline
+//
+// Spins up the full Docker Compose stack (Redis + webserver), runs the Python
+// E2E test suite against it, then tears everything down.
+//
+// Requires Docker socket access from the Jenkins container.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    options {
+        ansiColor('xterm')
+        timestamps()
+        timeout(time: 20, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    parameters {
+        booleanParam(
+            name: 'FORCE_RUN',
+            defaultValue: false,
+            description: 'Run E2E tests even when no SCM changes are detected'
+        )
+    }
+
+    environment {
+        RUN_E2E = 'true'
+        COMPOSE_PROJECT_NAME = "vomesync-e2e-${BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Scope Check') {
+            steps {
+                script {
+                    def forceRun = (params.FORCE_RUN ?: false)
+                    def changedFiles = []
+                    def firstBuild = (currentBuild.number == 1)
+
+                    for (def changeSet in currentBuild.changeSets) {
+                        for (def entry in changeSet.items) {
+                            for (def file in entry.affectedFiles) {
+                                changedFiles << file.path
+                            }
+                        }
+                    }
+
+                    if (forceRun || !changedFiles.isEmpty() || firstBuild) {
+                        env.RUN_E2E = 'true'
+                    } else {
+                        env.RUN_E2E = 'false'
+                        currentBuild.description = 'No SCM changes'
+                    }
+                }
+            }
+        }
+
+        stage('Prepare Environment') {
+            when {
+                expression { env.RUN_E2E == 'true' }
+            }
+            steps {
+                sh '''
+                    python3 -m venv .venv
+                    . .venv/bin/activate
+                    pip install --upgrade pip
+                    pip install -r tests/e2e/requirements.txt
+                '''
+                dir('docker') {
+                    sh '''
+                        cp env.example .env
+                        sed -i 's/^JWT_SECRET=.*/JWT_SECRET=test-jwt-secret-jenkins/' .env
+                        sed -i 's/^REDIS_PASSWORD=.*/REDIS_PASSWORD=/' .env
+                    '''
+                }
+            }
+        }
+
+        stage('Start Services') {
+            when {
+                expression { env.RUN_E2E == 'true' }
+            }
+            steps {
+                dir('docker') {
+                    sh '''
+                        docker compose -p "$COMPOSE_PROJECT_NAME" up -d --build vomesync-redis vomesync-webserver
+                    '''
+                }
+                script {
+                    def apiPort = sh(
+                        script: "grep '^VOMESYNC_API_HOST_PORT=' docker/.env | cut -d= -f2 || echo 3090",
+                        returnStdout: true
+                    ).trim() ?: '3090'
+                    env.E2E_API_PORT = apiPort
+                }
+                sh """
+                    echo "Waiting for API on port ${env.E2E_API_PORT}..."
+                    timeout 180 bash -c 'until curl -sf "http://localhost:${env.E2E_API_PORT}/api/health"; do sleep 2; done'
+                    echo "API is healthy."
+                """
+            }
+        }
+
+        stage('Run E2E Tests') {
+            when {
+                expression { env.RUN_E2E == 'true' }
+            }
+            steps {
+                sh '''
+                    . .venv/bin/activate
+                    python -m pytest tests/e2e/ \
+                        -v --tb=short \
+                        --junitxml=junit-e2e.xml
+                '''
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'junit-e2e.xml'
+                }
+            }
+        }
+
+        stage('Skipped') {
+            when {
+                expression { env.RUN_E2E != 'true' }
+            }
+            steps {
+                echo 'No changes detected. E2E tests skipped.'
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                if (env.RUN_E2E == 'true') {
+                    dir('docker') {
+                        sh """
+                            echo "── Service logs ──"
+                            docker compose -p "${env.COMPOSE_PROJECT_NAME}" logs --tail=80 || true
+                            echo "── Tearing down ──"
+                            docker compose -p "${env.COMPOSE_PROJECT_NAME}" down -v --remove-orphans || true
+                        """
+                    }
+                }
+            }
+        }
+        success {
+            echo '✓ VomeSync E2E tests passed.'
+        }
+        failure {
+            echo '✗ VomeSync E2E tests failed.'
+        }
+        cleanup {
+            cleanWs()
+        }
+    }
+}
