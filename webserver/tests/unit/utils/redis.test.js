@@ -93,18 +93,18 @@ describe('Redis Client', () => {
 				expect(result.lastToggled).toBeDefined();
 			});
 
-			test('should set expiry on switch', async () => {
-				const uid = global.testUtils.generateTestUUID();
-				const personalKey = global.testUtils.createTestPersonalKey();
-				const switchConfig = global.testUtils.createTestSwitchData();
+		test('should set expiry on switch', async () => {
+			const uid = global.testUtils.generateTestUUID();
+			const personalKey = global.testUtils.createTestPersonalKey();
+			const switchConfig = global.testUtils.createTestSwitchData();
 
-				await redisClient.createSwitch(uid, personalKey, switchConfig);
-				await redisClient.setSwitchState(uid, true);
+			await redisClient.createSwitch(uid, personalKey, switchConfig);
+			await redisClient.setSwitchState(uid, true);
 
-				const ttl = await redisClient.client.ttl(`switch:${uid}`);
-				expect(ttl).toBeGreaterThan(0);
-				expect(ttl).toBeLessThanOrEqual(30 * 24 * 60 * 60); // 30 days
-			});
+			const ttl = await redisClient.client.ttl(`switch:${uid}`);
+			expect(ttl).toBeGreaterThan(0);
+			expect(ttl).toBeLessThanOrEqual(90 * 24 * 60 * 60); // 90 days default
+		});
 		});
 
 		describe('getSwitchState', () => {
@@ -158,7 +158,45 @@ describe('Redis Client', () => {
 			});
 		});
 
-		describe('getUserSwitchCounts', () => {
+		describe('refreshSwitchTTL', () => {
+		test('should refresh TTL on an existing switch', async () => {
+			const uid = global.testUtils.generateTestUUID();
+			const personalKey = global.testUtils.createTestPersonalKey();
+			await redisClient.createSwitch(uid, personalKey, global.testUtils.createTestSwitchData());
+
+			// Artificially lower the TTL
+			await redisClient.client.expire(`switch:${uid}`, 60);
+			const lowTtl = await redisClient.client.ttl(`switch:${uid}`);
+			expect(lowTtl).toBeLessThanOrEqual(60);
+
+			const result = await redisClient.refreshSwitchTTL(uid);
+			expect(result).toBe(true);
+
+			const newTtl = await redisClient.client.ttl(`switch:${uid}`);
+			expect(newTtl).toBeGreaterThan(60);
+		});
+
+		test('should return false for non-existent switch', async () => {
+			const result = await redisClient.refreshSwitchTTL('nonexistent_uid');
+			expect(result).toBe(false);
+		});
+
+		test('should also refresh owner index TTL', async () => {
+			const uid = 'vs_test_refresh_owner';
+			const ownerId = 'owner-refresh-test';
+			await redisClient.createSwitchV2(uid, ownerId, 'pubkey', 'switchpub', 0, global.testUtils.createTestSwitchData());
+
+			const ownerKey = `owner:${ownerId}`;
+			await redisClient.client.expire(ownerKey, 60);
+
+			await redisClient.refreshSwitchTTL(uid);
+
+			const ownerTtl = await redisClient.client.ttl(ownerKey);
+			expect(ownerTtl).toBeGreaterThan(60);
+		});
+	});
+
+	describe('getUserSwitchCounts', () => {
 			test('should count total and public switches', async () => {
 				const personalKey = global.testUtils.createTestPersonalKey();
 				const uid1 = global.testUtils.generateTestUUID();

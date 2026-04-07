@@ -351,7 +351,7 @@ See `docs/DEV_NOTES.md` for local Home Assistant testing notes and helper script
 ### GDPR considerations
 - **Personal data stored**: personal keys (UUID), API keys (UUID), optional profile links, timestamps, usage events tied to keys. No names/emails unless put in descriptions/links by users.
 - **Data minimisation**: only store what is required for switch auth and activity; comments are owner/API-key only. Session tokens are short-lived and single-use.
-- **Retention**: switches and key data expire after 30 days of inactivity (TTL set on switch and user sets). Backups retain at most 14 days by policy above.
+- **Retention**: switches and key data expire after 90 days of inactivity by default (configurable via `SWITCH_TTL_DAYS` env var). TTL is refreshed on any status read, owner listing, or state change. Backups retain at most 14 days by policy above.
 - **Rights**: `/api/delete-key` deletes a personal key and all associated switches/events; also removes from public sets. This serves erasure/export needs; add export-on-request if required.
 - **Security**: rate limiting in API, JWT for HA, API keys revocable, HTTPS via nginx. Backups must be encrypted; access to keys limited.
 - **Incident response**: if compromise suspected, rotate Redis password, revoke API keys (`/api/api-keys/:apiKey`), encourage users to regenerate personal keys, and purge session tokens (`session_token:*`).

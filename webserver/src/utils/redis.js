@@ -12,8 +12,11 @@ const SECRET_ID_HASH_ALGO = 'sha256';
 const SECRET_ID_HEX_LENGTH = 64;
 
 const PERSONAL_KEY_TTL_SECONDS = 365 * 24 * 60 * 60; // 1 year
-const USER_INDEX_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
-const SWITCH_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
+const DEFAULT_SWITCH_TTL_DAYS = 90;
+const USER_INDEX_TTL_SECONDS = DEFAULT_SWITCH_TTL_DAYS * 24 * 60 * 60;
+const SWITCH_TTL_SECONDS = parseInt(process.env.SWITCH_TTL_DAYS, 10) > 0
+	? parseInt(process.env.SWITCH_TTL_DAYS, 10) * 24 * 60 * 60
+	: DEFAULT_SWITCH_TTL_DAYS * 24 * 60 * 60;
 
 const BLOCKED_OWNER_IDS_SET = 'blocked:owner_ids';
 const BLOCKED_PERSONAL_KEY_IDS_SET = 'blocked:personal_key_ids';
@@ -394,6 +397,22 @@ class RedisClient {
 		return switchData;
 	}
 
+	async refreshSwitchTTL(uid) {
+		const key = `switch:${uid}`;
+		const exists = await this.client.exists(key);
+		if (!exists) return false;
+		await this.client.expire(key, SWITCH_TTL_SECONDS);
+		const ownerField = await this.client.hGet(key, 'ownerId');
+		if (ownerField) {
+			await this.client.expire(`owner:${ownerField}`, USER_INDEX_TTL_SECONDS);
+		}
+		const ownerKeyField = await this.client.hGet(key, 'ownerKeyId');
+		if (ownerKeyField) {
+			await this.client.expire(`user:${ownerKeyField}:switches`, USER_INDEX_TTL_SECONDS);
+		}
+		return true;
+	}
+
 	async getSwitchState(uid) {
 		const key = `switch:${uid}`;
 		const raw = await this.client.hGetAll(key);
@@ -569,9 +588,11 @@ class RedisClient {
 			const switchData = await this.getSwitchState(uid);
 			if (switchData) {
 				switches.push(switchData);
+				this.refreshSwitchTTL(uid).catch(() => {});
 			}
 		}
 
+		await this.client.expire(userKey, USER_INDEX_TTL_SECONDS);
 		return switches;
 	}
 
@@ -584,9 +605,11 @@ class RedisClient {
 			const switchData = await this.getSwitchState(uid);
 			if (switchData) {
 				switches.push(switchData);
+				this.refreshSwitchTTL(uid).catch(() => {});
 			}
 		}
 
+		await this.client.expire(ownerKey, USER_INDEX_TTL_SECONDS);
 		return switches;
 	}
 

@@ -565,6 +565,24 @@ describe('API Integration Tests', () => {
 			expect(response.body.error).toBe('Switch not found');
 		});
 
+		test('should refresh switch TTL on status read', async () => {
+			const redisClient = require('../../src/utils/redis');
+
+			await redisClient.client.expire(`switch:${switchUID}`, 120);
+			const lowTtl = await redisClient.client.ttl(`switch:${switchUID}`);
+			expect(lowTtl).toBeLessThanOrEqual(120);
+
+			await request(app)
+				.get(`/api/status/${switchUID}`)
+				.expect(200);
+
+			// Allow async TTL refresh to settle
+			await new Promise((r) => setTimeout(r, 50));
+
+			const refreshedTtl = await redisClient.client.ttl(`switch:${switchUID}`);
+			expect(refreshedTtl).toBeGreaterThan(120);
+		});
+
 		test('should reject invalid UID', async () => {
 			const response = await request(app)
 				.get('/api/status/invalid-uid')

@@ -50,6 +50,8 @@ router.get('/status/:uid',
 				return res.status(404).json({ success: false, error: 'Switch not found' });
 			}
 
+			redisClient.refreshSwitchTTL(uid).catch(() => {});
+
 			return res.json({
 				success: true,
 				data: sanitizePublicSwitchData(switchData)
