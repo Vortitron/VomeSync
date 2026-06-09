@@ -116,6 +116,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - Manage on website: generates a session, fragment-based URL for editing `link`/`iconUrl`/`bannerUrl` on the website (regenerate in HA when needed)
   - v2 delegation: create/list/revoke per-switch access keys (scoped permissions like toggle/comment)
   - Subscriptions are read-only by default; add a delegated access key in HA to enable toggling
+  - **Connect this Home Assistant to Vome (relay):** *Settings → Devices & Services → Vome → Configure → More… → Connect this Home Assistant to Vome*. A device-authorisation flow (show a code → approve on vome.io with GitHub) brings up an outbound tunnel so Vome and the [home-assistant-mcp](https://github.com/Vortitron/home-assistant-mcp) server can broker scoped, audited calls to this HA — with **no public IP, port-forwarding, or Nabu Casa**. Calls are executed locally via the Supervisor token (HAOS/Supervised) or a configured long-lived token. See `custom_components/vomesync/relay_client.py`.
 
 ## Installation
 
@@ -340,6 +341,25 @@ See `docs/DEV_NOTES.md` for local Home Assistant testing notes and helper script
 - User counts are tracked from authenticated interactions (toggles/comments) to help filter active/public switches.
 - Website runs on port **8111** in Docker; served externally via nginx SSL proxy (`sync.vome.io`).
 - CAPTCHA support: set `HCAPTCHA_SECRET`/`HCAPTCHA_SITEKEY` (and optional `HCAPTCHA_BYPASS_TOKEN` for staging) to require a captcha token whenever `publicize` is set to true on create/patch. Without these env vars, captcha is disabled.
+
+### Relay (outbound tunnel) — backend env
+
+The relay control channel (`/ws/relay`, `webserver/src/websocket/relayManager.js`)
+and internal dispatch endpoint (`/internal/relay/dispatch`) are **inert until
+configured**, so existing switch sync is unaffected. To enable end-to-end:
+
+- `RELAY_INTERNAL_SECRET` — shared secret, identical on the backend and the Vome
+  portal (vome.io). Authenticates portal→backend dispatch and backend→portal
+  secret-verify (both constant-time compared). Empty ⇒ relay disabled.
+- `RELAY_PORTAL_VERIFY_URL` — the portal's verify endpoint
+  (default `https://vome.io/api/internal/relay/verify`).
+
+The portal side additionally needs `RELAY_DISPATCH_URL` (pointing at this
+backend's `/internal/relay/dispatch`) and `RELAY_WS_URL`
+(default `wss://sync.vome.io/ws/relay`). nginx already proxies `/ws/relay` to the
+WS upstream via the existing `/ws` location. Tests:
+`webserver/tests/unit/websocket/relayManager.test.js` and
+`webserver/tests/unit/routes/internal-routes.test.js`.
 
 ### Backup & restore (Redis)
 - **What to back up**: Redis data (keys: `switch:*`, `user:*`, `key:*`, `apikey:*`, `session_token:*`, `public_switches` set, event/user sets).
