@@ -21,6 +21,40 @@ AUTH_MODE_CRYPTO = "crypto"
 DEFAULT_SERVER_URL = "https://sync.vome.io"
 DEFAULT_WEBSOCKET_URL = "wss://sync.vome.io"
 
+# Relay: connect this Home Assistant to a Vome account over an outbound tunnel,
+# so Vome (and the home-assistant-mcp server) can broker scoped, audited calls
+# to it without any inbound exposure (no public IP / port-forward / Nabu Casa).
+CONF_RELAY = "relay"  # options key holding the dict below
+CONF_RELAY_SERVER_ID = "server_id"
+CONF_RELAY_SECRET = "secret"  # noqa: S105 - dict key, not a secret value
+CONF_RELAY_WS_URL = "ws_url"
+CONF_RELAY_LOCAL_TOKEN = "local_token"  # noqa: S105 - optional non-supervised fallback
+CONF_RELAY_LOCAL_URL = "local_url"
+
+# The portal (account / device-authorisation) lives on vome.io; the relay
+# WebSocket lives on sync.vome.io.  The portal tells us the WS URL at link time.
+DEFAULT_PORTAL_URL = "https://vome.io"
+DEFAULT_RELAY_WS_URL = "wss://sync.vome.io/ws/relay"
+RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
+RELAY_DEVICE_TOKEN_PATH = "/api/v1/relay/device/token"
+
+# Local Home Assistant core API for executing relayed calls.  Supervisor token
+# first (HAOS / Supervised); a configured long-lived token is the fallback.
+SUPERVISOR_CORE_BASE = "http://supervisor/core"
+DEFAULT_LOCAL_CORE_URL = "http://127.0.0.1:8123"
+SUPERVISOR_TOKEN_ENV = "SUPERVISOR_TOKEN"  # noqa: S105 - env var name, not a secret
+
+# Relay WebSocket message types + reconnect tuning.
+RELAY_WS_MSG_HELLO = "hello"
+RELAY_WS_MSG_HA_RPC = "ha_rpc"
+RELAY_WS_MSG_HA_RPC_RESPONSE = "ha_rpc_response"
+RELAY_WS_MSG_PING = "ping"
+RELAY_WS_MSG_PONG = "pong"
+RELAY_RECONNECT_DELAY = 5
+RELAY_RECONNECT_MAX_DELAY = 60
+RELAY_RPC_TIMEOUT = 30
+RELAY_ALLOWED_METHODS = ("GET", "POST", "PUT", "DELETE")
+
 # Switch configuration keys
 CONF_SWITCH_UID = "uid"
 CONF_SWITCH_NAME = "name"

@@ -12,6 +12,7 @@ import voluptuous as vol
 from .const import DOMAIN, CONF_SERVER_URL, CONF_SWITCH_UID
 from .coordinator import VomeSyncCoordinator
 from .naming import build_entry_title, is_default_entry_title
+from .relay_client import async_start_relay, async_stop_relay
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,7 +77,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 		hass.config_entries.async_update_entry(entry, data=new_data)
 	
 	_register_services(hass)
-	
+
+	# Start the outbound relay if this entry is linked to a Vome account.
+	await async_start_relay(hass, entry)
+
 	return True
 
 
@@ -180,6 +184,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	"""Unload a config entry."""
 	_LOGGER.info("Unloading VomeSync integration")
 	
+	# Stop the relay (if any) before tearing down platforms.
+	await async_stop_relay(hass, entry)
+
 	# Unload platforms
 	unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 	

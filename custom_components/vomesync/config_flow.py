@@ -15,6 +15,7 @@ from homeassistant.helpers.selector import selector
 
 from .api_client import VomeSyncAPIClient, VomeSyncAPIError
 from .options_flow_links import VomeSyncOptionsFlowLinkEntitiesMixin
+from .options_flow_relay import VomeSyncOptionsFlowRelayMixin
 from .const import (
 	DOMAIN,
 	CONF_PERSONAL_KEY,
@@ -295,7 +296,11 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 		return VomeSyncOptionsFlow(config_entry)
 
 
-class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEntitiesMixin):
+class VomeSyncOptionsFlow(
+	config_entries.OptionsFlow,
+	VomeSyncOptionsFlowLinkEntitiesMixin,
+	VomeSyncOptionsFlowRelayMixin,
+):
 	"""Handle options flow for VomeSync."""
 
 	def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
@@ -577,8 +582,10 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 			"reannounce_owned_switches",
 			"cleanup_orphaned_devices",
 			"edit_connection",
-			"back",
 		]
+		# Connect this Home Assistant to a Vome account over the outbound relay.
+		menu_options.append("unlink_vome" if self._relay_is_linked() else "link_vome")
+		menu_options.append("back")
 		return self.async_show_menu(step_id="more", menu_options=menu_options)
 
 	async def async_step_back(
