@@ -65,6 +65,24 @@ describe('RelayManager.dispatch', () => {
 		expect(mgr.pending.size).toBe(0);
 	});
 
+	test('forwards the target (esphome) in the ha_rpc, omitting it for core', async () => {
+		const ws = connect(mgr, 'rly-1');
+		const espP = mgr.dispatch('rly-1', { method: 'GET', path: '/devices', target: 'esphome', timeout: 5 });
+		const esp = JSON.parse(ws.sent[0]);
+		expect(esp.target).toBe('esphome');
+		expect(esp.path).toBe('/devices');
+
+		const coreP = mgr.dispatch('rly-1', { method: 'GET', path: '/api/states', timeout: 5 });
+		const core = JSON.parse(ws.sent[1]);
+		expect('target' in core).toBe(false); // undefined target is dropped → back-compat
+
+		// Resolve both so no RPC timers linger past the test.
+		mgr.handleMessage('rly-1', JSON.stringify({ type: 'ha_rpc_response', requestId: esp.requestId, status: 200 }));
+		mgr.handleMessage('rly-1', JSON.stringify({ type: 'ha_rpc_response', requestId: core.requestId, status: 200 }));
+		await Promise.all([espP, coreP]);
+		expect(mgr.pending.size).toBe(0);
+	});
+
 	test('ignores a response with an unknown requestId', async () => {
 		const ws = connect(mgr, 'rly-1');
 		const promise = mgr.dispatch('rly-1', { path: '/api/states', timeout: 5 });

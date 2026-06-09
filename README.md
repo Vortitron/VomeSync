@@ -117,6 +117,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - v2 delegation: create/list/revoke per-switch access keys (scoped permissions like toggle/comment)
   - Subscriptions are read-only by default; add a delegated access key in HA to enable toggling
   - **Connect this Home Assistant to Vome (relay):** *Settings → Devices & Services → Vome → Configure → More… → Connect this Home Assistant to Vome*. A device-authorisation flow (show a code → approve on vome.io with GitHub) brings up an outbound tunnel so Vome and the [home-assistant-mcp](https://github.com/Vortitron/home-assistant-mcp) server can broker scoped, audited calls to this HA — with **no public IP, port-forwarding, or Nabu Casa**. Calls are executed locally via the Supervisor token (HAOS/Supervised) or a configured long-lived token. See `custom_components/vomesync/relay_client.py`.
+    - **ESPHome over the same tunnel:** the relay also proxies the ESPHome dashboard's REST subset (list devices, read/write device YAML), so the MCP can see and edit ESPHome device code without inbound exposure. The dashboard is auto-discovered via the Supervisor add-on API (or set an explicit URL in the link step). Streaming build commands (compile/upload/run/logs) still need a directly-reachable dashboard.
 
 ## Installation
 

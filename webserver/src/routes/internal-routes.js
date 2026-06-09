@@ -40,12 +40,12 @@ router.post('/relay/dispatch', async (req, res) => {
 	if (!authorised(req)) {
 		return res.status(401).json({ error: 'unauthorized' });
 	}
-	const { server_id: serverId, method, path, body, expect, timeout } = req.body || {};
+	const { server_id: serverId, method, path, body, expect, timeout, target } = req.body || {};
 	if (!serverId || !path) {
 		return res.status(400).json({ error: 'server_id and path are required' });
 	}
 	try {
-		const result = await relayManager.dispatch(serverId, { method, path, body, expect, timeout });
+		const result = await relayManager.dispatch(serverId, { method, path, body, expect, timeout, target });
 		if (result && result.offline) {
 			return res.status(404).json({ error: 'No relay connection for this server.' });
 		}

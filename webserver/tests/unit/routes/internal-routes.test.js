@@ -70,6 +70,21 @@ describe('POST /internal/relay/dispatch', () => {
 		expect(res.body).toEqual({ status: 200, body: '{"ok":true}' });
 	});
 
+	test('forwards the esphome target through to dispatch', async () => {
+		let seen;
+		relayManager.dispatch = async (serverId, payload) => {
+			seen = payload;
+			return { status: 200, body: '[]' };
+		};
+		const res = await request(app)
+			.post('/internal/relay/dispatch')
+			.set('Authorization', `Bearer ${SECRET}`)
+			.send({ server_id: 'rly-1', method: 'GET', path: '/devices', target: 'esphome' });
+		expect(res.status).toBe(200);
+		expect(seen.target).toBe('esphome');
+		expect(seen.path).toBe('/devices');
+	});
+
 	test('404 when the component is offline', async () => {
 		relayManager.dispatch = async () => ({ offline: true });
 		const res = await request(app)

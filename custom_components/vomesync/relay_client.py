@@ -33,6 +33,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
 	CONF_RELAY,
+	CONF_RELAY_ESPHOME_URL,
 	CONF_RELAY_LOCAL_TOKEN,
 	CONF_RELAY_LOCAL_URL,
 	CONF_RELAY_SECRET,
@@ -42,17 +43,22 @@ from .const import (
 	DEFAULT_PORTAL_URL,
 	DEFAULT_RELAY_WS_URL,
 	DOMAIN,
+	ESPHOME_ALLOWED_METHODS,
+	ESPHOME_ALLOWED_PATHS,
+	ESPHOME_DEFAULT_PORT,
 	RELAY_ALLOWED_METHODS,
 	RELAY_DEVICE_CODE_PATH,
 	RELAY_DEVICE_TOKEN_PATH,
 	RELAY_RECONNECT_DELAY,
 	RELAY_RECONNECT_MAX_DELAY,
+	RELAY_RPC_TARGET_ESPHOME,
 	RELAY_RPC_TIMEOUT,
 	RELAY_WS_MSG_HA_RPC,
 	RELAY_WS_MSG_HA_RPC_RESPONSE,
 	RELAY_WS_MSG_HELLO,
 	RELAY_WS_MSG_PING,
 	RELAY_WS_MSG_PONG,
+	SUPERVISOR_ADDONS_URL,
 	SUPERVISOR_CORE_BASE,
 	SUPERVISOR_TOKEN_ENV,
 )
@@ -75,6 +81,7 @@ class RelayClient:
 		ws_url: Optional[str] = None,
 		local_token: Optional[str] = None,
 		local_url: Optional[str] = None,
+		esphome_url: Optional[str] = None,
 		session: Optional[aiohttp.ClientSession] = None,
 	) -> None:
 		self._hass = hass
@@ -83,6 +90,9 @@ class RelayClient:
 		self._ws_url = ws_url or DEFAULT_RELAY_WS_URL
 		self._local_token = local_token
 		self._local_url = local_url or DEFAULT_LOCAL_CORE_URL
+		self._esphome_url = (esphome_url or "").rstrip("/") or None
+		# Cache for the auto-discovered ESPHome dashboard base (Supervisor installs).
+		self._esphome_base_cache: Optional[str] = None
 		self._session = session
 		self._task: Optional[asyncio.Task] = None
 		self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
@@ -164,7 +174,7 @@ class RelayClient:
 	async def _handle_rpc(self, ws: aiohttp.ClientWebSocketResponse, data: dict) -> None:
 		request_id = data.get("requestId")
 		status, body, error = await self.execute(
-			data.get("method"), data.get("path"), data.get("body")
+			data.get("method"), data.get("path"), data.get("body"), data.get("target")
 		)
 		response: dict[str, Any] = {
 			"type": RELAY_WS_MSG_HA_RPC_RESPONSE,
@@ -193,13 +203,26 @@ class RelayClient:
 		return None, None
 
 	async def execute(
+		self,
+		method: Optional[str],
+		path: Optional[str],
+		body: Any,
+		target: Optional[str] = None,
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""Execute one relayed call locally; return ``(status, body_text, error)``.
+
+		``target`` selects the local service: the HA core REST API (``core``, the
+		default) or the ESPHome dashboard (``esphome``).  ``status`` is 0 on a
+		local failure, so the broker surfaces it as a 502.
+		"""
+		if target == RELAY_RPC_TARGET_ESPHOME:
+			return await self._execute_esphome(method, path, body)
+		return await self._execute_core(method, path, body)
+
+	async def _execute_core(
 		self, method: Optional[str], path: Optional[str], body: Any
 	) -> tuple[int, Optional[str], Optional[str]]:
-		"""Execute one HA REST call locally; return ``(status, body_text, error)``.
-
-		``status`` is 0 on a local failure (so the broker surfaces it as 502).
-		Only ``/api/...`` paths are permitted — this client never widens scope.
-		"""
+		"""Proxy one HA core REST call.  Only ``/api/...`` paths are permitted."""
 		if not isinstance(path, str) or not (path.startswith("/api/") or path == "/api/"):
 			return 0, None, "Refusing to execute a non-/api path."
 		method = (method or "GET").upper()
@@ -228,6 +251,86 @@ class RelayClient:
 			return 0, None, "Local Home Assistant timed out."
 		except aiohttp.ClientError as err:
 			return 0, None, f"Local Home Assistant error: {err}"
+
+	async def _execute_esphome(
+		self, method: Optional[str], path: Optional[str], body: Any
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""Proxy one ESPHome dashboard REST call (list / version / read+write YAML).
+
+		Only the allow-listed REST paths/methods are permitted; the streaming build
+		commands are not tunnelled.  ``body`` for a YAML write is sent verbatim as
+		``application/yaml``; reads carry no body.
+		"""
+		if not isinstance(path, str) or not path.startswith(ESPHOME_ALLOWED_PATHS):
+			return 0, None, "Refusing to proxy a non-allowlisted ESPHome path."
+		method = (method or "GET").upper()
+		if method not in ESPHOME_ALLOWED_METHODS:
+			return 0, None, f"Unsupported ESPHome method: {method}"
+		base = await self._resolve_esphome_base()
+		if not base:
+			return 0, None, (
+				"ESPHome dashboard not found. Install the ESPHome add-on, or set the "
+				"ESPHome dashboard URL in the Vome relay options."
+			)
+		url = base + path
+		session = self._get_session()
+		# A YAML write is raw text; everything else is a bodyless read.
+		data = body if isinstance(body, str) else None
+		headers = {"Content-Type": "application/yaml"} if data is not None else {}
+		try:
+			async with session.request(
+				method,
+				url,
+				headers=headers,
+				data=data,
+				timeout=aiohttp.ClientTimeout(total=RELAY_RPC_TIMEOUT),
+			) as resp:
+				text = await resp.text()
+				return resp.status, text, None
+		except asyncio.TimeoutError:
+			return 0, None, "ESPHome dashboard timed out."
+		except aiohttp.ClientError as err:
+			return 0, None, f"ESPHome dashboard error: {err}"
+
+	async def _resolve_esphome_base(self) -> Optional[str]:
+		"""Return the local ESPHome dashboard base URL, or ``None``.
+
+		An explicitly configured URL wins; otherwise, on HAOS / Supervised installs
+		we discover the ESPHome add-on via the Supervisor API and address it by its
+		internal hostname (cached after the first lookup).
+		"""
+		if self._esphome_url:
+			return self._esphome_url
+		if self._esphome_base_cache:
+			return self._esphome_base_cache
+		supervisor = os.environ.get(SUPERVISOR_TOKEN_ENV)
+		if not supervisor:
+			return None
+		session = self._get_session()
+		headers = {"Authorization": f"Bearer {supervisor}"}
+		try:
+			async with session.get(
+				SUPERVISOR_ADDONS_URL,
+				headers=headers,
+				timeout=aiohttp.ClientTimeout(total=10),
+			) as resp:
+				if resp.status != 200:
+					return None
+				payload = await resp.json()
+		except (asyncio.TimeoutError, aiohttp.ClientError, ValueError) as err:
+			_LOGGER.debug("Relay (%s): ESPHome add-on discovery failed: %s", self._server_id, err)
+			return None
+		addons = ((payload or {}).get("data") or {}).get("addons") or []
+		for addon in addons:
+			slug = addon.get("slug") or ""
+			if "esphome" in slug:
+				# Supervisor exposes each add-on on the internal network by its slug
+				# with underscores rendered as hyphens.
+				hostname = slug.replace("_", "-")
+				self._esphome_base_cache = f"http://{hostname}:{ESPHOME_DEFAULT_PORT}"
+				_LOGGER.info("Relay (%s): discovered ESPHome dashboard at %s", self._server_id, self._esphome_base_cache)
+				return self._esphome_base_cache
+		return None
 
 
 # ── Device-authorisation HTTP helpers (used by the config/options flow) ──────
@@ -280,6 +383,7 @@ async def async_start_relay(hass: HomeAssistant, entry) -> None:
 		ws_url=relay.get(CONF_RELAY_WS_URL),
 		local_token=relay.get(CONF_RELAY_LOCAL_TOKEN),
 		local_url=relay.get(CONF_RELAY_LOCAL_URL),
+		esphome_url=relay.get(CONF_RELAY_ESPHOME_URL),
 	)
 	hass.data.setdefault(DOMAIN, {}).setdefault(_RELAYS_KEY, {})[entry.entry_id] = client
 	client.start()

@@ -48,6 +48,12 @@ services:
       - SSL_KEY_PATH=${SSL_KEY_PATH:-}
       - ENABLE_ANALYTICS=${ENABLE_ANALYTICS:-true}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Relay (outbound-tunnel HA): shared secret authenticating portal<->backend,
+      # the portal endpoint that resolves a component's relay secret, and the
+      # per-RPC reply timeout. Empty secret fails closed (relay disabled).
+      - RELAY_INTERNAL_SECRET=${RELAY_INTERNAL_SECRET:-}
+      - RELAY_PORTAL_VERIFY_URL=${RELAY_PORTAL_VERIFY_URL:-https://vome.io/api/internal/relay/verify}
+      - RELAY_RPC_TIMEOUT_MS=${RELAY_RPC_TIMEOUT_MS:-20000}
     ports:
       - "${VOMESYNC_API_HOST_PORT:-3090}:3090"
       - "${VOMESYNC_WS_HOST_PORT:-3001}:3001"
@@ -127,6 +133,9 @@ services:
       - LOG_LEVEL=debug
       - HCAPTCHA_SECRET=
       - HCAPTCHA_BYPASS_TOKEN=test-bypass-token
+      - RELAY_INTERNAL_SECRET=${RELAY_INTERNAL_SECRET:-}
+      - RELAY_PORTAL_VERIFY_URL=${RELAY_PORTAL_VERIFY_URL:-https://vome.io/api/internal/relay/verify}
+      - RELAY_RPC_TIMEOUT_MS=${RELAY_RPC_TIMEOUT_MS:-20000}
     ports:
       - "${VOMESYNC_API_DEV_HOST_PORT:-3091}:3091"
       - "${VOMESYNC_WS_DEV_HOST_PORT:-3002}:3002"

@@ -170,7 +170,7 @@ class RelayManager {
 	 * ``{ status, body, error }`` otherwise (``status: 0`` on a timeout / send
 	 * failure).  Never rejects — the caller maps the shape onto an HTTP response.
 	 */
-	dispatch(serverId, { method, path, body, expect, timeout } = {}) {
+	dispatch(serverId, { method, path, body, expect, timeout, target } = {}) {
 		return new Promise((resolve) => {
 			const conn = this.connections.get(serverId);
 			if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
@@ -187,7 +187,7 @@ class RelayManager {
 			this.pending.set(requestId, { resolve, timer });
 			try {
 				conn.ws.send(JSON.stringify({
-					type: 'ha_rpc', requestId, method, path, body, expect, timeout
+					type: 'ha_rpc', requestId, method, path, body, expect, timeout, target
 				}));
 			} catch (err) {
 				clearTimeout(timer);

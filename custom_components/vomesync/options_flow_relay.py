@@ -17,6 +17,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
 	CONF_RELAY,
+	CONF_RELAY_ESPHOME_URL,
 	CONF_RELAY_LOCAL_TOKEN,
 	CONF_RELAY_SECRET,
 	CONF_RELAY_SERVER_ID,
@@ -100,6 +101,9 @@ class VomeSyncOptionsFlowRelayMixin:
 				local_token = (user_input.get("local_token") or "").strip()
 				if local_token:
 					relay[CONF_RELAY_LOCAL_TOKEN] = local_token
+				esphome_url = (user_input.get("esphome_url") or "").strip()
+				if esphome_url:
+					relay[CONF_RELAY_ESPHOME_URL] = esphome_url
 				options = dict(self._config_entry.options or {})
 				options[CONF_RELAY] = relay
 				await self._async_update_entry_options(options)
@@ -113,7 +117,10 @@ class VomeSyncOptionsFlowRelayMixin:
 				code_err = await self._relay_request_new_code(session)
 				errors["base"] = code_err or "relay_expired"
 
-		schema = vol.Schema({vol.Optional("local_token", default=""): str})
+		schema = vol.Schema({
+			vol.Optional("local_token", default=""): str,
+			vol.Optional("esphome_url", default=""): str,
+		})
 		return self.async_show_form(
 			step_id="link_vome",
 			data_schema=schema,

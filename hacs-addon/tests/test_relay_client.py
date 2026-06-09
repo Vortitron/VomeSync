@@ -111,6 +111,74 @@ class TestExecute:
 		assert status == 0 and "error" in error.lower()
 
 
+class TestEsphome:
+	@pytest.mark.asyncio
+	async def test_rejects_disallowed_path(self):
+		session, _ = _mock_session_with_response()
+		client = _client(session, esphome_url="http://esp:6052")
+		status, body, error = await client.execute("GET", "/secrets", None, "esphome")
+		assert status == 0 and "non-allowlisted" in error
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_rejects_unsupported_method(self):
+		session, _ = _mock_session_with_response()
+		client = _client(session, esphome_url="http://esp:6052")
+		status, body, error = await client.execute("DELETE", "/devices", None, "esphome")
+		assert status == 0 and "Unsupported ESPHome method" in error
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_explicit_url_list_devices(self):
+		session, _ = _mock_session_with_response(status=200, text='[{"name":"x"}]')
+		client = _client(session, esphome_url="http://esp:6052/")
+		status, body, error = await client.execute("GET", "/devices", None, "esphome")
+		assert status == 200 and body == '[{"name":"x"}]' and error is None
+		args, kwargs = session.request.call_args
+		assert args[0] == "GET"
+		assert args[1] == "http://esp:6052/devices"
+		assert kwargs["data"] is None
+
+	@pytest.mark.asyncio
+	async def test_save_config_sends_yaml(self):
+		session, _ = _mock_session_with_response(status=200, text="")
+		client = _client(session, esphome_url="http://esp:6052")
+		yaml = "esphome:\n  name: x\n"
+		status, body, error = await client.execute(
+			"POST", "/edit?configuration=x.yaml", yaml, "esphome"
+		)
+		assert status == 200 and error is None
+		args, kwargs = session.request.call_args
+		assert args[1] == "http://esp:6052/edit?configuration=x.yaml"
+		assert kwargs["data"] == yaml
+		assert kwargs["headers"]["Content-Type"] == "application/yaml"
+
+	@pytest.mark.asyncio
+	async def test_discovery_via_supervisor(self, monkeypatch):
+		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "sup")
+		session, _ = _mock_session_with_response(status=200, text="[]")
+		disc = AsyncMock()
+		disc.status = 200
+		disc.json.return_value = {
+			"data": {"addons": [{"slug": "5c53de3b_esphome", "name": "ESPHome"}]}
+		}
+		session.get.return_value.__aenter__.return_value = disc
+		client = _client(session)  # no explicit esphome_url
+		status, body, error = await client.execute("GET", "/devices", None, "esphome")
+		assert status == 200 and error is None
+		args, kwargs = session.request.call_args
+		assert args[1] == "http://5c53de3b-esphome:6052/devices"
+
+	@pytest.mark.asyncio
+	async def test_no_dashboard_found(self, monkeypatch):
+		monkeypatch.delenv(SUPERVISOR_TOKEN_ENV, raising=False)
+		session, _ = _mock_session_with_response()
+		client = _client(session)  # no url, no supervisor token
+		status, body, error = await client.execute("GET", "/devices", None, "esphome")
+		assert status == 0 and "ESPHome dashboard not found" in error
+		session.request.assert_not_called()
+
+
 class TestMessageHandling:
 	@pytest.mark.asyncio
 	async def test_ha_rpc_sends_response(self, monkeypatch):

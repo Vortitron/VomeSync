@@ -30,6 +30,7 @@ CONF_RELAY_SECRET = "secret"  # noqa: S105 - dict key, not a secret value
 CONF_RELAY_WS_URL = "ws_url"
 CONF_RELAY_LOCAL_TOKEN = "local_token"  # noqa: S105 - optional non-supervised fallback
 CONF_RELAY_LOCAL_URL = "local_url"
+CONF_RELAY_ESPHOME_URL = "esphome_url"  # optional explicit ESPHome dashboard base URL
 
 # The portal (account / device-authorisation) lives on vome.io; the relay
 # WebSocket lives on sync.vome.io.  The portal tells us the WS URL at link time.
@@ -54,6 +55,22 @@ RELAY_RECONNECT_DELAY = 5
 RELAY_RECONNECT_MAX_DELAY = 60
 RELAY_RPC_TIMEOUT = 30
 RELAY_ALLOWED_METHODS = ("GET", "POST", "PUT", "DELETE")
+
+# An RPC targets either the local HA core REST API ("core", the default) or the
+# local ESPHome dashboard ("esphome").  ESPHome flows through the same tunnel so
+# the home-assistant-mcp server can list devices and read/write device YAML
+# without any inbound exposure.
+RELAY_RPC_TARGET_CORE = "core"
+RELAY_RPC_TARGET_ESPHOME = "esphome"
+
+# ESPHome dashboard: discovered via the Supervisor add-on API on HAOS / Supervised
+# installs, or set explicitly (CONF_RELAY_ESPHOME_URL).  Only the REST subset is
+# proxied — the streaming build commands (compile/upload/run/logs) need a direct
+# dashboard connection and are intentionally not tunnelled.
+SUPERVISOR_ADDONS_URL = "http://supervisor/addons"
+ESPHOME_DEFAULT_PORT = 6052
+ESPHOME_ALLOWED_PATHS = ("/devices", "/version", "/edit")
+ESPHOME_ALLOWED_METHODS = ("GET", "POST")
 
 # Switch configuration keys
 CONF_SWITCH_UID = "uid"
