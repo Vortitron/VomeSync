@@ -45,6 +45,15 @@ const config = {
 		keyPath: process.env.SSL_KEY_PATH || '',
 		enabled: sslEnabled && !!(process.env.SSL_CERT_PATH && process.env.SSL_KEY_PATH)
 	},
+	relay: {
+		// Shared secret authenticating portal⇄backend internal calls (dispatch
+		// in, secret-verify out).  Empty disables the relay (fails closed).
+		internalSecret: process.env.RELAY_INTERNAL_SECRET || '',
+		// Portal endpoint that authenticates a component's presented relay secret.
+		portalVerifyUrl: process.env.RELAY_PORTAL_VERIFY_URL || 'https://vome.io/api/internal/relay/verify',
+		// How long the backend waits for a component's ha_rpc_response.
+		rpcTimeoutMs: parsePositiveInt(process.env.RELAY_RPC_TIMEOUT_MS, 20000)
+	},
 	analytics: {
 		enabled: process.env.ENABLE_ANALYTICS === 'true',
 		differentialPrivacyEpsilon: parseFloat(process.env.DIFFERENTIAL_PRIVACY_EPSILON) || 1.0

@@ -10,7 +10,9 @@ const logger = require('./utils/logger');
 const redisClient = require('./utils/redis');
 const media = require('./utils/media');
 const webSocketManager = require('./websocket/manager');
+const relayManager = require('./websocket/relayManager');
 const apiRoutes = require('./routes/api');
+const internalRoutes = require('./routes/internal-routes');
 
 class VomeSyncServer {
 	constructor() {
@@ -48,11 +50,16 @@ class VomeSyncServer {
 			// Initialize WebSocket manager
 			await webSocketManager.initialize(this.wsServer || this.server);
 
+			// Initialize the relay control channel (outbound tunnel for users'
+			// own Home Assistant).  Shares the WS server but on its own path.
+			relayManager.initialize(this.wsServer || this.server);
+
 			// Start listening (only after WS is initialised, so readiness checks don't race)
 			await this.startListening();
 
 			// Start heartbeat for WebSocket connections
 			webSocketManager.startHeartbeat();
+			relayManager.startHeartbeat();
 
 			// Setup graceful shutdown
 			this.setupGracefulShutdown();
@@ -130,6 +137,10 @@ class VomeSyncServer {
 
 		// API routes
 		this.app.use('/api', apiRoutes);
+
+		// Internal relay dispatch (portal → backend → component).  Not under
+		// /api and not meant to be proxied publicly; shared-secret authed.
+		this.app.use('/internal', internalRoutes);
 
 		// Root endpoint
 		this.app.get('/', (req, res) => {
@@ -248,6 +259,10 @@ class VomeSyncServer {
 				if (webSocketManager.wss) {
 					webSocketManager.wss.close();
 					logger.info('WebSocket server closed');
+				}
+				if (relayManager.wss) {
+					relayManager.wss.close();
+					logger.info('Relay WebSocket server closed');
 				}
 
 				const closeServer = (srv, label) => new Promise((resolve) => {
