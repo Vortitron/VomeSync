@@ -280,8 +280,8 @@ async def test_options_flow_create_switch_falls_back_to_numbered_name(hass, conf
 	assert name_key is not None
 	assert name_key.default is not None
 	default_name = name_key.default() if callable(name_key.default) else name_key.default
-	# Should be a numbered fallback like "VomeSync Switch 1"
-	assert default_name.startswith("VomeSync Switch ")
+	# Should be a numbered fallback like "Vome Switch 1"
+	assert default_name.startswith("Vome Switch ")
 
 
 @pytest.mark.asyncio

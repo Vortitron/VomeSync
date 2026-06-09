@@ -251,12 +251,12 @@ class VomeSyncConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 	async def _create_entry(self) -> FlowResult:
 		"""Create the config entry."""
 		unique = None
-		title = "VomeSync"
+		title = "Vome"
 		if not self._crypto_seed:
 			raise ValueError("crypto_seed missing for keypair auth mode")
 		owner_pub = owner_pubkey_b64url(self._crypto_seed)
 		unique = owner_pub
-		title = f"VomeSync (keypair {owner_pub[:8]}...)"
+		title = f"Vome (keypair {owner_pub[:8]}...)"
 
 		# Check for existing entries (skip if context is immutable in tests)
 		try:
@@ -382,7 +382,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 		# Count existing switches to generate a unique number
 		options = self._config_entry.options or {}
 		existing_count = len(options.get("imported_switches", {}))
-		return f"VomeSync Switch {existing_count + 1}"
+		return f"Vome Switch {existing_count + 1}"
 
 	async def _fetch_next_switch_name(self) -> str:
 		"""Fetch a globally unique switch name from the server."""
@@ -414,7 +414,7 @@ class VomeSyncOptionsFlow(config_entries.OptionsFlow, VomeSyncOptionsFlowLinkEnt
 
 	def _build_create_switch_schema(
 		self,
-		default_name: str = "VomeSync Switch",
+		default_name: str = "Vome Switch",
 		defaults: Optional[Dict[str, Any]] = None,
 	) -> vol.Schema:
 		"""Base create-switch schema."""
@@ -1935,7 +1935,7 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 			description_placeholders={
 				"warning": f"Remove '{selected_name}' from this Home Assistant installation?\n\n"
 				f"⚠️ This will remove the entity from this HA instance only.\n"
-				f"The switch will still exist on the VomeSync server and in other installations.\n\n"
+				f"The switch will still exist on the Vome server and in other installations.\n\n"
 				f"You can re-import it later using 'Import switches'."
 			}
 		)

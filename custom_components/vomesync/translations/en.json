@@ -2,8 +2,8 @@
 	"config": {
 		"step": {
 			"user": {
-				"title": "Set up VomeSync",
-				"description": "VomeSync uses **keypair authentication** with a locally stored signing key.\n\nUse **Generate new user key** to create a fresh signing key, or untick to paste an existing one after submit. After setup, back up the signing key from **More → Backup signing key**.\n\n⚠️ Anyone with the UID can view switch state and activity in Public mode.",
+				"title": "Set up Vome",
+				"description": "Vome uses **keypair authentication** with a locally stored signing key.\n\nUse **Generate new user key** to create a fresh signing key, or untick to paste an existing one after submit. After setup, back up the signing key from **More → Backup signing key**.\n\n⚠️ Anyone with the UID can view switch state and activity in Public mode.",
 				"data": {
 					"uid": "Switch UID or uid/key (optional)",
 					"generate_new_key": "Generate new user key",
@@ -15,9 +15,9 @@
 			},
 			"generate_key": {
 				"title": "Generate a personal key",
-				"description": "Tick consent to create and store a personal key on the VomeSync server for authentication. You can delete it later from the integration options (GDPR delete key).",
+				"description": "Tick consent to create and store a personal key on the Vome server for authentication. You can delete it later from the integration options (GDPR delete key).",
 				"data": {
-					"consent": "I consent to storing a personal key on the VomeSync server for authentication."
+					"consent": "I consent to storing a personal key on the Vome server for authentication."
 				}
 			}
 		},
@@ -33,7 +33,7 @@
 	"options": {
 		"step": {
 			"init": {
-				"title": "Manage VomeSync",
+				"title": "Manage Vome",
 				"menu_options": {
 					"create_switch": "➕ Create switch",
 					"subscribe_switch": "👁️ Subscribe to switch",
@@ -203,8 +203,8 @@
 				"description": "{info}"
 			},
 			"connect_website": {
-				"title": "Connect to VomeSync website",
-				"description": "Copy the URL below and paste it into your browser to sign in to the VomeSync website. The token is one-time and expires in 5 minutes.\n\nLogin URL:\n{login_url}\n\nSession Token:\n{session_token}"
+				"title": "Connect to Vome website",
+				"description": "Copy the URL below and paste it into your browser to sign in to the Vome website. The token is one-time and expires in 5 minutes.\n\nLogin URL:\n{login_url}\n\nSession Token:\n{session_token}"
 			},
 			"view_switch": {
 				"title": "Switch details",

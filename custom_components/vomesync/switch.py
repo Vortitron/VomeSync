@@ -306,7 +306,7 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 			attributes["linked_entities_count"] = 0
 		
 		# Add management info
-		attributes["integration_management"] = "Configure via: Settings → Devices & Services → VomeSync → Configure"
+		attributes["integration_management"] = "Configure via: Settings → Devices & Services → Vome → Configure"
 		attributes["uid"] = self._uid
 
 		return attributes

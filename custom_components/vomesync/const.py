@@ -97,5 +97,5 @@ FREE_TIER_MAX_SUBSCRIPTIONS = 16
 
 # Device info
 DEVICE_MANUFACTURER = "Vortitron"
-DEVICE_MODEL_OWNED = "VomeSync Switch"
-DEVICE_MODEL_REMOTE = "VomeSync Remote Switch"
+DEVICE_MODEL_OWNED = "Vome Switch"
+DEVICE_MODEL_REMOTE = "Vome Remote Switch"
