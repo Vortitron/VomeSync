@@ -1792,6 +1792,42 @@ async def test_link_vome_shows_menu_with_code(hass, config_entry, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_link_vome_sends_ha_location_name(hass, config_entry, monkeypatch):
+	"""The link is named after the HA instance, not the integration title.
+
+	The config entry title is "VomeSync (sync.vome.io)" — that's our label
+	for the sync backend and looks wrong as the house name in the user's
+	Vome account.
+	"""
+	monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+	hass.config.location_name = "Casa Vortitron"
+	flow = _relay_flow(hass, config_entry)
+
+	request_mock = AsyncMock(return_value=_CODE_RESPONSE)
+	with patch(f"{_RELAY_FLOW_MOD}.async_get_clientsession", return_value=MagicMock()), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_request_device_code", new=request_mock):
+		await flow.async_step_link_vome(None)
+
+	assert request_mock.await_args.kwargs["name"] == "Casa Vortitron"
+	assert request_mock.await_args.kwargs["name"] != config_entry.title
+
+
+@pytest.mark.asyncio
+async def test_link_vome_blank_location_falls_back(hass, config_entry, monkeypatch):
+	"""A blank location_name falls back to a sensible default."""
+	monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+	hass.config.location_name = "   "
+	flow = _relay_flow(hass, config_entry)
+
+	request_mock = AsyncMock(return_value=_CODE_RESPONSE)
+	with patch(f"{_RELAY_FLOW_MOD}.async_get_clientsession", return_value=MagicMock()), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_request_device_code", new=request_mock):
+		await flow.async_step_link_vome(None)
+
+	assert request_mock.await_args.kwargs["name"] == "My Home Assistant"
+
+
+@pytest.mark.asyncio
 async def test_link_vome_code_failure_shows_retry_form(hass, config_entry, monkeypatch):
 	"""If the portal can't be reached there is a retry form with the error."""
 	monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)

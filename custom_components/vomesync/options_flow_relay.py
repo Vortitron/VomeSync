@@ -59,11 +59,23 @@ class VomeSyncOptionsFlowRelayMixin:
 		for key in (_SD_DEVICE_CODE, _SD_USER_CODE, _SD_VERIFICATION_URI):
 			self._step_data.pop(key, None)
 
+	def _relay_link_name(self) -> str:
+		"""Name shown for this HA in the user's Vome account.
+
+		The HA instance name (``location_name``, e.g. "Home") — NOT the config
+		entry title, which is the integration's own label ("VomeSync
+		(sync.vome.io)") and meaningless as a house name on the dashboard.
+		"""
+		location = getattr(self.hass.config, "location_name", "") if self.hass else ""
+		if isinstance(location, str) and location.strip():
+			return location.strip()
+		return "My Home Assistant"
+
 	async def _relay_request_new_code(self, session) -> Optional[str]:
 		"""Fetch a fresh device code into step data; return an error key or None."""
 		try:
 			started = await async_request_device_code(
-				session, self._relay_portal_url(), name=self._config_entry.title
+				session, self._relay_portal_url(), name=self._relay_link_name()
 			)
 		except Exception as err:  # noqa: BLE001
 			_LOGGER.warning("Relay device-code request failed: %s", err)
