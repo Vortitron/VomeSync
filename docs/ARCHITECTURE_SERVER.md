@@ -128,6 +128,13 @@ handshakes for paths it doesn't own with a 400 — that bug rejected every
 `/ws/relay` handshake in production. New WS endpoints must be added as
 `noServer` servers routed through the upgrade router (unknown paths get 404).
 
+The relay also has portal-only internal HTTP endpoints (`/internal/relay/*`,
+bearer `RELAY_INTERNAL_SECRET`, never exposed by nginx): `dispatch` (broker an
+HA call down a socket), `status` (which `server_id`s are connected — powers the
+Connected/Offline pills on vome.io), and `disconnect` (force-close a socket
+when its link is deleted or its secret rotated; secrets are only verified at
+connect time, so revocation must also drop the live socket).
+
 ## 5) Data Persistence (Public‑Safe)
 
 High‑level data groups stored in Redis:
