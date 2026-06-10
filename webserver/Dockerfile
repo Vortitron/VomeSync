@@ -17,12 +17,8 @@ COPY package*.json ./
 # Install dependencies
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy application code
+# Copy application code (configuration lives in src/config + env vars)
 COPY src/ ./src/
-
-# Copy config directory if it exists, otherwise create empty directory
-COPY config* ./
-RUN mkdir -p config
 
 # Create logs + media directories
 RUN mkdir -p logs media && chown -R vomesync:nodejs logs media

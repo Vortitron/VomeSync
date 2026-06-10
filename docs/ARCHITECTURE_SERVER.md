@@ -111,6 +111,23 @@ stateDiagram-v2
 	Reconnecting --> [*]: Shutdown
 ```
 
+## 4.1) WebSocket Endpoints and Upgrade Routing
+
+The webserver exposes two WebSocket endpoints on the WS port:
+
+- `/ws` — the public, UID‑keyed switch socket (`src/websocket/manager.js`).
+- `/ws/relay` — the authenticated relay control channel for users' own Home
+	Assistants (`src/websocket/relayManager.js`); the component dials out and
+	presents a per‑instance secret which is verified against the portal.
+
+Both run in `noServer` mode behind a single upgrade router
+(`src/websocket/upgradeRouter.js`) that dispatches by exact pathname.
+**Do not attach multiple `WebSocket.Server({ server, path })` instances to one
+HTTP server**: in ws 8.x each registers its own `upgrade` listener and aborts
+handshakes for paths it doesn't own with a 400 — that bug rejected every
+`/ws/relay` handshake in production. New WS endpoints must be added as
+`noServer` servers routed through the upgrade router (unknown paths get 404).
+
 ## 5) Data Persistence (Public‑Safe)
 
 High‑level data groups stored in Redis:

@@ -41,7 +41,10 @@ RELAY_DEVICE_TOKEN_PATH = "/api/v1/relay/device/token"
 
 # Local Home Assistant core API for executing relayed calls.  Supervisor token
 # first (HAOS / Supervised); a configured long-lived token is the fallback.
-SUPERVISOR_CORE_BASE = "http://supervisor/core"
+# NOTE: the Supervisor's /core/api proxy is add-on-only — it 401s core's own
+# token — so local core calls use a minted long-lived token instead (see
+# relay_client.async_ensure_local_access_token).  The Supervisor API is still
+# used (token below) for ESPHome add-on discovery.
 DEFAULT_LOCAL_CORE_URL = "http://127.0.0.1:8123"
 SUPERVISOR_TOKEN_ENV = "SUPERVISOR_TOKEN"  # noqa: S105 - env var name, not a secret
 

@@ -11,6 +11,7 @@ const redisClient = require('./utils/redis');
 const media = require('./utils/media');
 const webSocketManager = require('./websocket/manager');
 const relayManager = require('./websocket/relayManager');
+const { attachUpgradeRouter } = require('./websocket/upgradeRouter');
 const apiRoutes = require('./routes/api');
 const internalRoutes = require('./routes/internal-routes');
 
@@ -48,11 +49,18 @@ class VomeSyncServer {
 			await this.createServer();
 
 			// Initialize WebSocket manager
-			await webSocketManager.initialize(this.wsServer || this.server);
+			await webSocketManager.initialize();
 
 			// Initialize the relay control channel (outbound tunnel for users'
 			// own Home Assistant).  Shares the WS server but on its own path.
-			relayManager.initialize(this.wsServer || this.server);
+			relayManager.initialize();
+
+			// One upgrade router dispatches `/ws` and `/ws/relay` — multiple
+			// path-attached WS servers 400 each other's handshakes (ws 8.x).
+			attachUpgradeRouter(this.wsServer || this.server, {
+				'/ws': webSocketManager,
+				'/ws/relay': relayManager
+			});
 
 			// Start listening (only after WS is initialised, so readiness checks don't race)
 			await this.startListening();

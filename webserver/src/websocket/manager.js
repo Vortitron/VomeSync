@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const redisClient = require('../utils/redis');
 const logger = require('../utils/logger');
 const { isValidSwitchUid } = require('../utils/validation');
+const { abortUpgrade } = require('./upgradeRouter');
 
 class WebSocketManager {
 	constructor() {
@@ -12,16 +13,11 @@ class WebSocketManager {
 		this.subscriptions = new Map(); // Map of UID to Set of client IDs
 	}
 
-	async initialize(server) {
-		this.wss = new WebSocket.Server({
-			server,
-			path: '/ws',
-			verifyClient: (info) => {
-				// Basic verification - check if URL contains UID parameter
-				const query = url.parse(info.req.url, true).query;
-				return query.uid && this.isValidUID(query.uid);
-			}
-		});
+	async initialize() {
+		// noServer: upgrades arrive via handleUpgrade() from the shared
+		// upgrade router (see ./upgradeRouter.js for why path-attached
+		// servers must not be used).
+		this.wss = new WebSocket.Server({ noServer: true });
 
 		this.wss.on('connection', (ws, req) => {
 			this.handleConnection(ws, req);
@@ -31,6 +27,18 @@ class WebSocketManager {
 		await this.setupRedisSubscription();
 
 		logger.info('WebSocket manager initialized');
+	}
+
+	/** Validate and complete a `/ws` upgrade (called by the upgrade router). */
+	handleUpgrade(req, socket, head) {
+		const query = url.parse(req.url, true).query;
+		if (!query.uid || !this.isValidUID(query.uid)) {
+			abortUpgrade(socket, 401, 'Unauthorized');
+			return;
+		}
+		this.wss.handleUpgrade(req, socket, head, (ws) => {
+			this.wss.emit('connection', ws, req);
+		});
 	}
 
 	isValidUID(uid) {
@@ -308,3 +316,5 @@ class WebSocketManager {
 }
 
 module.exports = new WebSocketManager();
+// Exposed for unit tests (fresh instances avoid cross-test singleton state).
+module.exports.WebSocketManager = WebSocketManager;

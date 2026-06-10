@@ -1,6 +1,9 @@
 # flake8: noqa
-"""Pytest configuration for VomeSync tests."""
-import asyncio
+"""Pytest configuration for VomeSync tests.
+
+Note: no custom ``event_loop`` fixture — pytest-asyncio >= 1.0 removed that
+override mechanism, and mock loops are handled in MockHASSFactory instead.
+"""
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -19,14 +22,6 @@ from flow_test_framework import (
 	FlowStepRunner,
 	MockHASSFactory,
 )
-
-
-@pytest.fixture
-def event_loop():
-	"""Create an instance of the default event loop for the test session."""
-	loop = asyncio.get_event_loop_policy().new_event_loop()
-	yield loop
-	loop.close()
 
 
 @pytest.fixture

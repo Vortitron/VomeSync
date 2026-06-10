@@ -2,8 +2,10 @@
 """Tests for the Vome relay client (outbound tunnel) on the component side.
 
 Covers the bits that make the relay safe and correct without a live WebSocket:
-* execute() only runs /api paths, prefers the Supervisor token, falls back to a
-  configured local token, and turns local failures into status 0;
+* execute() only runs /api paths, uses the configured/minted local token (the
+  Supervisor /core/api proxy 401s core's own token, so it is never used), and
+  turns local failures into status 0;
+* a local access token is minted via hass.auth (find-or-create semantics);
 * ha_rpc handling replies with a well-formed ha_rpc_response;
 * the device-authorisation HTTP helpers post to the right endpoints.
 
@@ -16,12 +18,13 @@ import aiohttp
 import pytest
 
 from custom_components.vomesync.relay_client import (
+	RELAY_TOKEN_CLIENT_NAME,
 	RelayClient,
+	async_ensure_local_access_token,
 	async_poll_device_token,
 	async_request_device_code,
 )
 from custom_components.vomesync.const import (
-	SUPERVISOR_CORE_BASE,
 	SUPERVISOR_TOKEN_ENV,
 )
 
@@ -60,28 +63,17 @@ class TestExecute:
 
 	@pytest.mark.asyncio
 	async def test_no_token_available(self, monkeypatch):
-		monkeypatch.delenv(SUPERVISOR_TOKEN_ENV, raising=False)
+		# Even with a Supervisor env present, no minted/manual token → no call:
+		# the /core/api proxy must never be used (it 401s core's own token).
+		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "supervisor-tok")
 		session, _ = _mock_session_with_response()
 		client = _client(session)  # no local_token
 		status, body, error = await client.execute("GET", "/api/states", None)
-		assert status == 0 and "Supervisor token" in error
+		assert status == 0 and "No local access token" in error
 		session.request.assert_not_called()
 
 	@pytest.mark.asyncio
-	async def test_supervisor_token_path(self, monkeypatch):
-		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "supervisor-tok")
-		session, _ = _mock_session_with_response(status=200, text='{"state":"on"}')
-		client = _client(session)
-		status, body, error = await client.execute("GET", "/api/states/light.k", None)
-		assert status == 200 and body == '{"state":"on"}' and error is None
-		args, kwargs = session.request.call_args
-		assert args[0] == "GET"
-		assert args[1] == SUPERVISOR_CORE_BASE + "/api/states/light.k"
-		assert kwargs["headers"]["Authorization"] == "Bearer supervisor-tok"
-
-	@pytest.mark.asyncio
-	async def test_local_token_fallback(self, monkeypatch):
-		monkeypatch.delenv(SUPERVISOR_TOKEN_ENV, raising=False)
+	async def test_local_token_used_against_local_url(self):
 		session, _ = _mock_session_with_response(status=201, text="")
 		client = _client(session, local_token="llt", local_url="http://127.0.0.1:8123")
 		status, body, error = await client.execute("POST", "/api/services/light/turn_on", {"entity_id": "light.k"})
@@ -92,21 +84,28 @@ class TestExecute:
 		assert kwargs["json"] == {"entity_id": "light.k"}
 
 	@pytest.mark.asyncio
-	async def test_timeout_is_status_zero(self, monkeypatch):
-		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "tok")
+	async def test_default_local_url_when_not_configured(self):
+		session, _ = _mock_session_with_response(status=200, text="[]")
+		client = _client(session, local_token="llt")
+		status, body, error = await client.execute("GET", "/api/states", None)
+		assert status == 200 and error is None
+		args, _kwargs = session.request.call_args
+		assert args[1] == "http://127.0.0.1:8123/api/states"
+
+	@pytest.mark.asyncio
+	async def test_timeout_is_status_zero(self):
 		session = AsyncMock(spec=aiohttp.ClientSession)
 		import asyncio
 		session.request.return_value.__aenter__.side_effect = asyncio.TimeoutError()
-		client = _client(session)
+		client = _client(session, local_token="llt")
 		status, body, error = await client.execute("GET", "/api/states", None)
 		assert status == 0 and "timed out" in error
 
 	@pytest.mark.asyncio
-	async def test_client_error_is_status_zero(self, monkeypatch):
-		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "tok")
+	async def test_client_error_is_status_zero(self):
 		session = AsyncMock(spec=aiohttp.ClientSession)
 		session.request.return_value.__aenter__.side_effect = aiohttp.ClientError("boom")
-		client = _client(session)
+		client = _client(session, local_token="llt")
 		status, body, error = await client.execute("GET", "/api/states", None)
 		assert status == 0 and "error" in error.lower()
 
@@ -226,6 +225,87 @@ class TestMessageHandling:
 		ws = AsyncMock()
 		await client._handle_text(ws, json.dumps({"type": "ha_rpc", "requestId": "r"}))
 		client._handle_rpc.assert_called_once()
+
+
+class TestEnsureLocalAccessToken:
+	"""Find-or-create semantics for the minted local access token."""
+
+	@staticmethod
+	def _fake_hass(owner, users=()):
+		from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+
+		hass = MagicMock()
+		hass.auth.async_get_owner = AsyncMock(return_value=owner)
+		hass.auth.async_get_users = AsyncMock(return_value=list(users))
+		new_refresh = MagicMock()
+		new_refresh.client_name = RELAY_TOKEN_CLIENT_NAME
+		new_refresh.token_type = TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+		hass.auth.async_create_refresh_token = AsyncMock(return_value=new_refresh)
+		hass.auth.async_create_access_token = MagicMock(return_value="jwt-token")
+		return hass, new_refresh
+
+	@staticmethod
+	def _user(refresh_tokens=None, *, active=True, admin=True, system=False):
+		user = MagicMock()
+		user.refresh_tokens = refresh_tokens or {}
+		user.is_active = active
+		user.is_admin = admin
+		user.system_generated = system
+		user.name = "Owner"
+		return user
+
+	@pytest.mark.asyncio
+	async def test_creates_token_for_owner_when_missing(self):
+		owner = self._user()
+		hass, new_refresh = self._fake_hass(owner)
+		token = await async_ensure_local_access_token(hass)
+		assert token == "jwt-token"
+		_args, kwargs = hass.auth.async_create_refresh_token.call_args
+		assert kwargs["client_name"] == RELAY_TOKEN_CLIENT_NAME
+		hass.auth.async_create_access_token.assert_called_once_with(new_refresh)
+
+	@pytest.mark.asyncio
+	async def test_reuses_existing_relay_refresh_token(self):
+		from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+
+		existing = MagicMock()
+		existing.client_name = RELAY_TOKEN_CLIENT_NAME
+		existing.token_type = TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+		owner = self._user({"rt1": existing})
+		hass, _ = self._fake_hass(owner)
+		token = await async_ensure_local_access_token(hass)
+		assert token == "jwt-token"
+		hass.auth.async_create_refresh_token.assert_not_called()
+		hass.auth.async_create_access_token.assert_called_once_with(existing)
+
+	@pytest.mark.asyncio
+	async def test_ignores_other_long_lived_tokens(self):
+		from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+
+		other = MagicMock()
+		other.client_name = "Some other tool"
+		other.token_type = TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+		owner = self._user({"rt1": other})
+		hass, _ = self._fake_hass(owner)
+		await async_ensure_local_access_token(hass)
+		hass.auth.async_create_refresh_token.assert_called_once()
+
+	@pytest.mark.asyncio
+	async def test_falls_back_to_active_admin_without_owner(self):
+		admin = self._user()
+		non_admin = self._user(admin=False)
+		hass, _ = self._fake_hass(None, users=[non_admin, admin])
+		token = await async_ensure_local_access_token(hass)
+		assert token == "jwt-token"
+		args, _kwargs = hass.auth.async_create_refresh_token.call_args
+		assert args[0] is admin
+
+	@pytest.mark.asyncio
+	async def test_returns_none_without_any_eligible_user(self):
+		system_user = self._user(system=True)
+		hass, _ = self._fake_hass(None, users=[system_user])
+		assert await async_ensure_local_access_token(hass) is None
+		hass.auth.async_create_refresh_token.assert_not_called()
 
 
 class TestDeviceHelpers:

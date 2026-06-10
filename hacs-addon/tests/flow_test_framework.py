@@ -150,11 +150,35 @@ class MockHASSFactory:
     """Builder-pattern factory for creating mock Home Assistant objects."""
 
     @staticmethod
+    def _loop_stand_in() -> Any:
+        """A stand-in for ``hass.loop`` that never touches the global loop.
+
+        ``asyncio.get_event_loop()`` here broke under pytest-asyncio >= 1.4,
+        which unsets the main-thread loop between tests ("There is no current
+        event loop in thread 'MainThread'").  Inside an async test the running
+        loop is returned; in sync fixtures a mock is used whose ``create_task``
+        closes the coroutine (no "never awaited" warnings) — no current test
+        needs a hass.loop task to actually execute.
+        """
+        try:
+            return asyncio.get_running_loop()
+        except RuntimeError:
+            loop = MagicMock()
+            loop.time.return_value = 0.0
+
+            def _consume(coro):
+                coro.close()
+                return MagicMock()
+
+            loop.create_task.side_effect = _consume
+            return loop
+
+    @staticmethod
     def create_hass(**overrides) -> MagicMock:
         """Create a mock hass instance with sensible defaults."""
         hass = MagicMock()
         hass.data = overrides.get("data", {})
-        hass.loop = asyncio.get_event_loop()
+        hass.loop = MockHASSFactory._loop_stand_in()
         hass.config_entries = MagicMock()
         hass.config_entries.async_reload = AsyncMock()
         hass.states = MagicMock()

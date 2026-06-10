@@ -11,8 +11,12 @@ How it works:
   * Vome pushes ``ha_rpc`` requests (a method + ``/api/...`` path + body) down the
     socket; we execute each against the LOCAL Home Assistant core REST API and
     reply with ``ha_rpc_response``.
-  * Local execution uses the **Supervisor token** (HAOS / Supervised installs),
-    falling back to a configured long-lived token + URL on other installs.
+  * Local execution authenticates with a long-lived access token the component
+    mints for the owner user via ``hass.auth`` (works on every install type —
+    the Supervisor's ``/core/api`` proxy rejects core's own token with a 401,
+    so it cannot be used from a custom component).  A manually configured
+    token + URL (the "alternative connection" options) overrides the minted
+    one for unusual setups (custom ``server_host``, TLS on the local API…).
 
 Security: only ``/api/...`` paths are executed; the same scoped, audited Vome
 token + server-side deny-list that guards a Vome VM guards this transport too —
@@ -25,9 +29,11 @@ import json
 import logging
 import os
 from contextlib import suppress
+from datetime import timedelta
 from typing import Any, Optional
 
 import aiohttp
+from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -59,7 +65,6 @@ from .const import (
 	RELAY_WS_MSG_PING,
 	RELAY_WS_MSG_PONG,
 	SUPERVISOR_ADDONS_URL,
-	SUPERVISOR_CORE_BASE,
 	SUPERVISOR_TOKEN_ENV,
 )
 
@@ -67,6 +72,48 @@ _LOGGER = logging.getLogger(__name__)
 
 _RELAYS_KEY = "_relays"
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15)
+
+# Client name of the long-lived access token we mint for local API calls.  It
+# shows up under the owner's profile → Security → long-lived access tokens.
+RELAY_TOKEN_CLIENT_NAME = "Vome relay"
+_RELAY_TOKEN_LIFETIME = timedelta(days=3650)
+
+
+async def async_ensure_local_access_token(hass: HomeAssistant) -> Optional[str]:
+	"""Return an access token for the local HA REST API, minting one if needed.
+
+	Reuses the component's own long-lived refresh token (created once for the
+	owner user, named ``RELAY_TOKEN_CLIENT_NAME``) and derives a fresh access
+	token from it on every (re)start — nothing secret is persisted by us.
+	Returns ``None`` when there is no owner/admin user to mint for.
+	"""
+	user = await hass.auth.async_get_owner()
+	if user is None:
+		# Rare (e.g. owner deleted): fall back to the first active local admin.
+		for candidate in await hass.auth.async_get_users():
+			if candidate.is_active and candidate.is_admin and not candidate.system_generated:
+				user = candidate
+				break
+	if user is None:
+		_LOGGER.error("Relay: no owner/admin user found to mint a local access token for")
+		return None
+	refresh = next(
+		(
+			rt for rt in user.refresh_tokens.values()
+			if rt.client_name == RELAY_TOKEN_CLIENT_NAME
+			and rt.token_type == TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+		),
+		None,
+	)
+	if refresh is None:
+		refresh = await hass.auth.async_create_refresh_token(
+			user,
+			client_name=RELAY_TOKEN_CLIENT_NAME,
+			token_type=TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN,
+			access_token_expiration=_RELAY_TOKEN_LIFETIME,
+		)
+		_LOGGER.info("Relay: created the '%s' long-lived token for %s", RELAY_TOKEN_CLIENT_NAME, user.name)
+	return hass.auth.async_create_access_token(refresh)
 
 
 class RelayClient:
@@ -192,12 +239,11 @@ class RelayClient:
 	def _resolve_local(self) -> tuple[Optional[str], Optional[str]]:
 		"""Return ``(base_url, token)`` for the local core API, or ``(None, None)``.
 
-		Supervisor token first (HAOS / Supervised), then a configured long-lived
-		token for Container / Core installs.
+		``local_token`` is either the user's manual long-lived token (the
+		"alternative connection" options) or the one async_start_relay minted
+		via ``hass.auth``.  The Supervisor ``/core/api`` proxy is deliberately
+		not used: it 401s requests authenticated with core's own token.
 		"""
-		supervisor = os.environ.get(SUPERVISOR_TOKEN_ENV)
-		if supervisor:
-			return SUPERVISOR_CORE_BASE, supervisor
 		if self._local_token:
 			return self._local_url, self._local_token
 		return None, None
@@ -231,8 +277,8 @@ class RelayClient:
 		base, token = self._resolve_local()
 		if not token:
 			return 0, None, (
-				"No Supervisor token available; set a local long-lived token for "
-				"the relay on non-supervised installs."
+				"No local access token available; the component could not mint "
+				"one (no owner user?) and none is configured in the relay options."
 			)
 		url = base + path
 		headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -387,12 +433,21 @@ async def async_start_relay(hass: HomeAssistant, entry) -> None:
 	relay = _relay_config(entry)
 	if not relay:
 		return
+	# A manually configured token (alternative connection) wins; otherwise mint
+	# a long-lived token for the local REST API via hass.auth.
+	local_token = relay.get(CONF_RELAY_LOCAL_TOKEN)
+	if not local_token:
+		try:
+			local_token = await async_ensure_local_access_token(hass)
+		except Exception as err:  # noqa: BLE001 - never block the relay on minting
+			_LOGGER.error("Relay: minting a local access token failed: %s", err)
+			local_token = None
 	client = RelayClient(
 		hass,
 		server_id=relay[CONF_RELAY_SERVER_ID],
 		secret=relay[CONF_RELAY_SECRET],
 		ws_url=relay.get(CONF_RELAY_WS_URL),
-		local_token=relay.get(CONF_RELAY_LOCAL_TOKEN),
+		local_token=local_token,
 		local_url=relay.get(CONF_RELAY_LOCAL_URL),
 		esphome_url=relay.get(CONF_RELAY_ESPHOME_URL),
 	)

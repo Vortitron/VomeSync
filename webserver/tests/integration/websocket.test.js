@@ -6,6 +6,7 @@ const WebSocket = require('ws');
 const http = require('http');
 const express = require('express');
 const webSocketManager = require('../../src/websocket/manager');
+const { attachUpgradeRouter } = require('../../src/websocket/upgradeRouter');
 const redisClient = require('../../src/utils/redis');
 
 describe('WebSocket Integration Tests', () => {
@@ -18,9 +19,10 @@ describe('WebSocket Integration Tests', () => {
 		const app = express();
 		server = http.createServer(app);
 
-		// Initialize WebSocket manager
+		// Initialize WebSocket manager (noServer) and route upgrades, as server.js does
 		await redisClient.connect();
-		await webSocketManager.initialize(server);
+		await webSocketManager.initialize();
+		attachUpgradeRouter(server, { '/ws': webSocketManager });
 
 		// Start server
 		await new Promise((resolve, reject) => {

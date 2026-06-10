@@ -26,6 +26,7 @@ const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger');
 const config = require('../config/config');
 const relayPortal = require('../utils/relayPortal');
+const { abortUpgrade } = require('./upgradeRouter');
 
 const HEARTBEAT_INTERVAL_MS = 30000;
 const IDLE_PING_AFTER_MS = 30000;
@@ -56,37 +57,40 @@ class RelayManager {
 		this.verifyFn = (secret) => relayPortal.verifySecret(secret);
 	}
 
-	initialize(server, opts = {}) {
+	initialize(opts = {}) {
 		if (typeof opts.verifyFn === 'function') {
 			this.verifyFn = opts.verifyFn;
 		}
-		this.wss = new WebSocket.Server({
-			server,
-			path: '/ws/relay',
-			verifyClient: (info, cb) => {
-				const secret = extractSecret(info.req);
-				if (!secret) {
-					cb(false, 401, 'Unauthorized');
-					return;
-				}
-				Promise.resolve(this.verifyFn(secret))
-					.then((serverId) => {
-						if (!serverId) {
-							cb(false, 401, 'Unauthorized');
-							return;
-						}
-						info.req.relayServerId = serverId;
-						cb(true);
-					})
-					.catch((err) => {
-						logger.error('Relay verifyClient error:', err.message || err);
-						cb(false, 500, 'Verification error');
-					});
-			}
-		});
-
+		// noServer: upgrades arrive via handleUpgrade() from the shared
+		// upgrade router (see ./upgradeRouter.js for why path-attached
+		// servers must not be used).
+		this.wss = new WebSocket.Server({ noServer: true });
 		this.wss.on('connection', (ws, req) => this.handleConnection(ws, req));
 		logger.info('Relay manager initialized');
+	}
+
+	/** Authenticate and complete a `/ws/relay` upgrade (called by the router). */
+	handleUpgrade(req, socket, head) {
+		const secret = extractSecret(req);
+		if (!secret) {
+			abortUpgrade(socket, 401, 'Unauthorized');
+			return;
+		}
+		Promise.resolve(this.verifyFn(secret))
+			.then((serverId) => {
+				if (!serverId) {
+					abortUpgrade(socket, 401, 'Unauthorized');
+					return;
+				}
+				req.relayServerId = serverId;
+				this.wss.handleUpgrade(req, socket, head, (ws) => {
+					this.wss.emit('connection', ws, req);
+				});
+			})
+			.catch((err) => {
+				logger.error('Relay upgrade verification error:', err.message || err);
+				abortUpgrade(socket, 500, 'Verification error');
+			});
 	}
 
 	handleConnection(ws, req) {

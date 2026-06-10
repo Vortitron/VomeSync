@@ -7,15 +7,14 @@ and start the outbound relay immediately.  Kept in its own mixin so config_flow
 stays under the refactor threshold (mirrors options_flow_links.py).
 
 Step layout (UX): ``link_vome`` shows the code and two ways forward — a plain
-"connect" confirm (no text boxes on HAOS / Supervised, where the Supervisor
-token makes everything automatic) and an "alternative connection" form holding
-the manual fields (long-lived token, ESPHome dashboard URL) for the rare
-setups that need them.
+"connect" confirm with no text boxes (the component mints its own local access
+token via ``hass.auth``, so every install type works automatically) and an
+"alternative connection" form holding the manual fields (long-lived token,
+ESPHome dashboard URL) for the rare setups that need them.
 """
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Dict, Optional
 
 import voluptuous as vol
@@ -30,7 +29,6 @@ from .const import (
 	CONF_RELAY_SERVER_ID,
 	CONF_RELAY_WS_URL,
 	DEFAULT_PORTAL_URL,
-	SUPERVISOR_TOKEN_ENV,
 )
 from .relay_client import (
 	async_poll_device_token,
@@ -76,10 +74,6 @@ class VomeSyncOptionsFlowRelayMixin:
 			"verification_uri", DEFAULT_PORTAL_URL + "/account/link-ha"
 		)
 		return None
-
-	def _relay_supervisor_available(self) -> bool:
-		"""True on HAOS / Supervised, where no manual token is needed."""
-		return bool(os.environ.get(SUPERVISOR_TOKEN_ENV))
 
 	def _relay_code_placeholders(self) -> Dict[str, str]:
 		return {
@@ -138,11 +132,14 @@ class VomeSyncOptionsFlowRelayMixin:
 	async def _relay_show_link_form(
 		self, step_id: str, errors: Dict[str, str], include_alt_fields: bool
 	) -> FlowResult:
-		"""Render a link form; manual fields only where they're required."""
+		"""Render a link form; manual fields only on the alternative step.
+
+		The plain connect needs no input at all — the component mints its own
+		local access token — so the confirm form stays free of text boxes.
+		"""
 		fields: Dict[Any, Any] = {}
-		if include_alt_fields or not self._relay_supervisor_available():
-			fields[vol.Optional("local_token", default="")] = str
 		if include_alt_fields:
+			fields[vol.Optional("local_token", default="")] = str
 			fields[vol.Optional("esphome_url", default="")] = str
 		return self.async_show_form(
 			step_id=step_id,
@@ -178,7 +175,7 @@ class VomeSyncOptionsFlowRelayMixin:
 	async def async_step_link_vome_confirm(
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:
-		"""Plain connect: no text boxes unless a local token is required."""
+		"""Plain connect: no text boxes — local access is minted automatically."""
 		if not self._step_data.get(_SD_DEVICE_CODE):
 			return await self.async_step_link_vome()
 		errors: Dict[str, str] = {}

@@ -1807,9 +1807,17 @@ async def test_link_vome_code_failure_shows_retry_form(hass, config_entry, monke
 
 
 @pytest.mark.asyncio
-async def test_link_vome_confirm_hides_fields_on_haos(hass, config_entry, monkeypatch):
-	"""With a Supervisor token there are no text boxes at all."""
-	monkeypatch.setenv("SUPERVISOR_TOKEN", "supertoken")
+@pytest.mark.parametrize("supervisor", [True, False])
+async def test_link_vome_confirm_never_shows_fields(hass, config_entry, monkeypatch, supervisor):
+	"""The plain connect has no text boxes on any install type.
+
+	The component mints its own local access token via hass.auth, so neither
+	HAOS/Supervised nor Container/Core installs need manual input here.
+	"""
+	if supervisor:
+		monkeypatch.setenv("SUPERVISOR_TOKEN", "supertoken")
+	else:
+		monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
 	flow = _relay_flow(hass, config_entry)
 	flow._step_data.update({
 		"relay_device_code": "dev-123",
@@ -1821,19 +1829,6 @@ async def test_link_vome_confirm_hides_fields_on_haos(hass, config_entry, monkey
 	assert result["type"] == FlowResultType.FORM
 	assert result["step_id"] == "link_vome_confirm"
 	assert len(result["data_schema"].schema) == 0
-
-
-@pytest.mark.asyncio
-async def test_link_vome_confirm_requires_token_field_without_supervisor(hass, config_entry, monkeypatch):
-	"""Without a Supervisor token the local token box is shown (it's required)."""
-	monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-	flow = _relay_flow(hass, config_entry)
-	flow._step_data.update({"relay_device_code": "dev-123"})
-
-	result = await flow.async_step_link_vome_confirm(None)
-
-	field_names = [str(key) for key in result["data_schema"].schema]
-	assert field_names == ["local_token"]
 
 
 @pytest.mark.asyncio

@@ -304,23 +304,17 @@
 			},
 			"link_vome_retry": {
 				"title": "Connect to Vome Home",
-				"description": "The Vome portal could not be reached to start the connection. Press **Submit** to try again.",
-				"data": {
-					"local_token": "Local long-lived token (only if not running HAOS / Supervised)"
-				}
+				"description": "The Vome portal could not be reached to start the connection. Press **Submit** to try again."
 			},
 			"link_vome_confirm": {
 				"title": "Connect to Vome Home",
-				"description": "Approve the code **{user_code}** at **{verification_uri}**, then press **Submit**.",
-				"data": {
-					"local_token": "Local long-lived access token (this install needs one — it is not HAOS / Supervised)"
-				}
+				"description": "Approve the code **{user_code}** at **{verification_uri}**, then press **Submit**.\n\nNothing else is needed — the component creates its own local access token (it appears in your profile as “Vome relay”)."
 			},
 			"link_vome_alt": {
 				"title": "Alternative connection",
-				"description": "Approve the code **{user_code}** at **{verification_uri}**, then press **Submit**.\n\nOnly fill these in if you need them: on HAOS / Supervised the Supervisor token and ESPHome add-on are detected automatically.",
+				"description": "Approve the code **{user_code}** at **{verification_uri}**, then press **Submit**.\n\nOnly fill these in if the automatic connection does not work for your setup (custom `server_host`, TLS on the local API, or an ESPHome dashboard that add-on discovery cannot find).",
 				"data": {
-					"local_token": "Local long-lived access token (only if not running HAOS / Supervised)",
+					"local_token": "Local long-lived access token (overrides the automatic one)",
 					"esphome_url": "ESPHome dashboard URL (auto-detected on HAOS / Supervised)"
 				}
 			},
