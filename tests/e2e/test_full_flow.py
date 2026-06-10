@@ -277,8 +277,16 @@ class VomeSyncE2ETest:
 
 @pytest_asyncio.fixture
 async def e2e_test():
-    """Create E2E test instance."""
-    test = VomeSyncE2ETest()
+    """Create E2E test instance.
+
+    The target stack is configurable so CI can point at an ephemeral
+    docker-compose.e2e.yml deployment instead of whatever holds the
+    default ports (which, on a shared daemon, is production).
+    """
+    test = VomeSyncE2ETest(
+        api_base_url=os.getenv("E2E_API_URL", "http://localhost:3090"),
+        ws_base_url=os.getenv("E2E_WS_URL", "ws://localhost:3001"),
+    )
     await test.setup()
     yield test
     await test.teardown()

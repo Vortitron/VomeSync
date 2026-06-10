@@ -1,0 +1,49 @@
+# Standalone stack for the end-to-end test pipeline.
+#
+# Deliberately separate from docker-compose.yml: that file hardcodes
+# container_name, host ports and volume names, so an e2e run on the same
+# Docker daemon as production collides with the live stack (name conflicts,
+# port clashes — and the tests would silently hit the production API on
+# localhost:3090).  Here everything is project-scoped: no container_name,
+# anonymous volumes, and host ports are ephemeral — the pipeline discovers
+# them with `docker compose port`.
+services:
+  vomesync-redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  vomesync-webserver:
+    build:
+      context: ../webserver
+      dockerfile: Dockerfile
+    depends_on:
+      vomesync-redis:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - PORT=3090
+      - WS_PORT=3001
+      - REDIS_HOST=vomesync-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - JWT_SECRET=${E2E_JWT_SECRET:-test-jwt-secret-e2e}
+      - CORS_ORIGINS=*
+      - RATE_LIMIT_WINDOW_MS=900000
+      - RATE_LIMIT_MAX_REQUESTS=1000
+      - ENABLE_ANALYTICS=false
+      - LOG_LEVEL=debug
+    ports:
+      # Ephemeral host ports: never clash with the production stack.
+      - "3090"
+      - "3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3090/api/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"]
+      interval: 5s
+      timeout: 10s
+      retries: 24
+      start_period: 15s

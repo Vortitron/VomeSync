@@ -28,6 +28,11 @@ pipeline {
     environment {
         RUN_E2E = 'true'
         COMPOSE_PROJECT_NAME = "vomesync-e2e-${BUILD_NUMBER}"
+        // Standalone stack (no container_name / fixed ports / shared volumes):
+        // the production stack runs on the same Docker daemon, so the main
+        // compose file would collide with it — and tests on the default
+        // localhost:3090 would silently hit production.
+        COMPOSE_FILE_E2E = 'docker-compose.e2e.yml'
     }
 
     stages {
@@ -67,13 +72,6 @@ pipeline {
                     pip install --upgrade pip
                     pip install -r tests/e2e/requirements.txt
                 '''
-                dir('docker') {
-                    sh '''
-                        cp env.example .env
-                        sed -i 's/^JWT_SECRET=.*/JWT_SECRET=test-jwt-secret-jenkins/' .env
-                        sed -i 's/^REDIS_PASSWORD=.*/REDIS_PASSWORD=/' .env
-                    '''
-                }
             }
         }
 
@@ -83,18 +81,28 @@ pipeline {
             }
             steps {
                 dir('docker') {
-                    sh 'docker compose -p "$COMPOSE_PROJECT_NAME" up -d --build vomesync-redis vomesync-webserver'
+                    sh 'docker compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE_E2E" up -d --build --wait vomesync-redis vomesync-webserver'
                 }
                 script {
-                    def raw = sh(
-                        script: "grep '^VOMESYNC_API_HOST_PORT=' docker/.env | cut -d= -f2",
+                    // Ephemeral host ports — discover what Docker assigned.
+                    def apiPort = sh(
+                        script: 'cd docker && docker compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE_E2E" port vomesync-webserver 3090 | cut -d: -f2',
                         returnStdout: true
                     ).trim()
-                    env.E2E_API_PORT = raw ?: '3090'
+                    def wsPort = sh(
+                        script: 'cd docker && docker compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE_E2E" port vomesync-webserver 3001 | cut -d: -f2',
+                        returnStdout: true
+                    ).trim()
+                    if (!apiPort || !wsPort) {
+                        error "Could not resolve e2e stack ports (api='${apiPort}', ws='${wsPort}')"
+                    }
+                    env.E2E_API_URL = "http://localhost:${apiPort}"
+                    env.E2E_WS_URL = "ws://localhost:${wsPort}"
+                    echo "E2E stack: API ${env.E2E_API_URL}, WS ${env.E2E_WS_URL}"
                 }
                 sh '''
-                    echo "Waiting for API on port $E2E_API_PORT..."
-                    timeout 180 bash -c "until curl -sf http://localhost:${E2E_API_PORT}/api/health; do sleep 2; done"
+                    echo "Waiting for API at $E2E_API_URL..."
+                    timeout 180 bash -c "until curl -sf ${E2E_API_URL}/api/health; do sleep 2; done"
                     echo "API is healthy."
                 '''
             }
@@ -136,9 +144,9 @@ pipeline {
                     sh """
                         echo "── Service logs ──"
                         cd docker
-                        docker compose -p "${env.COMPOSE_PROJECT_NAME}" logs --tail=80 || true
+                        docker compose -p "${env.COMPOSE_PROJECT_NAME}" -f "${env.COMPOSE_FILE_E2E}" logs --tail=80 || true
                         echo "── Tearing down ──"
-                        docker compose -p "${env.COMPOSE_PROJECT_NAME}" down -v --remove-orphans || true
+                        docker compose -p "${env.COMPOSE_PROJECT_NAME}" -f "${env.COMPOSE_FILE_E2E}" down -v --remove-orphans || true
                     """
                 }
             }
