@@ -6,10 +6,12 @@
 const { RedisMemoryServer } = require('redis-memory-server');
 
 module.exports = async () => {
-	// Start in-memory Redis server for testing
+	// Start in-memory Redis server for testing.  No fixed port: CI runs the
+	// unit and integration jest processes in parallel, and a pinned port made
+	// the second globalSetup fail with "Port 6380 already in use" — an
+	// ephemeral port keeps every jest process self-contained.
 	const redisServer = new RedisMemoryServer({
 		instance: {
-			port: 6380, // Use different port from production
 			args: ['--maxmemory', '50mb']
 		}
 	});
