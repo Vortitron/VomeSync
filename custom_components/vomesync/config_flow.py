@@ -566,7 +566,11 @@ class VomeSyncOptionsFlow(
 	) -> FlowResult:
 		"""Manage the options."""
 		# Keep the highest-frequency actions near the top; move the rest under "More…"
-		menu_options = ["create_switch", "subscribe_switch", "manage_switches", "more"]
+		menu_options = ["create_switch", "subscribe_switch", "manage_switches"]
+		# Connecting this HA to a Vome account is a headline feature — keep it
+		# top-level rather than buried in "More…".
+		menu_options.append("unlink_vome" if self._relay_is_linked() else "link_vome")
+		menu_options.append("more")
 		return self.async_show_menu(
 			step_id="init",
 			menu_options=menu_options
@@ -582,10 +586,8 @@ class VomeSyncOptionsFlow(
 			"reannounce_owned_switches",
 			"cleanup_orphaned_devices",
 			"edit_connection",
+			"back",
 		]
-		# Connect this Home Assistant to a Vome account over the outbound relay.
-		menu_options.append("unlink_vome" if self._relay_is_linked() else "link_vome")
-		menu_options.append("back")
 		return self.async_show_menu(step_id="more", menu_options=menu_options)
 
 	async def async_step_back(

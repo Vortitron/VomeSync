@@ -335,14 +335,27 @@ class RelayClient:
 
 # ── Device-authorisation HTTP helpers (used by the config/options flow) ──────
 
+async def _post_portal_json(
+	session: aiohttp.ClientSession, url: str, payload: dict
+) -> dict:
+	"""POST JSON to the portal, raising a diagnosable error on failure.
+
+	``raise_for_status`` alone hides the response body, which is where the
+	portal explains *why* (e.g. a CSRF or proxy rejection) — include it.
+	"""
+	async with session.post(url, json=payload, timeout=_HTTP_TIMEOUT) as resp:
+		if resp.status >= 400:
+			body = (await resp.text())[:300]
+			raise RuntimeError(f"Portal returned HTTP {resp.status} for {url}: {body}")
+		return await resp.json()
+
+
 async def async_request_device_code(
 	session: aiohttp.ClientSession, portal_url: str, name: Optional[str] = None
 ) -> dict:
 	"""Start a device-authorisation; returns the portal's JSON (codes + URL)."""
 	url = (portal_url or DEFAULT_PORTAL_URL).rstrip("/") + RELAY_DEVICE_CODE_PATH
-	async with session.post(url, json={"name": name or ""}, timeout=_HTTP_TIMEOUT) as resp:
-		resp.raise_for_status()
-		return await resp.json()
+	return await _post_portal_json(session, url, {"name": name or ""})
 
 
 async def async_poll_device_token(
@@ -350,9 +363,7 @@ async def async_poll_device_token(
 ) -> dict:
 	"""Poll for approval; returns ``{'status': ...}`` (and creds once approved)."""
 	url = (portal_url or DEFAULT_PORTAL_URL).rstrip("/") + RELAY_DEVICE_TOKEN_PATH
-	async with session.post(url, json={"device_code": device_code}, timeout=_HTTP_TIMEOUT) as resp:
-		resp.raise_for_status()
-		return await resp.json()
+	return await _post_portal_json(session, url, {"device_code": device_code})
 
 
 # ── Entry lifecycle integration ─────────────────────────────────────────────

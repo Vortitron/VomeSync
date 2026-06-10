@@ -1151,6 +1151,22 @@ async def test_options_flow_init_shows_menu(hass, config_entry):
 	assert "subscribe_switch" in result["menu_options"]
 	assert "manage_switches" in result["menu_options"]
 	assert "more" in result["menu_options"]
+	# Connect to Vome Home is a headline option, top-level (not under More…).
+	assert "link_vome" in result["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_init_offers_unlink_when_linked(hass, config_entry):
+	"""A linked entry shows the disconnect option instead."""
+	config_entry.options = {
+		"relay": {"server_id": "rly-1", "secret": "rly_rly-1.x"},
+	}
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_init(None)
+	assert "unlink_vome" in result["menu_options"]
+	assert "link_vome" not in result["menu_options"]
 
 
 @pytest.mark.asyncio
@@ -1166,6 +1182,9 @@ async def test_options_flow_more_shows_submenu(hass, config_entry):
 	assert "import_switches" in result["menu_options"]
 	assert "edit_connection" in result["menu_options"]
 	assert "back" in result["menu_options"]
+	# The Vome Home link moved to the top-level menu.
+	assert "link_vome" not in result["menu_options"]
+	assert "unlink_vome" not in result["menu_options"]
 
 
 @pytest.mark.asyncio
@@ -1732,3 +1751,203 @@ async def test_options_flow_cleanup_orphaned_devices_removes_selected(hass, conf
 
 	assert result["type"] == FlowResultType.CREATE_ENTRY
 	mock_device_reg.async_remove_device.assert_called_once_with("dev-orphan-1")
+
+
+# ============================================================================
+# Connect to Vome Home (relay link) flow
+# ============================================================================
+
+_RELAY_FLOW_MOD = "custom_components.vomesync.options_flow_relay"
+
+_CODE_RESPONSE = {
+	"device_code": "dev-123",
+	"user_code": "BCDF-GHJK",
+	"verification_uri": "https://vome.io/account/link-ha",
+	"expires_in": 600,
+	"interval": 5,
+}
+
+
+def _relay_flow(hass, config_entry):
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	hass.config_entries = MagicMock()
+	return flow
+
+
+@pytest.mark.asyncio
+async def test_link_vome_shows_menu_with_code(hass, config_entry, monkeypatch):
+	"""Entry step fetches a code and offers connect vs alternative."""
+	monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+	flow = _relay_flow(hass, config_entry)
+
+	with patch(f"{_RELAY_FLOW_MOD}.async_get_clientsession", return_value=MagicMock()), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_request_device_code", new=AsyncMock(return_value=_CODE_RESPONSE)):
+		result = await flow.async_step_link_vome(None)
+
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "link_vome"
+	assert result["menu_options"] == ["link_vome_confirm", "link_vome_alt"]
+	assert result["description_placeholders"]["user_code"] == "BCDF-GHJK"
+
+
+@pytest.mark.asyncio
+async def test_link_vome_code_failure_shows_retry_form(hass, config_entry, monkeypatch):
+	"""If the portal can't be reached there is a retry form with the error."""
+	monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+	flow = _relay_flow(hass, config_entry)
+
+	with patch(f"{_RELAY_FLOW_MOD}.async_get_clientsession", return_value=MagicMock()), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_request_device_code", new=AsyncMock(side_effect=RuntimeError("HTTP 400"))):
+		result = await flow.async_step_link_vome(None)
+
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "link_vome_retry"
+	assert result["errors"]["base"] == "relay_code_failed"
+
+
+@pytest.mark.asyncio
+async def test_link_vome_confirm_hides_fields_on_haos(hass, config_entry, monkeypatch):
+	"""With a Supervisor token there are no text boxes at all."""
+	monkeypatch.setenv("SUPERVISOR_TOKEN", "supertoken")
+	flow = _relay_flow(hass, config_entry)
+	flow._step_data.update({
+		"relay_device_code": "dev-123",
+		"relay_user_code": "BCDF-GHJK",
+	})
+
+	result = await flow.async_step_link_vome_confirm(None)
+
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "link_vome_confirm"
+	assert len(result["data_schema"].schema) == 0
+
+
+@pytest.mark.asyncio
+async def test_link_vome_confirm_requires_token_field_without_supervisor(hass, config_entry, monkeypatch):
+	"""Without a Supervisor token the local token box is shown (it's required)."""
+	monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+	flow = _relay_flow(hass, config_entry)
+	flow._step_data.update({"relay_device_code": "dev-123"})
+
+	result = await flow.async_step_link_vome_confirm(None)
+
+	field_names = [str(key) for key in result["data_schema"].schema]
+	assert field_names == ["local_token"]
+
+
+@pytest.mark.asyncio
+async def test_link_vome_alt_always_shows_both_fields(hass, config_entry, monkeypatch):
+	"""Alternative connection exposes the manual token + ESPHome URL."""
+	monkeypatch.setenv("SUPERVISOR_TOKEN", "supertoken")
+	flow = _relay_flow(hass, config_entry)
+	flow._step_data.update({"relay_device_code": "dev-123"})
+
+	result = await flow.async_step_link_vome_alt(None)
+
+	field_names = [str(key) for key in result["data_schema"].schema]
+	assert field_names == ["local_token", "esphome_url"]
+
+
+@pytest.mark.asyncio
+async def test_link_vome_confirm_approved_saves_and_starts_relay(hass, config_entry, monkeypatch):
+	"""An approved poll stores the relay credentials and starts the client."""
+	monkeypatch.setenv("SUPERVISOR_TOKEN", "supertoken")
+	config_entry.options = {}
+	flow = _relay_flow(hass, config_entry)
+	flow._step_data.update({"relay_device_code": "dev-123"})
+
+	poll = AsyncMock(return_value={
+		"status": "approved",
+		"server_id": "rly-9",
+		"relay_secret": "rly_rly-9.tail",
+		"relay_ws_url": "wss://sync.vome.io/ws/relay",
+	})
+	start = AsyncMock()
+	with patch(f"{_RELAY_FLOW_MOD}.async_get_clientsession", return_value=MagicMock()), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_poll_device_token", new=poll), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_start_relay", new=start):
+		result = await flow.async_step_link_vome_confirm({})
+
+	assert result["type"] == FlowResultType.CREATE_ENTRY
+	saved = result["data"]["relay"]
+	assert saved["server_id"] == "rly-9"
+	assert saved["secret"] == "rly_rly-9.tail"
+	start.assert_awaited_once()
+	# Pending step data is cleared so a future link starts fresh.
+	assert "relay_device_code" not in flow._step_data
+
+
+@pytest.mark.asyncio
+async def test_link_vome_alt_approved_saves_manual_fields(hass, config_entry, monkeypatch):
+	"""The alternative form persists the manual token and ESPHome URL."""
+	monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+	config_entry.options = {}
+	flow = _relay_flow(hass, config_entry)
+	flow._step_data.update({"relay_device_code": "dev-123"})
+
+	poll = AsyncMock(return_value={
+		"status": "approved",
+		"server_id": "rly-9",
+		"relay_secret": "rly_rly-9.tail",
+		"relay_ws_url": "wss://sync.vome.io/ws/relay",
+	})
+	with patch(f"{_RELAY_FLOW_MOD}.async_get_clientsession", return_value=MagicMock()), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_poll_device_token", new=poll), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_start_relay", new=AsyncMock()):
+		result = await flow.async_step_link_vome_alt({
+			"local_token": " llt-abc ",
+			"esphome_url": "http://192.168.1.5:6052",
+		})
+
+	saved = result["data"]["relay"]
+	assert saved["local_token"] == "llt-abc"
+	assert saved["esphome_url"] == "http://192.168.1.5:6052"
+
+
+@pytest.mark.asyncio
+async def test_link_vome_confirm_pending_reshows_form(hass, config_entry, monkeypatch):
+	"""A not-yet-approved poll keeps the form up with a pending error."""
+	monkeypatch.setenv("SUPERVISOR_TOKEN", "supertoken")
+	flow = _relay_flow(hass, config_entry)
+	flow._step_data.update({"relay_device_code": "dev-123", "relay_user_code": "BCDF-GHJK"})
+
+	with patch(f"{_RELAY_FLOW_MOD}.async_get_clientsession", return_value=MagicMock()), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_poll_device_token", new=AsyncMock(return_value={"status": "pending"})):
+		result = await flow.async_step_link_vome_confirm({})
+
+	assert result["type"] == FlowResultType.FORM
+	assert result["errors"]["base"] == "relay_pending"
+
+
+@pytest.mark.asyncio
+async def test_link_vome_confirm_expired_mints_new_code(hass, config_entry, monkeypatch):
+	"""An expired code is replaced so the re-shown form displays a valid one."""
+	monkeypatch.setenv("SUPERVISOR_TOKEN", "supertoken")
+	flow = _relay_flow(hass, config_entry)
+	flow._step_data.update({"relay_device_code": "dev-old", "relay_user_code": "OLDC-ODEX"})
+
+	new_code = dict(_CODE_RESPONSE, device_code="dev-new", user_code="NEWC-ODEZ")
+	with patch(f"{_RELAY_FLOW_MOD}.async_get_clientsession", return_value=MagicMock()), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_poll_device_token", new=AsyncMock(return_value={"status": "expired"})), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_request_device_code", new=AsyncMock(return_value=new_code)):
+		result = await flow.async_step_link_vome_confirm({})
+
+	assert result["type"] == FlowResultType.FORM
+	assert result["errors"]["base"] == "relay_expired"
+	assert result["description_placeholders"]["user_code"] == "NEWC-ODEZ"
+	assert flow._step_data["relay_device_code"] == "dev-new"
+
+
+@pytest.mark.asyncio
+async def test_link_vome_confirm_without_pending_code_restarts(hass, config_entry, monkeypatch):
+	"""Landing on confirm without a code (e.g. restart) restarts the flow."""
+	monkeypatch.setenv("SUPERVISOR_TOKEN", "supertoken")
+	flow = _relay_flow(hass, config_entry)
+
+	with patch(f"{_RELAY_FLOW_MOD}.async_get_clientsession", return_value=MagicMock()), \
+		 patch(f"{_RELAY_FLOW_MOD}.async_request_device_code", new=AsyncMock(return_value=_CODE_RESPONSE)):
+		result = await flow.async_step_link_vome_confirm(None)
+
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "link_vome"

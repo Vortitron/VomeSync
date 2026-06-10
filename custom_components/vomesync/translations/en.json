@@ -38,6 +38,8 @@
 					"create_switch": "➕ Create switch",
 					"subscribe_switch": "👁️ Subscribe to switch",
 					"manage_switches": "🛠️ Manage switches",
+					"link_vome": "🏠 Connect to Vome Home",
+					"unlink_vome": "🔌 Disconnect from Vome Home",
 					"more": "⋯ More"
 				}
 			},
@@ -49,8 +51,6 @@
 					"reannounce_owned_switches": "📣 Re-announce owned switches",
 					"cleanup_orphaned_devices": "🧹 Clean up orphaned devices",
 					"edit_connection": "⚙️ Edit connection URLs",
-					"link_vome": "🔗 Connect this Home Assistant to Vome",
-					"unlink_vome": "🔌 Disconnect this Home Assistant from Vome",
 					"back": "← Back"
 				}
 			},
@@ -295,15 +295,37 @@
 				}
 			},
 			"link_vome": {
-				"title": "Connect this Home Assistant to Vome",
-				"description": "1. Open **{verification_uri}** and sign in with GitHub.\n2. Enter this code: **{user_code}**\n3. Come back here and press **Submit**.\n\nYour Home Assistant will then appear in your Vome account and can be brokered by the home-assistant-mcp server — no public IP or port-forwarding needed. On HAOS / Supervised installs this works automatically; on other installs paste a long-lived access token below.",
+				"title": "Connect to Vome Home",
+				"description": "1. Open **{verification_uri}** and sign in with GitHub.\n2. Enter this code: **{user_code}**\n3. Come back here and continue.\n\nYour Home Assistant will then appear in your Vome account and can be brokered by the home-assistant-mcp server — no public IP, port-forwarding or Nabu Casa needed.",
+				"menu_options": {
+					"link_vome_confirm": "✅ I've approved the code — connect",
+					"link_vome_alt": "⚙️ Alternative connection (manual token / ESPHome URL)"
+				}
+			},
+			"link_vome_retry": {
+				"title": "Connect to Vome Home",
+				"description": "The Vome portal could not be reached to start the connection. Press **Submit** to try again.",
 				"data": {
-					"local_token": "Local long-lived token (only if not running HAOS / Supervised)",
-					"esphome_url": "ESPHome dashboard URL (optional; auto-detected on HAOS / Supervised)"
+					"local_token": "Local long-lived token (only if not running HAOS / Supervised)"
+				}
+			},
+			"link_vome_confirm": {
+				"title": "Connect to Vome Home",
+				"description": "Approve the code **{user_code}** at **{verification_uri}**, then press **Submit**.",
+				"data": {
+					"local_token": "Local long-lived access token (this install needs one — it is not HAOS / Supervised)"
+				}
+			},
+			"link_vome_alt": {
+				"title": "Alternative connection",
+				"description": "Approve the code **{user_code}** at **{verification_uri}**, then press **Submit**.\n\nOnly fill these in if you need them: on HAOS / Supervised the Supervisor token and ESPHome add-on are detected automatically.",
+				"data": {
+					"local_token": "Local long-lived access token (only if not running HAOS / Supervised)",
+					"esphome_url": "ESPHome dashboard URL (auto-detected on HAOS / Supervised)"
 				}
 			},
 			"unlink_vome": {
-				"title": "Disconnect this Home Assistant from Vome",
+				"title": "Disconnect from Vome Home",
 				"description": "This will stop the relay and remove this Home Assistant from your Vome account's relay access."
 			},
 			"manage_api_keys": {
