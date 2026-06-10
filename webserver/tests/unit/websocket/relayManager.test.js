@@ -179,6 +179,19 @@ describe('RelayManager registry', () => {
 		expect(stats.relays).toBe(2);
 		expect(stats.servers.sort()).toEqual(['rly-1', 'rly-2']);
 	});
+
+	test('disconnect force-closes and deregisters the socket', () => {
+		// Revocation path: the portal deletes a link / rotates its secret and
+		// must be able to drop the live socket (secrets are only verified at
+		// connect time).
+		const ws = connect(mgr, 'rly-1');
+		expect(mgr.disconnect('rly-1')).toBe(true);
+		expect(ws.closed).toMatchObject({ code: 4001 });
+		expect(mgr.connections.size).toBe(0);
+		// Idempotent: nothing left to close.
+		expect(mgr.disconnect('rly-1')).toBe(false);
+		expect(mgr.disconnect('rly-unknown')).toBe(false);
+	});
 });
 
 describe('extractSecret', () => {

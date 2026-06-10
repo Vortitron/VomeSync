@@ -63,4 +63,15 @@ router.get('/relay/status', (req, res) => {
 	return res.json(relayManager.getStats());
 });
 
+router.post('/relay/disconnect', (req, res) => {
+	if (!authorised(req)) {
+		return res.status(401).json({ error: 'unauthorized' });
+	}
+	const serverId = (req.body || {}).server_id;
+	if (!serverId) {
+		return res.status(400).json({ error: 'server_id is required' });
+	}
+	return res.json({ disconnected: relayManager.disconnect(serverId) });
+});
+
 module.exports = router;

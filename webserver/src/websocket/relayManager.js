@@ -210,6 +210,27 @@ class RelayManager {
 		};
 	}
 
+	/**
+	 * Forcibly close a server's relay socket (portal calls this when the link
+	 * is deleted or its secret rotated).  Secrets are only verified at connect
+	 * time, so without this a revoked link would keep its live socket until
+	 * the next reconnect.  Returns true when a socket was actually closed.
+	 */
+	disconnect(serverId) {
+		const conn = this.connections.get(serverId);
+		this.connections.delete(serverId);
+		if (!conn || !conn.ws) {
+			return false;
+		}
+		try {
+			conn.ws.close(4001, 'link revoked');
+		} catch (_err) {
+			try { conn.ws.terminate(); } catch (_e) { /* already gone */ }
+		}
+		logger.info(`Relay ${serverId} disconnected (link revoked)`);
+		return true;
+	}
+
 	startHeartbeat() {
 		this._heartbeat = setInterval(() => {
 			const now = Date.now();
