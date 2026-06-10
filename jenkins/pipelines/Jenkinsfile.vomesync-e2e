@@ -96,8 +96,29 @@ pipeline {
                     if (!apiPort || !wsPort) {
                         error "Could not resolve e2e stack ports (api='${apiPort}', ws='${wsPort}')"
                     }
-                    env.E2E_API_URL = "http://localhost:${apiPort}"
-                    env.E2E_WS_URL = "ws://localhost:${wsPort}"
+                    // Jenkins itself runs in a container on a bridge network, so
+                    // host-published ports are NOT on its localhost — they are on
+                    // the default-route gateway (the Docker host). Prefer localhost
+                    // when it answers (bare-metal agents), else use the gateway.
+                    def hostIp = sh(
+                        script: '''
+                            gw_hex=$(awk '$2 == "00000000" { print $3; exit }' /proc/net/route)
+                            if [ -n "$gw_hex" ]; then
+                                echo "$((0x$(echo $gw_hex | cut -c7-8))).$((0x$(echo $gw_hex | cut -c5-6))).$((0x$(echo $gw_hex | cut -c3-4))).$((0x$(echo $gw_hex | cut -c1-2)))"
+                            fi
+                        ''',
+                        returnStdout: true
+                    ).trim()
+                    def apiHost = 'localhost'
+                    def localhostOk = sh(
+                        script: "curl -sf -m 5 http://localhost:${apiPort}/api/health >/dev/null",
+                        returnStatus: true
+                    ) == 0
+                    if (!localhostOk && hostIp) {
+                        apiHost = hostIp
+                    }
+                    env.E2E_API_URL = "http://${apiHost}:${apiPort}"
+                    env.E2E_WS_URL = "ws://${apiHost}:${wsPort}"
                     echo "E2E stack: API ${env.E2E_API_URL}, WS ${env.E2E_WS_URL}"
                 }
                 sh '''
