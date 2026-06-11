@@ -11,3 +11,5 @@ __pycache__/
 .coverage
 coverage.xml
 webserver/coverage/
+backups/20260610_193317/.env
+backups/20260610_193317/redis_dump.rdb
