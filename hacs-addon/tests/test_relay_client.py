@@ -152,30 +152,76 @@ class TestEsphome:
 		assert kwargs["data"] == yaml
 		assert kwargs["headers"]["Content-Type"] == "application/yaml"
 
+	# The official add-on's shape: host-networked, web port disabled, dashboard
+	# behind a dynamic ingress port (nginx admits only Supervisor + localhost).
+	_INGRESS_INFO = {"ingress": True, "ingress_port": 64279, "network": {"6052/tcp": None}}
+
 	@staticmethod
-	def _session_with_addons(addons, status=200, text="[]"):
+	def _session_with_addons(addons, info=None, info_status=200, status=200, text="[]"):
+		"""Mock session serving /addons (list), /addons/<slug>/info, and the dashboard."""
 		session, _ = _mock_session_with_response(status=status, text=text)
-		disc = AsyncMock()
-		disc.status = 200
-		disc.json.return_value = {"data": {"addons": addons}}
-		session.get.return_value.__aenter__.return_value = disc
+		list_resp = AsyncMock()
+		list_resp.status = 200
+		list_resp.json.return_value = {"data": {"addons": addons}}
+		info_resp = AsyncMock()
+		info_resp.status = info_status
+		info_resp.json.return_value = {"data": info or {}}
+
+		def _get(url, **_kwargs):
+			cm = AsyncMock()
+			cm.__aenter__.return_value = info_resp if url.endswith("/info") else list_resp
+			return cm
+
+		session.get = MagicMock(side_effect=_get)
 		return session
 
 	@pytest.mark.asyncio
-	async def test_discovery_via_supervisor(self, monkeypatch):
+	async def test_discovery_via_supervisor_uses_ingress_port(self, monkeypatch):
+		# Default add-on install: nothing listens on <hostname>:6052; the
+		# dashboard is only reachable on localhost at the ingress port.
 		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "sup")
 		session = self._session_with_addons(
-			[{"slug": "5c53de3b_esphome", "name": "ESPHome", "state": "started"}]
+			[{"slug": "5c53de3b_esphome", "name": "ESPHome", "state": "started"}],
+			info=self._INGRESS_INFO,
 		)
 		client = _client(session)  # no explicit esphome_url
 		status, body, error = await client.execute("GET", "/devices", None, "esphome")
 		assert status == 200 and error is None
 		args, kwargs = session.request.call_args
+		assert args[1] == "http://127.0.0.1:64279/devices"
+
+	@pytest.mark.asyncio
+	async def test_discovery_prefers_mapped_web_port(self, monkeypatch):
+		# A user-enabled web port wins over ingress (it is the documented API).
+		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "sup")
+		session = self._session_with_addons(
+			[{"slug": "5c53de3b_esphome", "name": "ESPHome", "state": "started"}],
+			info={"ingress": True, "ingress_port": 64279, "network": {"6052/tcp": 6052}},
+		)
+		client = _client(session)
+		status, body, error = await client.execute("GET", "/devices", None, "esphome")
+		assert status == 200 and error is None
+		args, _kwargs = session.request.call_args
 		assert args[1] == "http://5c53de3b-esphome:6052/devices"
 
 	@pytest.mark.asyncio
+	async def test_discovery_falls_back_when_info_unavailable(self, monkeypatch):
+		# If the info call fails, fall back to the legacy <hostname>:6052 guess
+		# rather than refusing outright (covers third-party dashboards).
+		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "sup")
+		session = self._session_with_addons(
+			[{"slug": "a0d7b954_esphome", "name": "ESPHome", "state": "started"}],
+			info_status=500,
+		)
+		client = _client(session)
+		status, body, error = await client.execute("GET", "/devices", None, "esphome")
+		assert status == 200 and error is None
+		args, _kwargs = session.request.call_args
+		assert args[1] == "http://a0d7b954-esphome:6052/devices"
+
+	@pytest.mark.asyncio
 	async def test_discovery_skips_stopped_addon(self, monkeypatch):
-		# A stopped add-on has no internal DNS entry: report it, don't connect.
+		# A stopped add-on is unreachable: report it, don't connect.
 		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "sup")
 		session = self._session_with_addons(
 			[{"slug": "5c53de3b_esphome", "name": "ESPHome Device Builder", "state": "stopped"}]
@@ -192,12 +238,12 @@ class TestEsphome:
 		session = self._session_with_addons([
 			{"slug": "5c53de3b_esphome-beta", "name": "ESPHome (beta)", "state": "stopped"},
 			{"slug": "5c53de3b_esphome", "name": "ESPHome", "state": "started"},
-		])
+		], info=self._INGRESS_INFO)
 		client = _client(session)
 		status, body, error = await client.execute("GET", "/devices", None, "esphome")
 		assert status == 200 and error is None
 		args, _kwargs = session.request.call_args
-		assert args[1] == "http://5c53de3b-esphome:6052/devices"
+		assert args[1] == "http://127.0.0.1:64279/devices"
 
 	@pytest.mark.asyncio
 	async def test_no_esphome_addon_installed(self, monkeypatch):
@@ -224,16 +270,18 @@ class TestEsphome:
 		# next call re-discovers (add-on may have been restarted on a new IP).
 		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "sup")
 		session = self._session_with_addons(
-			[{"slug": "5c53de3b_esphome", "name": "ESPHome", "state": "started"}]
+			[{"slug": "5c53de3b_esphome", "name": "ESPHome", "state": "started"}],
+			info=self._INGRESS_INFO,
 		)
 		session.request.return_value.__aenter__.side_effect = aiohttp.ClientError("no route")
 		client = _client(session)
 		status, body, error = await client.execute("GET", "/devices", None, "esphome")
 		assert status == 0 and "Check the ESPHome add-on is running" in error
 		assert client._esphome_base_cache is None
-		# Second call re-runs discovery rather than reusing a stale base.
+		# Second call re-runs discovery (list + info per attempt) rather than
+		# reusing a stale base.
 		await client.execute("GET", "/devices", None, "esphome")
-		assert session.get.call_count == 2
+		assert session.get.call_count == 4
 
 
 class TestMessageHandling:

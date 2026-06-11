@@ -71,12 +71,19 @@ RELAY_RPC_TARGET_ESPHOME = "esphome"
 # proxied — the streaming build commands (compile/upload/run/logs) need a direct
 # dashboard connection and are intentionally not tunnelled.
 SUPERVISOR_ADDONS_URL = "http://supervisor/addons"
+SUPERVISOR_ADDON_INFO_URL = "http://supervisor/addons/{slug}/info"
 ESPHOME_DEFAULT_PORT = 6052
+ESPHOME_WEB_PORT_KEY = "6052/tcp"  # the add-on's optional direct web port mapping
 ESPHOME_ALLOWED_PATHS = ("/devices", "/version", "/edit")
 ESPHOME_ALLOWED_METHODS = ("GET", "POST")
-# Supervisor add-on state: only a *started* add-on has an internal DNS entry,
-# so discovery must check this rather than surface an opaque connect error.
+# Supervisor add-on state: only a *started* add-on is reachable, so discovery
+# must check this rather than surface an opaque connect error.
 ESPHOME_ADDON_STATE_STARTED = "started"
+# The official add-on is host-networked with the web port disabled by default;
+# its dashboard is served on a dynamic ingress port whose nginx only admits the
+# Supervisor and 127.0.0.1.  Core is host-networked too, so localhost is the
+# admitted route (this mirrors the add-on's own hassio discovery payload).
+ESPHOME_INGRESS_HOST = "127.0.0.1"
 
 # Switch configuration keys
 CONF_SWITCH_UID = "uid"

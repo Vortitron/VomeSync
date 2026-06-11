@@ -53,6 +53,8 @@ from .const import (
 	ESPHOME_ALLOWED_METHODS,
 	ESPHOME_ALLOWED_PATHS,
 	ESPHOME_DEFAULT_PORT,
+	ESPHOME_INGRESS_HOST,
+	ESPHOME_WEB_PORT_KEY,
 	RELAY_ALLOWED_METHODS,
 	RELAY_DEVICE_CODE_PATH,
 	RELAY_DEVICE_TOKEN_PATH,
@@ -65,6 +67,7 @@ from .const import (
 	RELAY_WS_MSG_HELLO,
 	RELAY_WS_MSG_PING,
 	RELAY_WS_MSG_PONG,
+	SUPERVISOR_ADDON_INFO_URL,
 	SUPERVISOR_ADDONS_URL,
 	SUPERVISOR_TOKEN_ENV,
 )
@@ -350,10 +353,10 @@ class RelayClient:
 
 		An explicitly configured URL wins; otherwise, on HAOS / Supervised installs
 		the ESPHome add-on is discovered via the Supervisor API.  Only a *started*
-		add-on is addressable (stopped add-ons have no internal DNS entry), so the
-		add-on state is checked here and reported clearly instead of surfacing an
-		opaque connect error.  Successful lookups are cached; the cache is dropped
-		after a connection failure so a restarted add-on is re-discovered.
+		add-on is reachable, so the add-on state is checked here and reported
+		clearly instead of surfacing an opaque connect error.  Successful lookups
+		are cached; the cache is dropped after a connection failure so a restarted
+		add-on is re-discovered.
 		"""
 		if self._esphome_url:
 			return self._esphome_url, None
@@ -367,18 +370,9 @@ class RelayClient:
 			)
 		session = self._get_session()
 		headers = {"Authorization": f"Bearer {supervisor}"}
-		try:
-			async with session.get(
-				SUPERVISOR_ADDONS_URL,
-				headers=headers,
-				timeout=aiohttp.ClientTimeout(total=10),
-			) as resp:
-				if resp.status != 200:
-					return None, f"Supervisor add-on lookup failed (HTTP {resp.status})."
-				payload = await resp.json()
-		except (asyncio.TimeoutError, aiohttp.ClientError, ValueError) as err:
-			_LOGGER.debug("Relay (%s): ESPHome add-on discovery failed: %s", self._server_id, err)
-			return None, f"Supervisor add-on lookup failed: {err}"
+		payload, problem = await self._supervisor_get(session, headers, SUPERVISOR_ADDONS_URL)
+		if payload is None:
+			return None, problem
 		addons = [
 			addon
 			for addon in ((payload or {}).get("data") or {}).get("addons") or []
@@ -398,15 +392,62 @@ class RelayClient:
 				f"The ESPHome add-on ({names}) is installed but not running. "
 				"Start it under Settings → Add-ons, then retry."
 			)
-		# Supervisor exposes each add-on on the internal network by its slug
-		# with underscores rendered as hyphens.
-		hostname = (started.get("slug") or "").replace("_", "-")
-		self._esphome_base_cache = f"http://{hostname}:{ESPHOME_DEFAULT_PORT}"
+		slug = started.get("slug") or ""
+		base = await self._esphome_base_for_addon(session, headers, slug)
+		self._esphome_base_cache = base
 		_LOGGER.info(
 			"Relay (%s): discovered ESPHome dashboard at %s",
 			self._server_id, self._esphome_base_cache,
 		)
 		return self._esphome_base_cache, None
+
+	async def _esphome_base_for_addon(
+		self, session: aiohttp.ClientSession, headers: dict, slug: str
+	) -> str:
+		"""Build the dashboard base URL for a started ESPHome add-on.
+
+		The official add-on is host-networked with its web port disabled by
+		default: nothing listens on ``<hostname>:6052``.  The dashboard sits
+		behind a dynamic *ingress* port whose nginx admits only the Supervisor
+		and 127.0.0.1 — and core shares the host network, so localhost is the
+		admitted route (the add-on's own hassio discovery payload says the
+		same).  An explicitly mapped web port takes precedence; the legacy
+		``<hostname>:6052`` is kept as the last resort for third-party add-ons.
+		"""
+		hostname = slug.replace("_", "-")
+		fallback = f"http://{hostname}:{ESPHOME_DEFAULT_PORT}"
+		info_payload, problem = await self._supervisor_get(
+			session, headers, SUPERVISOR_ADDON_INFO_URL.format(slug=slug)
+		)
+		if info_payload is None:
+			_LOGGER.debug(
+				"Relay (%s): add-on info lookup failed (%s); falling back to %s",
+				self._server_id, problem, fallback,
+			)
+			return fallback
+		info = (info_payload or {}).get("data") or {}
+		web_port = (info.get("network") or {}).get(ESPHOME_WEB_PORT_KEY)
+		if web_port:
+			return f"http://{hostname}:{web_port}"
+		ingress_port = info.get("ingress_port")
+		if info.get("ingress") and ingress_port:
+			return f"http://{ESPHOME_INGRESS_HOST}:{ingress_port}"
+		return fallback
+
+	async def _supervisor_get(
+		self, session: aiohttp.ClientSession, headers: dict, url: str
+	) -> tuple[Optional[dict], Optional[str]]:
+		"""GET a Supervisor API URL; return ``(json, None)`` or ``(None, problem)``."""
+		try:
+			async with session.get(
+				url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
+			) as resp:
+				if resp.status != 200:
+					return None, f"Supervisor add-on lookup failed (HTTP {resp.status})."
+				return await resp.json(), None
+		except (asyncio.TimeoutError, aiohttp.ClientError, ValueError) as err:
+			_LOGGER.debug("Relay (%s): Supervisor lookup failed: %s", self._server_id, err)
+			return None, f"Supervisor add-on lookup failed: {err}"
 
 
 # ── Device-authorisation HTTP helpers (used by the config/options flow) ──────
