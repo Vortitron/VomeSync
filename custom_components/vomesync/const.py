@@ -74,6 +74,9 @@ SUPERVISOR_ADDONS_URL = "http://supervisor/addons"
 ESPHOME_DEFAULT_PORT = 6052
 ESPHOME_ALLOWED_PATHS = ("/devices", "/version", "/edit")
 ESPHOME_ALLOWED_METHODS = ("GET", "POST")
+# Supervisor add-on state: only a *started* add-on has an internal DNS entry,
+# so discovery must check this rather than surface an opaque connect error.
+ESPHOME_ADDON_STATE_STARTED = "started"
 
 # Switch configuration keys
 CONF_SWITCH_UID = "uid"

@@ -152,21 +152,61 @@ class TestEsphome:
 		assert kwargs["data"] == yaml
 		assert kwargs["headers"]["Content-Type"] == "application/yaml"
 
+	@staticmethod
+	def _session_with_addons(addons, status=200, text="[]"):
+		session, _ = _mock_session_with_response(status=status, text=text)
+		disc = AsyncMock()
+		disc.status = 200
+		disc.json.return_value = {"data": {"addons": addons}}
+		session.get.return_value.__aenter__.return_value = disc
+		return session
+
 	@pytest.mark.asyncio
 	async def test_discovery_via_supervisor(self, monkeypatch):
 		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "sup")
-		session, _ = _mock_session_with_response(status=200, text="[]")
-		disc = AsyncMock()
-		disc.status = 200
-		disc.json.return_value = {
-			"data": {"addons": [{"slug": "5c53de3b_esphome", "name": "ESPHome"}]}
-		}
-		session.get.return_value.__aenter__.return_value = disc
+		session = self._session_with_addons(
+			[{"slug": "5c53de3b_esphome", "name": "ESPHome", "state": "started"}]
+		)
 		client = _client(session)  # no explicit esphome_url
 		status, body, error = await client.execute("GET", "/devices", None, "esphome")
 		assert status == 200 and error is None
 		args, kwargs = session.request.call_args
 		assert args[1] == "http://5c53de3b-esphome:6052/devices"
+
+	@pytest.mark.asyncio
+	async def test_discovery_skips_stopped_addon(self, monkeypatch):
+		# A stopped add-on has no internal DNS entry: report it, don't connect.
+		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "sup")
+		session = self._session_with_addons(
+			[{"slug": "5c53de3b_esphome", "name": "ESPHome Device Builder", "state": "stopped"}]
+		)
+		client = _client(session)
+		status, body, error = await client.execute("GET", "/devices", None, "esphome")
+		assert status == 0 and "installed but not running" in error
+		assert "ESPHome Device Builder" in error
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_discovery_prefers_started_addon(self, monkeypatch):
+		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "sup")
+		session = self._session_with_addons([
+			{"slug": "5c53de3b_esphome-beta", "name": "ESPHome (beta)", "state": "stopped"},
+			{"slug": "5c53de3b_esphome", "name": "ESPHome", "state": "started"},
+		])
+		client = _client(session)
+		status, body, error = await client.execute("GET", "/devices", None, "esphome")
+		assert status == 200 and error is None
+		args, _kwargs = session.request.call_args
+		assert args[1] == "http://5c53de3b-esphome:6052/devices"
+
+	@pytest.mark.asyncio
+	async def test_no_esphome_addon_installed(self, monkeypatch):
+		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "sup")
+		session = self._session_with_addons([{"slug": "core_mosquitto", "state": "started"}])
+		client = _client(session)
+		status, body, error = await client.execute("GET", "/devices", None, "esphome")
+		assert status == 0 and "ESPHome add-on not found" in error
+		session.request.assert_not_called()
 
 	@pytest.mark.asyncio
 	async def test_no_dashboard_found(self, monkeypatch):
@@ -176,6 +216,24 @@ class TestEsphome:
 		status, body, error = await client.execute("GET", "/devices", None, "esphome")
 		assert status == 0 and "ESPHome dashboard not found" in error
 		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_connect_error_drops_cache_and_hints(self, monkeypatch):
+		# First call discovers and caches, but the connection fails: the error
+		# must hint at the add-on state and the cache must be dropped so the
+		# next call re-discovers (add-on may have been restarted on a new IP).
+		monkeypatch.setenv(SUPERVISOR_TOKEN_ENV, "sup")
+		session = self._session_with_addons(
+			[{"slug": "5c53de3b_esphome", "name": "ESPHome", "state": "started"}]
+		)
+		session.request.return_value.__aenter__.side_effect = aiohttp.ClientError("no route")
+		client = _client(session)
+		status, body, error = await client.execute("GET", "/devices", None, "esphome")
+		assert status == 0 and "Check the ESPHome add-on is running" in error
+		assert client._esphome_base_cache is None
+		# Second call re-runs discovery rather than reusing a stale base.
+		await client.execute("GET", "/devices", None, "esphome")
+		assert session.get.call_count == 2
 
 
 class TestMessageHandling:

@@ -49,6 +49,7 @@ from .const import (
 	DEFAULT_PORTAL_URL,
 	DEFAULT_RELAY_WS_URL,
 	DOMAIN,
+	ESPHOME_ADDON_STATE_STARTED,
 	ESPHOME_ALLOWED_METHODS,
 	ESPHOME_ALLOWED_PATHS,
 	ESPHOME_DEFAULT_PORT,
@@ -312,9 +313,9 @@ class RelayClient:
 		method = (method or "GET").upper()
 		if method not in ESPHOME_ALLOWED_METHODS:
 			return 0, None, f"Unsupported ESPHome method: {method}"
-		base = await self._resolve_esphome_base()
+		base, problem = await self._resolve_esphome_base()
 		if not base:
-			return 0, None, (
+			return 0, None, problem or (
 				"ESPHome dashboard not found. Install the ESPHome add-on, or set the "
 				"ESPHome dashboard URL in the Vome relay options."
 			)
@@ -336,22 +337,34 @@ class RelayClient:
 		except asyncio.TimeoutError:
 			return 0, None, "ESPHome dashboard timed out."
 		except aiohttp.ClientError as err:
-			return 0, None, f"ESPHome dashboard error: {err}"
+			# The cached address may be stale (add-on stopped or restarted since
+			# discovery) — drop it so the next call re-discovers.
+			self._esphome_base_cache = None
+			return 0, None, (
+				f"ESPHome dashboard error: {err}. "
+				"Check the ESPHome add-on is running, then retry."
+			)
 
-	async def _resolve_esphome_base(self) -> Optional[str]:
-		"""Return the local ESPHome dashboard base URL, or ``None``.
+	async def _resolve_esphome_base(self) -> tuple[Optional[str], Optional[str]]:
+		"""Return ``(base_url, None)`` or ``(None, problem)`` for the dashboard.
 
 		An explicitly configured URL wins; otherwise, on HAOS / Supervised installs
-		we discover the ESPHome add-on via the Supervisor API and address it by its
-		internal hostname (cached after the first lookup).
+		the ESPHome add-on is discovered via the Supervisor API.  Only a *started*
+		add-on is addressable (stopped add-ons have no internal DNS entry), so the
+		add-on state is checked here and reported clearly instead of surfacing an
+		opaque connect error.  Successful lookups are cached; the cache is dropped
+		after a connection failure so a restarted add-on is re-discovered.
 		"""
 		if self._esphome_url:
-			return self._esphome_url
+			return self._esphome_url, None
 		if self._esphome_base_cache:
-			return self._esphome_base_cache
+			return self._esphome_base_cache, None
 		supervisor = os.environ.get(SUPERVISOR_TOKEN_ENV)
 		if not supervisor:
-			return None
+			return None, (
+				"ESPHome dashboard not found. Set the ESPHome dashboard URL in the "
+				"Vome relay options (no Supervisor on this install)."
+			)
 		session = self._get_session()
 		headers = {"Authorization": f"Bearer {supervisor}"}
 		try:
@@ -361,22 +374,39 @@ class RelayClient:
 				timeout=aiohttp.ClientTimeout(total=10),
 			) as resp:
 				if resp.status != 200:
-					return None
+					return None, f"Supervisor add-on lookup failed (HTTP {resp.status})."
 				payload = await resp.json()
 		except (asyncio.TimeoutError, aiohttp.ClientError, ValueError) as err:
 			_LOGGER.debug("Relay (%s): ESPHome add-on discovery failed: %s", self._server_id, err)
-			return None
-		addons = ((payload or {}).get("data") or {}).get("addons") or []
-		for addon in addons:
-			slug = addon.get("slug") or ""
-			if "esphome" in slug:
-				# Supervisor exposes each add-on on the internal network by its slug
-				# with underscores rendered as hyphens.
-				hostname = slug.replace("_", "-")
-				self._esphome_base_cache = f"http://{hostname}:{ESPHOME_DEFAULT_PORT}"
-				_LOGGER.info("Relay (%s): discovered ESPHome dashboard at %s", self._server_id, self._esphome_base_cache)
-				return self._esphome_base_cache
-		return None
+			return None, f"Supervisor add-on lookup failed: {err}"
+		addons = [
+			addon
+			for addon in ((payload or {}).get("data") or {}).get("addons") or []
+			if "esphome" in (addon.get("slug") or "")
+		]
+		if not addons:
+			return None, (
+				"ESPHome add-on not found. Install the ESPHome Device Builder add-on, "
+				"or set the ESPHome dashboard URL in the Vome relay options."
+			)
+		started = next(
+			(a for a in addons if a.get("state") == ESPHOME_ADDON_STATE_STARTED), None
+		)
+		if started is None:
+			names = ", ".join(sorted(a.get("name") or a.get("slug") or "?" for a in addons))
+			return None, (
+				f"The ESPHome add-on ({names}) is installed but not running. "
+				"Start it under Settings → Add-ons, then retry."
+			)
+		# Supervisor exposes each add-on on the internal network by its slug
+		# with underscores rendered as hyphens.
+		hostname = (started.get("slug") or "").replace("_", "-")
+		self._esphome_base_cache = f"http://{hostname}:{ESPHOME_DEFAULT_PORT}"
+		_LOGGER.info(
+			"Relay (%s): discovered ESPHome dashboard at %s",
+			self._server_id, self._esphome_base_cache,
+		)
+		return self._esphome_base_cache, None
 
 
 # ── Device-authorisation HTTP helpers (used by the config/options flow) ──────
