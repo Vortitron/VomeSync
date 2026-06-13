@@ -31,6 +31,12 @@ CONF_RELAY_WS_URL = "ws_url"
 CONF_RELAY_LOCAL_TOKEN = "local_token"  # noqa: S105 - optional non-supervised fallback
 CONF_RELAY_LOCAL_URL = "local_url"
 CONF_RELAY_ESPHOME_URL = "esphome_url"  # optional explicit ESPHome dashboard base URL
+# Full-UI forwarding (the paid "friendly domain" remote access).  Off by default
+# because it brokers the *entire* Home Assistant browser session — arbitrary
+# HTTP plus the frontend's /api/websocket — not just the scoped /api surface the
+# assistant uses.  The owner opts in explicitly; Vome still gates who may reach
+# the address (login + active subscription) before any byte is tunnelled.
+CONF_RELAY_FORWARD_UI = "forward_ui"
 
 # The portal (account / device-authorisation) lives on vome.io; the relay
 # WebSocket lives on sync.vome.io.  The portal tells us the WS URL at link time.
@@ -58,6 +64,31 @@ RELAY_RECONNECT_DELAY = 5
 RELAY_RECONNECT_MAX_DELAY = 60
 RELAY_RPC_TIMEOUT = 30
 RELAY_ALLOWED_METHODS = ("GET", "POST", "PUT", "DELETE")
+
+# Full-UI forwarding protocol (opt-in, see CONF_RELAY_FORWARD_UI).  The backend
+# brokers a whole browser session over the same socket: each browser HTTP
+# request is one http_proxy/http_proxy_response pair (bodies base64 so binary
+# assets survive JSON), and the frontend WebSocket (/api/websocket) is bridged
+# frame-for-frame with ws_open → ws_open_ack/ws_data ↔ ws_data → ws_close.
+# Unlike ha_rpc this carries *arbitrary* paths and the browser's own auth — Vome
+# injects no token; the user signs in to their Home Assistant as normal.
+RELAY_WS_MSG_HTTP_PROXY = "http_proxy"
+RELAY_WS_MSG_HTTP_PROXY_RESPONSE = "http_proxy_response"
+RELAY_WS_MSG_WS_OPEN = "ws_open"
+RELAY_WS_MSG_WS_OPEN_ACK = "ws_open_ack"
+RELAY_WS_MSG_WS_DATA = "ws_data"
+RELAY_WS_MSG_WS_CLOSE = "ws_close"
+# Forwarding limits/tuning.  Bodies larger than the cap are refused (502) rather
+# than buffered unbounded; the frontend WebSocket carries small JSON frames.
+RELAY_FORWARD_HTTP_TIMEOUT = 60
+RELAY_FORWARD_MAX_BODY = 25 * 1024 * 1024
+RELAY_FORWARD_WS_PATHS = ("/api/websocket",)
+# Hop-by-hop headers are connection-scoped and must not be forwarded across the
+# tunnel (RFC 7230 §6.1); Host/Content-Length are re-derived by each hop.
+RELAY_FORWARD_STRIP_HEADERS = frozenset({
+	"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+	"te", "trailer", "transfer-encoding", "upgrade", "host", "content-length",
+})
 
 # An RPC targets either the local HA core REST API ("core", the default) or the
 # local ESPHome dashboard ("esphome").  ESPHome flows through the same tunnel so

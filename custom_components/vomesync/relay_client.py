@@ -25,6 +25,7 @@ this client just carries the request, it does not widen what is permitted.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -40,6 +41,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .const import (
 	CONF_RELAY,
 	CONF_RELAY_ESPHOME_URL,
+	CONF_RELAY_FORWARD_UI,
 	CONF_RELAY_LOCAL_TOKEN,
 	CONF_RELAY_LOCAL_URL,
 	CONF_RELAY_SECRET,
@@ -58,6 +60,10 @@ from .const import (
 	RELAY_ALLOWED_METHODS,
 	RELAY_DEVICE_CODE_PATH,
 	RELAY_DEVICE_TOKEN_PATH,
+	RELAY_FORWARD_HTTP_TIMEOUT,
+	RELAY_FORWARD_MAX_BODY,
+	RELAY_FORWARD_STRIP_HEADERS,
+	RELAY_FORWARD_WS_PATHS,
 	RELAY_RECONNECT_DELAY,
 	RELAY_RECONNECT_MAX_DELAY,
 	RELAY_RPC_TARGET_ESPHOME,
@@ -65,8 +71,14 @@ from .const import (
 	RELAY_WS_MSG_HA_RPC,
 	RELAY_WS_MSG_HA_RPC_RESPONSE,
 	RELAY_WS_MSG_HELLO,
+	RELAY_WS_MSG_HTTP_PROXY,
+	RELAY_WS_MSG_HTTP_PROXY_RESPONSE,
 	RELAY_WS_MSG_PING,
 	RELAY_WS_MSG_PONG,
+	RELAY_WS_MSG_WS_CLOSE,
+	RELAY_WS_MSG_WS_DATA,
+	RELAY_WS_MSG_WS_OPEN,
+	RELAY_WS_MSG_WS_OPEN_ACK,
 	SUPERVISOR_ADDON_INFO_URL,
 	SUPERVISOR_ADDONS_URL,
 	SUPERVISOR_TOKEN_ENV,
@@ -81,6 +93,56 @@ _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15)
 # shows up under the owner's profile → Security → long-lived access tokens.
 RELAY_TOKEN_CLIENT_NAME = "Vome relay"
 _RELAY_TOKEN_LIFETIME = timedelta(days=3650)
+
+
+# ── Full-UI forwarding helpers (shared by request + response paths) ──────────
+
+def _normalise_header_input(headers: Any) -> list[tuple[str, str]]:
+	"""Accept headers as a dict, a multidict view, or a list/iterable of pairs.
+
+	Returns ``(name, value)`` tuples.  The backend sends a list of pairs to
+	preserve duplicates (notably several ``Set-Cookie``); the local response
+	arrives as ``CIMultiDict.items()`` (a *view*, not a list).  Both — plus a
+	plain dict — must work, so accept any non-string iterable of pairs.
+	"""
+	if isinstance(headers, dict):
+		return [(str(k), str(v)) for k, v in headers.items()]
+	if headers is None or isinstance(headers, (str, bytes)):
+		return []
+	try:
+		pairs = list(headers)
+	except TypeError:
+		return []
+	return [
+		(str(p[0]), str(p[1]))
+		for p in pairs
+		if isinstance(p, (list, tuple)) and len(p) >= 2
+	]
+
+
+def _filter_forward_headers(pairs: Any) -> list[list[str]]:
+	"""Return ``[[name, value], …]`` with hop-by-hop headers removed.
+
+	Hop-by-hop headers (RFC 7230 §6.1) describe a single transport hop and must
+	not be tunnelled; ``Host``/``Content-Length`` are re-derived by each hop.
+	Used for both the inbound browser request and the local HA response.
+	"""
+	out: list[list[str]] = []
+	for name, value in _normalise_header_input(pairs):
+		if name.lower() in RELAY_FORWARD_STRIP_HEADERS:
+			continue
+		out.append([name, value])
+	return out
+
+
+def _to_ws_url(base_url: Optional[str], path: str) -> str:
+	"""Map an ``http(s)`` base + path to the matching ``ws(s)://`` URL."""
+	base = (base_url or DEFAULT_LOCAL_CORE_URL).rstrip("/")
+	if base.startswith("https://"):
+		base = "wss://" + base[len("https://"):]
+	elif base.startswith("http://"):
+		base = "ws://" + base[len("http://"):]
+	return base + path
 
 
 async def async_ensure_local_access_token(hass: HomeAssistant) -> Optional[str]:
@@ -133,6 +195,7 @@ class RelayClient:
 		local_token: Optional[str] = None,
 		local_url: Optional[str] = None,
 		esphome_url: Optional[str] = None,
+		forward_ui: bool = False,
 		session: Optional[aiohttp.ClientSession] = None,
 	) -> None:
 		self._hass = hass
@@ -142,12 +205,22 @@ class RelayClient:
 		self._local_token = local_token
 		self._local_url = local_url or DEFAULT_LOCAL_CORE_URL
 		self._esphome_url = (esphome_url or "").rstrip("/") or None
+		# Full-UI forwarding is opt-in: it brokers the whole browser session, not
+		# just the scoped /api surface, so the owner must enable it deliberately.
+		self._forward_ui = bool(forward_ui)
 		# Cache for the auto-discovered ESPHome dashboard base (Supervisor installs).
 		self._esphome_base_cache: Optional[str] = None
 		self._session = session
 		self._task: Optional[asyncio.Task] = None
 		self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
 		self._closing = False
+		# Live frontend-WebSocket bridges, keyed by the backend's socketId: the
+		# local HA socket plus the task pumping its frames back up the tunnel.
+		self._ws_local: dict[str, aiohttp.ClientWebSocketResponse] = {}
+		self._ws_pumps: dict[str, asyncio.Task] = {}
+		# Serialise writes to the single relay socket: HTTP responses and many
+		# concurrent WS frames share it, and aiohttp does not guard interleaving.
+		self._send_lock = asyncio.Lock()
 
 	def _get_session(self) -> aiohttp.ClientSession:
 		if self._session is not None:
@@ -204,7 +277,15 @@ class RelayClient:
 						break
 			finally:
 				self._ws = None
+				# A dropped tunnel orphans every bridged browser socket: tear
+				# them down so a reconnect starts from a clean slate.
+				await self._close_all_tunnels()
 		_LOGGER.info("Relay disconnected from Vome (%s)", self._server_id)
+
+	async def _send(self, ws: aiohttp.ClientWebSocketResponse, payload: dict) -> None:
+		"""Serialise one JSON write to the shared relay socket."""
+		async with self._send_lock:
+			await ws.send_str(json.dumps(payload))
 
 	# ── Message handling ────────────────────────────────────────────────────
 
@@ -217,8 +298,16 @@ class RelayClient:
 		mtype = data.get("type")
 		if mtype == RELAY_WS_MSG_HA_RPC:
 			await self._handle_rpc(ws, data)
+		elif mtype == RELAY_WS_MSG_HTTP_PROXY:
+			await self._handle_http_proxy(ws, data)
+		elif mtype == RELAY_WS_MSG_WS_OPEN:
+			await self._handle_ws_open(ws, data)
+		elif mtype == RELAY_WS_MSG_WS_DATA:
+			await self._handle_ws_data(data)
+		elif mtype == RELAY_WS_MSG_WS_CLOSE:
+			await self._handle_ws_close(data)
 		elif mtype == RELAY_WS_MSG_PING:
-			await ws.send_str(json.dumps({"type": RELAY_WS_MSG_PONG}))
+			await self._send(ws, {"type": RELAY_WS_MSG_PONG})
 		elif mtype == RELAY_WS_MSG_HELLO:
 			_LOGGER.debug("Relay (%s): hello acknowledged", self._server_id)
 
@@ -236,7 +325,186 @@ class RelayClient:
 			response["body"] = body
 		if error:
 			response["error"] = error
-		await ws.send_str(json.dumps(response))
+		await self._send(ws, response)
+
+	# ── Full-UI forwarding: arbitrary HTTP ──────────────────────────────────
+
+	async def _handle_http_proxy(self, ws: aiohttp.ClientWebSocketResponse, data: dict) -> None:
+		"""Proxy one whole browser HTTP request to the local HA and reply.
+
+		Unlike ``ha_rpc`` this carries *any* path/method and the browser's own
+		headers (cookies, auth) — Vome injects nothing.  The reply mirrors the
+		local status, headers (hop-by-hop stripped, duplicates preserved) and
+		body (base64) so binary assets survive the JSON hop.
+		"""
+		request_id = data.get("requestId")
+		status, headers, body_b64, error = await self._execute_http_proxy(data)
+		response: dict[str, Any] = {
+			"type": RELAY_WS_MSG_HTTP_PROXY_RESPONSE,
+			"requestId": request_id,
+			"status": status,
+		}
+		if headers is not None:
+			response["headers"] = headers
+		if body_b64 is not None:
+			response["bodyB64"] = body_b64
+		if error:
+			response["error"] = error
+		await self._send(ws, response)
+
+	async def _execute_http_proxy(
+		self, data: dict
+	) -> tuple[int, Optional[list], Optional[str], Optional[str]]:
+		"""Run one forwarded HTTP request; return ``(status, headers, bodyB64, error)``.
+
+		``status`` is 0 on a local failure so the backend surfaces a 502.  Local
+		redirects are returned verbatim (``allow_redirects=False``) so the browser
+		follows them within the friendly domain.
+		"""
+		if not self._forward_ui:
+			return 0, None, None, "Full-UI forwarding is disabled for this Home Assistant."
+		method = str(data.get("method") or "GET").upper()
+		path = data.get("path")
+		if not isinstance(path, str) or not path.startswith("/"):
+			return 0, None, None, "Refusing to proxy a non-absolute path."
+		req_headers = {
+			name: value for name, value in _normalise_header_input(data.get("headers"))
+			if name.lower() not in RELAY_FORWARD_STRIP_HEADERS
+		}
+		body: Optional[bytes] = None
+		raw_b64 = data.get("bodyB64")
+		if raw_b64:
+			try:
+				body = base64.b64decode(raw_b64)
+			except (ValueError, TypeError):
+				return 0, None, None, "Malformed request body."
+			if len(body) > RELAY_FORWARD_MAX_BODY:
+				return 0, None, None, "Request body too large."
+		url = self._local_url.rstrip("/") + path
+		session = self._get_session()
+		try:
+			async with session.request(
+				method, url,
+				headers=req_headers,
+				data=body,
+				allow_redirects=False,
+				timeout=aiohttp.ClientTimeout(total=RELAY_FORWARD_HTTP_TIMEOUT),
+			) as resp:
+				raw = await resp.read()
+				if len(raw) > RELAY_FORWARD_MAX_BODY:
+					return 0, None, None, "Response body too large to forward."
+				out_headers = _filter_forward_headers(resp.headers.items())
+				return resp.status, out_headers, base64.b64encode(raw).decode("ascii"), None
+		except asyncio.TimeoutError:
+			return 0, None, None, "Local Home Assistant timed out."
+		except aiohttp.ClientError as err:
+			return 0, None, None, f"Local Home Assistant error: {err}"
+
+	# ── Full-UI forwarding: frontend WebSocket bridge ───────────────────────
+
+	async def _handle_ws_open(self, ws: aiohttp.ClientWebSocketResponse, data: dict) -> None:
+		"""Open a local frontend WebSocket and bridge it to the browser."""
+		socket_id = data.get("socketId")
+		if not socket_id:
+			return
+		if not self._forward_ui:
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1008, "reason": "Full-UI forwarding is disabled.",
+			})
+			return
+		path = data.get("path") or "/api/websocket"
+		# Only the frontend's own socket is bridgeable; refuse anything else.
+		if not str(path).startswith(RELAY_FORWARD_WS_PATHS):
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1008, "reason": "WebSocket path not permitted.",
+			})
+			return
+		try:
+			local = await self._get_session().ws_connect(
+				_to_ws_url(self._local_url, path), heartbeat=30,
+			)
+		except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1011, "reason": f"Local WebSocket error: {err}",
+			})
+			return
+		self._ws_local[socket_id] = local
+		await self._send(ws, {"type": RELAY_WS_MSG_WS_OPEN_ACK, "socketId": socket_id})
+		self._ws_pumps[socket_id] = asyncio.ensure_future(
+			self._pump_local_ws(ws, socket_id, local)
+		)
+
+	async def _pump_local_ws(
+		self,
+		ws: aiohttp.ClientWebSocketResponse,
+		socket_id: str,
+		local: aiohttp.ClientWebSocketResponse,
+	) -> None:
+		"""Forward frames from the local HA socket up to the browser, until closed."""
+		close_code, close_reason = 1000, ""
+		try:
+			async for msg in local:
+				if msg.type == aiohttp.WSMsgType.TEXT:
+					await self._send(ws, {
+						"type": RELAY_WS_MSG_WS_DATA, "socketId": socket_id, "text": msg.data,
+					})
+				elif msg.type == aiohttp.WSMsgType.BINARY:
+					await self._send(ws, {
+						"type": RELAY_WS_MSG_WS_DATA, "socketId": socket_id,
+						"dataB64": base64.b64encode(msg.data).decode("ascii"),
+					})
+				elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+					break
+		except (aiohttp.ClientError, asyncio.CancelledError):
+			pass
+		finally:
+			self._ws_local.pop(socket_id, None)
+			self._ws_pumps.pop(socket_id, None)
+			with suppress(Exception):
+				await self._send(ws, {
+					"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+					"code": close_code, "reason": close_reason,
+				})
+
+	async def _handle_ws_data(self, data: dict) -> None:
+		"""Forward one browser frame down to the local HA socket."""
+		socket_id = data.get("socketId")
+		local = self._ws_local.get(socket_id)
+		if local is None:
+			return
+		try:
+			if data.get("dataB64") is not None:
+				await local.send_bytes(base64.b64decode(data["dataB64"]))
+			elif data.get("text") is not None:
+				await local.send_str(str(data["text"]))
+		except (aiohttp.ClientError, ValueError, TypeError) as err:
+			_LOGGER.debug("Relay (%s) ws_data forward failed: %s", self._server_id, err)
+
+	async def _handle_ws_close(self, data: dict) -> None:
+		"""Close a bridged socket because the browser side went away."""
+		await self._teardown_tunnel(data.get("socketId"))
+
+	async def _teardown_tunnel(self, socket_id: Optional[str]) -> None:
+		"""Cancel the pump and close the local socket for one bridge."""
+		if not socket_id:
+			return
+		pump = self._ws_pumps.pop(socket_id, None)
+		if pump is not None:
+			pump.cancel()
+			with suppress(asyncio.CancelledError):
+				await pump
+		local = self._ws_local.pop(socket_id, None)
+		if local is not None:
+			with suppress(Exception):
+				await local.close()
+
+	async def _close_all_tunnels(self) -> None:
+		"""Tear down every bridged socket (called when the relay drops)."""
+		for socket_id in list(self._ws_local) + list(self._ws_pumps):
+			await self._teardown_tunnel(socket_id)
 
 	# ── Local Home Assistant execution ──────────────────────────────────────
 
@@ -521,6 +789,7 @@ async def async_start_relay(hass: HomeAssistant, entry) -> None:
 		local_token=local_token,
 		local_url=relay.get(CONF_RELAY_LOCAL_URL),
 		esphome_url=relay.get(CONF_RELAY_ESPHOME_URL),
+		forward_ui=bool(relay.get(CONF_RELAY_FORWARD_UI)),
 	)
 	hass.data.setdefault(DOMAIN, {}).setdefault(_RELAYS_KEY, {})[entry.entry_id] = client
 	client.start()

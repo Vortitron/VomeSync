@@ -33,6 +33,9 @@ const IDLE_PING_AFTER_MS = 30000;
 const MIN_RPC_MS = 1000;
 const MAX_RPC_MS = 60000;
 const RPC_BUFFER_MS = 2000;
+// Full-UI forwarding: a whole browser HTTP request can be slower than an API
+// call (large bundles), so it gets its own ceiling separate from ha_rpc.
+const FORWARD_HTTP_MS = 60000;
 
 /** Extract the bearer secret from a WS upgrade request (header, then ?secret=). */
 function extractSecret(req) {
@@ -53,6 +56,10 @@ class RelayManager {
 		this.wss = null;
 		this.connections = new Map(); // server_id -> { ws, connectedAt, lastActivity }
 		this.pending = new Map(); // requestId -> { resolve, timer }
+		// Live full-UI WebSocket bridges: socketId -> { serverId, onAck, onData,
+		// onClose }.  The browser-facing proxy (proxy/uiProxy) owns the socketId
+		// lifecycle; this map lets component frames find their browser handler.
+		this.tunnels = new Map();
 		// Injectable so tests don't need a live portal.
 		this.verifyFn = (secret) => relayPortal.verifySecret(secret);
 	}
@@ -137,16 +144,25 @@ class RelayManager {
 		}
 
 		if (data.type === 'ha_rpc_response') {
-			const waiter = this.pending.get(data.requestId);
-			if (waiter) {
-				clearTimeout(waiter.timer);
-				this.pending.delete(data.requestId);
-				waiter.resolve({
-					status: data.status || 0,
-					body: data.body,
-					error: data.error
-				});
-			}
+			this._resolvePending(data.requestId, {
+				status: data.status || 0,
+				body: data.body,
+				error: data.error
+			});
+			return;
+		}
+		if (data.type === 'http_proxy_response') {
+			this._resolvePending(data.requestId, {
+				status: data.status || 0,
+				headers: data.headers,
+				bodyB64: data.bodyB64,
+				error: data.error
+			});
+			return;
+		}
+		// Full-UI WebSocket bridge: route component frames to the browser handler.
+		if (data.type === 'ws_open_ack' || data.type === 'ws_data' || data.type === 'ws_close') {
+			this._routeTunnel(data);
 			return;
 		}
 		if (data.type === 'ping' && conn) {
@@ -154,11 +170,50 @@ class RelayManager {
 		}
 	}
 
+	/** Resolve and clear a pending RPC/forward waiter by requestId (no-op if gone). */
+	_resolvePending(requestId, value) {
+		const waiter = this.pending.get(requestId);
+		if (waiter) {
+			clearTimeout(waiter.timer);
+			this.pending.delete(requestId);
+			waiter.resolve(value);
+		}
+	}
+
+	/** Deliver a ws_open_ack / ws_data / ws_close to its registered browser tunnel. */
+	_routeTunnel(data) {
+		const tunnel = this.tunnels.get(data.socketId);
+		if (!tunnel) {
+			return;
+		}
+		if (data.type === 'ws_open_ack') {
+			tunnel.onAck();
+		} else if (data.type === 'ws_data') {
+			tunnel.onData(data);
+		} else if (data.type === 'ws_close') {
+			this.tunnels.delete(data.socketId);
+			tunnel.onClose(data);
+		}
+	}
+
 	handleDisconnection(serverId, ws) {
 		const conn = this.connections.get(serverId);
 		if (conn && conn.ws === ws) {
 			this.connections.delete(serverId);
+			this._dropTunnelsFor(serverId, 1011, 'Home Assistant relay disconnected');
 			logger.info(`Relay disconnected: ${serverId}`);
+		}
+	}
+
+	/** Close + forget every browser tunnel bound to a server (its relay is gone). */
+	_dropTunnelsFor(serverId, code, reason) {
+		for (const [socketId, tunnel] of this.tunnels.entries()) {
+			if (tunnel.serverId === serverId) {
+				this.tunnels.delete(socketId);
+				try {
+					tunnel.onClose({ code, reason });
+				} catch (_err) { /* a closing browser socket may already be gone */ }
+			}
 		}
 	}
 
@@ -202,10 +257,80 @@ class RelayManager {
 		});
 	}
 
+	/**
+	 * Forward one whole browser HTTP request to a connected component.
+	 *
+	 * Mirrors dispatch() but carries arbitrary paths + the browser's own headers
+	 * (base64 body) and returns the component's `http_proxy_response` shape.
+	 * Resolves `{ offline: true }` with no component, else
+	 * `{ status, headers, bodyB64, error }` (`status: 0` on timeout/send failure).
+	 */
+	forwardHttp(serverId, { method, path, headers, bodyB64 } = {}) {
+		return new Promise((resolve) => {
+			const conn = this.connections.get(serverId);
+			if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
+				resolve({ offline: true });
+				return;
+			}
+			const requestId = uuidv4();
+			const timer = setTimeout(() => {
+				this.pending.delete(requestId);
+				resolve({ status: 0, error: 'Relay HTTP forward timed out.' });
+			}, FORWARD_HTTP_MS + RPC_BUFFER_MS);
+			this.pending.set(requestId, { resolve, timer });
+			try {
+				conn.ws.send(JSON.stringify({
+					type: 'http_proxy', requestId, method, path, headers, bodyB64
+				}));
+			} catch (err) {
+				clearTimeout(timer);
+				this.pending.delete(requestId);
+				logger.error(`Relay HTTP forward to ${serverId} failed:`, err.message || err);
+				resolve({ status: 0, error: 'Relay send failed.' });
+			}
+		});
+	}
+
+	// ── Full-UI WebSocket bridge control ────────────────────────────────────
+
+	/** Register a browser tunnel's callbacks before opening the component side. */
+	registerTunnel(socketId, serverId, { onAck, onData, onClose }) {
+		this.tunnels.set(socketId, { serverId, onAck, onData, onClose });
+	}
+
+	/** Drop a tunnel registration (browser gone); does not message the component. */
+	unregisterTunnel(socketId) {
+		this.tunnels.delete(socketId);
+	}
+
+	/** Ask the component to open a local frontend WebSocket for this bridge. */
+	openWs(serverId, { socketId, path, headers } = {}) {
+		return this._tunnelSend(serverId, { type: 'ws_open', socketId, path, headers });
+	}
+
+	/** Forward one browser frame down to the component's local socket. */
+	sendWs(serverId, { socketId, text, dataB64 } = {}) {
+		return this._tunnelSend(serverId, { type: 'ws_data', socketId, text, dataB64 });
+	}
+
+	/** Tell the component the browser side closed this bridge. */
+	closeWs(serverId, { socketId, code, reason } = {}) {
+		return this._tunnelSend(serverId, { type: 'ws_close', socketId, code, reason });
+	}
+
+	_tunnelSend(serverId, payload) {
+		const conn = this.connections.get(serverId);
+		if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
+			return false;
+		}
+		return this._safeSend(conn.ws, payload);
+	}
+
 	getStats() {
 		return {
 			relays: this.connections.size,
 			pending: this.pending.size,
+			tunnels: this.tunnels.size,
 			servers: Array.from(this.connections.keys())
 		};
 	}
@@ -219,6 +344,7 @@ class RelayManager {
 	disconnect(serverId) {
 		const conn = this.connections.get(serverId);
 		this.connections.delete(serverId);
+		this._dropTunnelsFor(serverId, 1008, 'link revoked');
 		if (!conn || !conn.ws) {
 			return false;
 		}

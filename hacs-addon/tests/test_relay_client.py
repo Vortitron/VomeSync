@@ -11,15 +11,19 @@ Covers the bits that make the relay safe and correct without a live WebSocket:
 
 Mirrors the AsyncMock(session) style used in test_api_client.py.
 """
+import base64
 import json
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
 
+import custom_components.vomesync.relay_client as rc
 from custom_components.vomesync.relay_client import (
 	RELAY_TOKEN_CLIENT_NAME,
 	RelayClient,
+	_filter_forward_headers,
+	_to_ws_url,
 	async_ensure_local_access_token,
 	async_poll_device_token,
 	async_request_device_code,
@@ -439,3 +443,283 @@ class TestDeviceHelpers:
 		args, kwargs = session.post.call_args
 		assert args[0] == "https://vome.io/api/v1/relay/device/token"
 		assert kwargs["json"] == {"device_code": "dc"}
+
+
+# ── Full-UI forwarding (the paid friendly-domain remote access) ──────────────
+
+def _mock_session_for_http(status=200, headers=None, body=b""):
+	"""Session whose request() yields a response with read()/status/headers.
+
+	Uses a real CIMultiDict so duplicate headers (several Set-Cookie) survive,
+	exactly as aiohttp would surface them from the local Home Assistant.
+	"""
+	from multidict import CIMultiDict
+
+	resp = AsyncMock()
+	resp.status = status
+	resp.read.return_value = body
+	resp.headers = CIMultiDict(headers or [])
+	session = AsyncMock(spec=aiohttp.ClientSession)
+	session.request.return_value.__aenter__.return_value = resp
+	return session, resp
+
+
+class _FakeMsg:
+	def __init__(self, type_, data):
+		self.type = type_
+		self.data = data
+
+
+class _FakeLocalWS:
+	"""A minimal stand-in for the local HA frontend WebSocket."""
+
+	def __init__(self, incoming=None):
+		self._incoming = list(incoming or [])
+		self.sent_str: list[str] = []
+		self.sent_bytes: list[bytes] = []
+		self.closed = False
+
+	def __aiter__(self):
+		self._it = iter(self._incoming)
+		return self
+
+	async def __anext__(self):
+		try:
+			return next(self._it)
+		except StopIteration:
+			raise StopAsyncIteration
+
+	async def send_str(self, s):
+		self.sent_str.append(s)
+
+	async def send_bytes(self, b):
+		self.sent_bytes.append(b)
+
+	async def close(self):
+		self.closed = True
+
+
+def _session_for_ws(fake_local):
+	# aiohttp's ws_connect returns a context manager that is *also* awaitable;
+	# under spec= it mocks as sync, so wire it as an AsyncMock explicitly.
+	session = AsyncMock(spec=aiohttp.ClientSession)
+	session.ws_connect = AsyncMock(return_value=fake_local)
+	return session
+
+
+def _sent_payloads(ws):
+	"""Decode every JSON frame written to a mocked relay socket."""
+	return [json.loads(c[0][0]) for c in ws.send_str.call_args_list]
+
+
+class TestForwardHelpers:
+	def test_filter_strips_hop_by_hop_and_keeps_duplicates(self):
+		pairs = [
+			("Content-Type", "text/html"),
+			("Set-Cookie", "a=1"), ("Set-Cookie", "b=2"),
+			("Transfer-Encoding", "chunked"), ("Content-Length", "5"),
+			("Connection", "keep-alive"), ("Host", "x"),
+		]
+		out = _filter_forward_headers(pairs)
+		flat = [f"{k}: {v}" for k, v in out]
+		assert "Content-Type: text/html" in flat
+		assert flat.count("Set-Cookie: a=1") == 1 and "Set-Cookie: b=2" in flat
+		lowered = {k.lower() for k, _ in out}
+		assert not (lowered & {"transfer-encoding", "content-length", "connection", "host"})
+
+	def test_filter_accepts_dict_input(self):
+		out = _filter_forward_headers({"X-Test": "1", "Connection": "close"})
+		assert out == [["X-Test", "1"]]
+
+	def test_to_ws_url_maps_scheme(self):
+		assert _to_ws_url("http://127.0.0.1:8123", "/api/websocket") == "ws://127.0.0.1:8123/api/websocket"
+		assert _to_ws_url("https://ha.local", "/api/websocket") == "wss://ha.local/api/websocket"
+		assert _to_ws_url(None, "/api/websocket") == "ws://127.0.0.1:8123/api/websocket"
+
+
+class TestForwardHttp:
+	@pytest.mark.asyncio
+	async def test_disabled_by_default(self):
+		session, _ = _mock_session_for_http()
+		client = _client(session)  # forward_ui defaults to False
+		status, headers, body_b64, error = await client._execute_http_proxy(
+			{"method": "GET", "path": "/lovelace"}
+		)
+		assert status == 0 and headers is None and "disabled" in error
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_rejects_non_absolute_path(self):
+		session, _ = _mock_session_for_http()
+		client = _client(session, forward_ui=True)
+		status, _h, _b, error = await client._execute_http_proxy({"path": "lovelace"})
+		assert status == 0 and "non-absolute" in error
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_forwards_request_and_mirrors_response(self):
+		body = b"<html>hi</html>"
+		session, _ = _mock_session_for_http(
+			status=200,
+			headers=[
+				("Content-Type", "text/html"),
+				("Set-Cookie", "s=1"), ("Set-Cookie", "t=2"),
+				("Transfer-Encoding", "chunked"),
+			],
+			body=body,
+		)
+		client = _client(session, forward_ui=True, local_url="http://127.0.0.1:8123")
+		status, headers, body_b64, error = await client._execute_http_proxy({
+			"method": "POST", "path": "/api/foo?x=1",
+			"headers": [["Cookie", "z=9"], ["Host", "drop.me"], ["Connection", "keep-alive"]],
+			"bodyB64": base64.b64encode(b"payload").decode(),
+		})
+		assert status == 200 and error is None
+		assert base64.b64decode(body_b64) == body
+		# Response headers: hop-by-hop dropped, duplicate Set-Cookie preserved.
+		flat = [f"{k}: {v}" for k, v in headers]
+		assert "Content-Type: text/html" in flat
+		assert "Set-Cookie: s=1" in flat and "Set-Cookie: t=2" in flat
+		assert all(not k.lower() == "transfer-encoding" for k, _ in headers)
+		# Outgoing request: redirects not followed, body decoded, host stripped.
+		args, kwargs = session.request.call_args
+		assert args == ("POST", "http://127.0.0.1:8123/api/foo?x=1")
+		assert kwargs["allow_redirects"] is False
+		assert kwargs["data"] == b"payload"
+		assert "Cookie" in kwargs["headers"]
+		assert "Host" not in kwargs["headers"] and "Connection" not in kwargs["headers"]
+
+	@pytest.mark.asyncio
+	async def test_redirect_passed_through(self):
+		session, _ = _mock_session_for_http(status=302, headers=[("Location", "/auth")], body=b"")
+		client = _client(session, forward_ui=True)
+		status, headers, _b, error = await client._execute_http_proxy({"path": "/"})
+		assert status == 302 and error is None
+		assert ["Location", "/auth"] in headers
+
+	@pytest.mark.asyncio
+	async def test_request_body_too_large(self, monkeypatch):
+		monkeypatch.setattr(rc, "RELAY_FORWARD_MAX_BODY", 4)
+		session, _ = _mock_session_for_http()
+		client = _client(session, forward_ui=True)
+		status, _h, _b, error = await client._execute_http_proxy({
+			"path": "/api/x", "bodyB64": base64.b64encode(b"toolong").decode(),
+		})
+		assert status == 0 and "too large" in error
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_response_body_too_large(self, monkeypatch):
+		monkeypatch.setattr(rc, "RELAY_FORWARD_MAX_BODY", 4)
+		session, _ = _mock_session_for_http(body=b"abcdefgh")
+		client = _client(session, forward_ui=True)
+		status, _h, _b, error = await client._execute_http_proxy({"path": "/"})
+		assert status == 0 and "too large" in error
+
+	@pytest.mark.asyncio
+	async def test_timeout_is_status_zero(self):
+		session = AsyncMock(spec=aiohttp.ClientSession)
+		import asyncio
+		session.request.return_value.__aenter__.side_effect = asyncio.TimeoutError()
+		client = _client(session, forward_ui=True)
+		status, _h, _b, error = await client._execute_http_proxy({"path": "/"})
+		assert status == 0 and "timed out" in error
+
+	@pytest.mark.asyncio
+	async def test_handle_http_proxy_sends_response(self):
+		session, _ = _mock_session_for_http(status=200, headers=[("Content-Type", "text/plain")], body=b"ok")
+		client = _client(session, forward_ui=True)
+		ws = AsyncMock()
+		await client._handle_http_proxy(ws, {"requestId": "h1", "method": "GET", "path": "/manifest.json"})
+		sent = _sent_payloads(ws)[0]
+		assert sent["type"] == "http_proxy_response" and sent["requestId"] == "h1"
+		assert sent["status"] == 200 and base64.b64decode(sent["bodyB64"]) == b"ok"
+
+
+class TestForwardWebSocket:
+	@pytest.mark.asyncio
+	async def test_ws_open_refused_when_disabled(self):
+		session = _session_for_ws(_FakeLocalWS())
+		client = _client(session)  # forwarding off
+		ws = AsyncMock()
+		await client._handle_ws_open(ws, {"socketId": "s1", "path": "/api/websocket"})
+		session.ws_connect.assert_not_called()
+		closed = _sent_payloads(ws)[0]
+		assert closed["type"] == "ws_close" and closed["code"] == 1008
+
+	@pytest.mark.asyncio
+	async def test_ws_open_rejects_foreign_path(self):
+		session = _session_for_ws(_FakeLocalWS())
+		client = _client(session, forward_ui=True)
+		ws = AsyncMock()
+		await client._handle_ws_open(ws, {"socketId": "s1", "path": "/evil"})
+		session.ws_connect.assert_not_called()
+		assert _sent_payloads(ws)[0]["type"] == "ws_close"
+
+	@pytest.mark.asyncio
+	async def test_ws_open_acks_then_pumps_frames(self):
+		local = _FakeLocalWS([
+			_FakeMsg(aiohttp.WSMsgType.TEXT, '{"type":"auth_required"}'),
+			_FakeMsg(aiohttp.WSMsgType.BINARY, b"\x00\x01"),
+		])
+		session = _session_for_ws(local)
+		client = _client(session, forward_ui=True, local_url="http://127.0.0.1:8123")
+		ws = AsyncMock()
+		await client._handle_ws_open(ws, {"socketId": "s1", "path": "/api/websocket"})
+		# The local socket was opened with the ws:// scheme + same path.
+		assert session.ws_connect.call_args[0][0] == "ws://127.0.0.1:8123/api/websocket"
+		pump = client._ws_pumps["s1"]
+		await pump  # drain the (finite) fake frame source
+		payloads = _sent_payloads(ws)
+		assert payloads[0] == {"type": "ws_open_ack", "socketId": "s1"}
+		text_frame = next(p for p in payloads if p.get("type") == "ws_data" and "text" in p)
+		assert text_frame["text"] == '{"type":"auth_required"}'
+		bin_frame = next(p for p in payloads if p.get("type") == "ws_data" and "dataB64" in p)
+		assert base64.b64decode(bin_frame["dataB64"]) == b"\x00\x01"
+		assert payloads[-1]["type"] == "ws_close"
+		# Pump cleaned itself out of the live-bridge maps.
+		assert "s1" not in client._ws_local and "s1" not in client._ws_pumps
+
+	@pytest.mark.asyncio
+	async def test_ws_data_forwarded_to_local(self):
+		local = _FakeLocalWS()
+		client = _client(_session_for_ws(local), forward_ui=True)
+		client._ws_local["s1"] = local
+		await client._handle_ws_data({"socketId": "s1", "text": "ping"})
+		await client._handle_ws_data({"socketId": "s1", "dataB64": base64.b64encode(b"\x09").decode()})
+		assert local.sent_str == ["ping"] and local.sent_bytes == [b"\x09"]
+
+	@pytest.mark.asyncio
+	async def test_ws_data_unknown_socket_is_noop(self):
+		local = _FakeLocalWS()
+		client = _client(_session_for_ws(local), forward_ui=True)
+		await client._handle_ws_data({"socketId": "ghost", "text": "x"})
+		assert local.sent_str == []
+
+	@pytest.mark.asyncio
+	async def test_ws_close_tears_down_bridge(self):
+		import asyncio
+		local = _FakeLocalWS()
+		client = _client(_session_for_ws(local), forward_ui=True)
+		client._ws_local["s1"] = local
+		client._ws_pumps["s1"] = asyncio.ensure_future(asyncio.sleep(60))
+		await client._handle_ws_close({"socketId": "s1"})
+		assert local.closed is True
+		assert "s1" not in client._ws_local and "s1" not in client._ws_pumps
+
+	@pytest.mark.asyncio
+	async def test_handle_text_routes_forwarding_messages(self):
+		client = _client(AsyncMock(spec=aiohttp.ClientSession), forward_ui=True)
+		client._handle_http_proxy = AsyncMock()
+		client._handle_ws_open = AsyncMock()
+		client._handle_ws_data = AsyncMock()
+		client._handle_ws_close = AsyncMock()
+		ws = AsyncMock()
+		await client._handle_text(ws, json.dumps({"type": "http_proxy", "requestId": "h"}))
+		await client._handle_text(ws, json.dumps({"type": "ws_open", "socketId": "s"}))
+		await client._handle_text(ws, json.dumps({"type": "ws_data", "socketId": "s"}))
+		await client._handle_text(ws, json.dumps({"type": "ws_close", "socketId": "s"}))
+		client._handle_http_proxy.assert_called_once()
+		client._handle_ws_open.assert_called_once()
+		client._handle_ws_data.assert_called_once()
+		client._handle_ws_close.assert_called_once()

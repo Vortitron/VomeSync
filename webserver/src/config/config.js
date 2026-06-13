@@ -52,7 +52,22 @@ const config = {
 		// Portal endpoint that authenticates a component's presented relay secret.
 		portalVerifyUrl: process.env.RELAY_PORTAL_VERIFY_URL || 'https://vome.io/api/internal/relay/verify',
 		// How long the backend waits for a component's ha_rpc_response.
-		rpcTimeoutMs: parsePositiveInt(process.env.RELAY_RPC_TIMEOUT_MS, 20000)
+		rpcTimeoutMs: parsePositiveInt(process.env.RELAY_RPC_TIMEOUT_MS, 20000),
+		// ── Full-UI forwarding (paid "friendly domain" remote access) ────────
+		// HS256 secret shared with the portal: the portal mints a short-lived
+		// access cookie after checking ownership + active subscription, and the
+		// browser proxy verifies it here.  Empty disables the proxy (fails closed).
+		forwardSecret: process.env.RELAY_FORWARD_SECRET || '',
+		// Loopback port for the browser-facing reverse proxy.  The portal points
+		// the existing `*.home.vome.io` wildcard at this per-slug via nginx map.d
+		// (RELAY_FORWARD_PROXY_TARGET).  0 disables the proxy.
+		forwardPort: parseInt(process.env.FORWARD_PORT, 10) || 0,
+		// Where the proxy sends an unauthenticated browser to obtain a cookie.
+		forwardAuthoriseUrl: process.env.RELAY_FORWARD_AUTHORISE_URL || 'https://vome.io/remote/authorise',
+		// Cookie carrying the access token (scoped to .vome.io by the portal).
+		forwardCookieName: process.env.RELAY_FORWARD_COOKIE || 'vome_fwd',
+		// Largest request body the proxy will buffer before forwarding (25 MiB).
+		forwardMaxBodyBytes: parsePositiveInt(process.env.RELAY_FORWARD_MAX_BODY, 26214400)
 	},
 	analytics: {
 		enabled: process.env.ENABLE_ANALYTICS === 'true',

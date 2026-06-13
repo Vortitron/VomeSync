@@ -12,6 +12,7 @@ const media = require('./utils/media');
 const webSocketManager = require('./websocket/manager');
 const relayManager = require('./websocket/relayManager');
 const { attachUpgradeRouter } = require('./websocket/upgradeRouter');
+const { createUiProxy } = require('./proxy/uiProxy');
 const apiRoutes = require('./routes/api');
 const internalRoutes = require('./routes/internal-routes');
 
@@ -61,6 +62,11 @@ class VomeSyncServer {
 				'/ws': webSocketManager,
 				'/ws/relay': relayManager
 			});
+
+			// Browser-facing reverse proxy for full-UI forwarding (paid friendly
+			// domains).  Listens on a loopback port; the portal points the shared
+			// `*.home.vome.io` wildcard at it per-slug via nginx map.d entries.
+			this.createForwardProxy();
 
 			// Start listening (only after WS is initialised, so readiness checks don't race)
 			await this.startListening();
@@ -212,6 +218,23 @@ class VomeSyncServer {
 		}
 	}
 
+	/**
+	 * Stand up the browser-facing full-UI forwarding proxy on its own port.
+	 *
+	 * Disabled (no server created) unless both a port and the shared HS256
+	 * secret are configured, so the feature fails closed by default.  TLS is
+	 * terminated by nginx (wildcard cert), which proxies cleartext to this port.
+	 */
+	createForwardProxy() {
+		if (!config.relay.forwardPort || !config.relay.forwardSecret) {
+			return;
+		}
+		const proxy = createUiProxy({ relayManager });
+		this.forwardServer = http.createServer((req, res) => proxy.httpHandler(req, res));
+		this.forwardServer.on('upgrade', (req, socket, head) => proxy.handleUpgrade(req, socket, head));
+		logger.info('Created full-UI forwarding proxy server');
+	}
+
 	async startListening() {
 		// Start listening (API + WS)
 		await Promise.all([
@@ -236,6 +259,19 @@ class VomeSyncServer {
 						resolve();
 					}
 				});
+			}),
+			new Promise((resolve, reject) => {
+				if (!this.forwardServer) {
+					resolve();
+					return;
+				}
+				this.forwardServer.listen(config.relay.forwardPort, (error) => {
+					if (error) {
+						reject(error);
+					} else {
+						resolve();
+					}
+				});
 			})
 		]);
 
@@ -243,6 +279,9 @@ class VomeSyncServer {
 		logger.info(`API listening on ${protocol}://localhost:${config.server.port}`);
 		if (this.wsServer && this.wsServer !== this.server) {
 			logger.info(`WebSocket listening on ws://localhost:${config.server.wsPort}`);
+		}
+		if (this.forwardServer) {
+			logger.info(`Full-UI forwarding proxy listening on http://localhost:${config.relay.forwardPort}`);
 		}
 	}
 
@@ -287,6 +326,9 @@ class VomeSyncServer {
 				await closeServer(this.server, 'HTTP');
 				if (this.wsServer && this.wsServer !== this.server) {
 					await closeServer(this.wsServer, 'WebSocket HTTP');
+				}
+				if (this.forwardServer) {
+					await closeServer(this.forwardServer, 'Forwarding proxy');
 				}
 
 				// Disconnect from Redis
