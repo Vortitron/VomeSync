@@ -58,9 +58,11 @@ const config = {
 		// access cookie after checking ownership + active subscription, and the
 		// browser proxy verifies it here.  Empty disables the proxy (fails closed).
 		forwardSecret: process.env.RELAY_FORWARD_SECRET || '',
-		// Loopback port for the browser-facing reverse proxy.  The portal points
-		// the existing `*.home.vome.io` wildcard at this per-slug via nginx map.d
-		// (RELAY_FORWARD_PROXY_TARGET).  0 disables the proxy.
+		// Port for the browser-facing reverse proxy.  Bound on all interfaces
+		// (0.0.0.0) because nginx runs on the SEPARATE portal host and points the
+		// existing `*.home.vome.io` wildcard here per-slug via map.d
+		// (the portal's RELAY_FORWARD_PROXY_TARGET = this host:port).  Restrict
+		// it to the portal host with a firewall rule.  0 disables the proxy.
 		forwardPort: parseInt(process.env.FORWARD_PORT, 10) || 0,
 		// Where the proxy sends an unauthenticated browser to obtain a cookie.
 		forwardAuthoriseUrl: process.env.RELAY_FORWARD_AUTHORISE_URL || 'https://vome.io/remote/authorise',
