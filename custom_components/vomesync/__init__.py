@@ -18,6 +18,27 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.SENSOR]
 
+# Option keys whose values are secrets and must never be logged verbatim.
+_SENSITIVE_OPTION_KEYS = frozenset({"secret", "local_token", "token", "password"})
+
+
+def _redacted_options(options):
+	"""Return a shallow copy of the config-entry options safe to log.
+
+	Secret values (relay secret, optional local HA token) are replaced with a
+	``***`` marker; nested dicts (e.g. the ``relay`` sub-dict) are redacted too.
+	Presence is preserved so the logs still show how the entry is configured.
+	"""
+	def _clean(value):
+		if isinstance(value, dict):
+			return {
+				k: ("***" if k in _SENSITIVE_OPTION_KEYS and v else _clean(v))
+				for k, v in value.items()
+			}
+		return value
+
+	return _clean(dict(options or {}))
+
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 	"""Set up VomeSync integration from configuration.yaml."""
@@ -28,9 +49,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	"""Set up VomeSync from a config entry."""
 	_LOGGER.info("Setting up VomeSync integration")
-	_LOGGER.info("Entry data keys: %s", list(entry.data.keys()))
-	_LOGGER.info("Entry options keys: %s", list(entry.options.keys()) if entry.options else "None")
-	_LOGGER.info("Entry options content: %s", entry.options)
+	_LOGGER.debug("Entry data keys: %s", list(entry.data.keys()))
+	_LOGGER.debug("Entry options keys: %s", list(entry.options.keys()) if entry.options else "None")
+	# NEVER log entry.options verbatim: the relay dict holds a live relay
+	# secret (and optionally a local HA token).  Log a redacted summary so the
+	# credential can't leak into home-assistant.log / log aggregators.
+	_LOGGER.debug("Entry options (redacted): %s", _redacted_options(entry.options))
 
 	try:
 		server_url = entry.data.get(CONF_SERVER_URL, "")

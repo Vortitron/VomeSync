@@ -23,6 +23,7 @@ from custom_components.vomesync.relay_client import (
 	RELAY_TOKEN_CLIENT_NAME,
 	RelayClient,
 	_filter_forward_headers,
+	_safe_path_portion,
 	_to_ws_url,
 	async_ensure_local_access_token,
 	async_poll_device_token,
@@ -48,6 +49,25 @@ def _client(session, **kwargs):
 	return RelayClient(None, server_id="rly-1", secret="sek", session=session, **kwargs)
 
 
+class TestSafePathPortion:
+	def test_returns_portion_without_query(self):
+		assert _safe_path_portion("/api/states") == "/api/states"
+		assert _safe_path_portion("/edit?configuration=x.yaml") == "/edit"
+
+	def test_rejects_non_absolute_or_non_string(self):
+		assert _safe_path_portion("api/states") is None
+		assert _safe_path_portion(None) is None
+		assert _safe_path_portion(123) is None
+
+	def test_rejects_dot_segments_literal_and_encoded(self):
+		# URL clients normalise '..' when building the URL, so these would
+		# otherwise escape a startswith('/api/') allowlist.
+		assert _safe_path_portion("/api/../auth/token") is None
+		assert _safe_path_portion("/api/%2e%2e/auth/token") is None
+		assert _safe_path_portion("/api/./states") is None
+		assert _safe_path_portion("/edit/../delete?configuration=x") is None
+
+
 class TestExecute:
 	@pytest.mark.asyncio
 	async def test_rejects_non_api_path(self):
@@ -64,6 +84,26 @@ class TestExecute:
 		status, body, error = await client.execute("PATCH", "/api/states", None)
 		assert status == 0 and "PATCH" in error
 		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_rejects_dot_segment_escape(self):
+		session, _ = _mock_session_with_response()
+		client = _client(session, local_token="llt")
+		for hostile in ("/api/../auth/token", "/api/%2e%2e/auth/token"):
+			status, body, error = await client.execute("GET", hostile, None)
+			assert status == 0 and "non-/api" in error
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_allows_api_path_with_query(self):
+		session, _ = _mock_session_with_response(status=200, text="[]")
+		client = _client(session, local_token="llt")
+		status, _body, error = await client.execute(
+			"GET", "/api/history/period?filter_entity_id=light.k", None
+		)
+		assert status == 200 and error is None
+		args, _kwargs = session.request.call_args
+		assert args[1] == "http://127.0.0.1:8123/api/history/period?filter_entity_id=light.k"
 
 	@pytest.mark.asyncio
 	async def test_no_token_available(self, monkeypatch):
@@ -121,6 +161,21 @@ class TestEsphome:
 		client = _client(session, esphome_url="http://esp:6052")
 		status, body, error = await client.execute("GET", "/secrets", None, "esphome")
 		assert status == 0 and "non-allowlisted" in error
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_rejects_prefix_lookalikes_and_traversal(self):
+		# startswith() would have passed all of these; exact matching must not.
+		session, _ = _mock_session_with_response()
+		client = _client(session, esphome_url="http://esp:6052")
+		for hostile in (
+			"/devices-x",
+			"/versions",
+			"/editanything",
+			"/edit/../delete?configuration=x.yaml",
+		):
+			status, _body, error = await client.execute("GET", hostile, None, "esphome")
+			assert status == 0 and "non-allowlisted" in error, hostile
 		session.request.assert_not_called()
 
 	@pytest.mark.asyncio
@@ -655,6 +710,16 @@ class TestForwardWebSocket:
 		await client._handle_ws_open(ws, {"socketId": "s1", "path": "/evil"})
 		session.ws_connect.assert_not_called()
 		assert _sent_payloads(ws)[0]["type"] == "ws_close"
+
+	@pytest.mark.asyncio
+	async def test_ws_open_rejects_lookalike_and_traversal_paths(self):
+		session = _session_for_ws(_FakeLocalWS())
+		client = _client(session, forward_ui=True)
+		for hostile in ("/api/websocketX", "/api/websocket/../evil"):
+			ws = AsyncMock()
+			await client._handle_ws_open(ws, {"socketId": "s1", "path": hostile})
+			assert _sent_payloads(ws)[0]["type"] == "ws_close", hostile
+		session.ws_connect.assert_not_called()
 
 	@pytest.mark.asyncio
 	async def test_ws_open_acks_then_pumps_frames(self):

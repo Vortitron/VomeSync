@@ -319,10 +319,12 @@ describe('RelayManager registry', () => {
 });
 
 describe('extractSecret', () => {
-	test('reads a bearer header, then a ?secret= fallback', () => {
+	test('reads the bearer header only — no query-string fallback (log leak)', () => {
 		expect(_extractSecret({ headers: { authorization: 'Bearer abc' }, url: '/ws/relay' })).toBe('abc');
 		expect(_extractSecret({ headers: { authorization: 'bearer xyz' }, url: '/ws/relay' })).toBe('xyz');
-		expect(_extractSecret({ headers: {}, url: '/ws/relay?secret=qs' })).toBe('qs');
+		// A secret in the query string would be copied into proxy/nginx access
+		// logs, so it must NOT authenticate.
+		expect(_extractSecret({ headers: {}, url: '/ws/relay?secret=qs' })).toBe('');
 		expect(_extractSecret({ headers: {}, url: '/ws/relay' })).toBe('');
 	});
 });

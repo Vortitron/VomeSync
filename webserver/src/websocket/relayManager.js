@@ -37,18 +37,18 @@ const RPC_BUFFER_MS = 2000;
 // call (large bundles), so it gets its own ceiling separate from ha_rpc.
 const FORWARD_HTTP_MS = 60000;
 
-/** Extract the bearer secret from a WS upgrade request (header, then ?secret=). */
+/**
+ * Extract the bearer secret from a WS upgrade request (Authorization header
+ * only).  The component always presents `Authorization: Bearer <secret>`; a
+ * query-string fallback would copy the credential into nginx/proxy access
+ * logs, so it is deliberately not supported.
+ */
 function extractSecret(req) {
 	const header = (req.headers && req.headers.authorization) || '';
 	if (typeof header === 'string' && header.toLowerCase().startsWith('bearer ')) {
 		return header.slice(7).trim();
 	}
-	try {
-		const parsed = new URL(req.url, 'http://placeholder');
-		return (parsed.searchParams.get('secret') || '').trim();
-	} catch (_err) {
-		return '';
-	}
+	return '';
 }
 
 class RelayManager {

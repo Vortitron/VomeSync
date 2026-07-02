@@ -82,6 +82,7 @@ RELAY_WS_MSG_WS_CLOSE = "ws_close"
 # than buffered unbounded; the frontend WebSocket carries small JSON frames.
 RELAY_FORWARD_HTTP_TIMEOUT = 60
 RELAY_FORWARD_MAX_BODY = 25 * 1024 * 1024
+# Exact path portions (query excluded) a browser WebSocket bridge may open.
 RELAY_FORWARD_WS_PATHS = ("/api/websocket",)
 # Hop-by-hop headers are connection-scoped and must not be forwarded across the
 # tunnel (RFC 7230 §6.1); Host/Content-Length are re-derived by each hop.
@@ -105,6 +106,8 @@ SUPERVISOR_ADDONS_URL = "http://supervisor/addons"
 SUPERVISOR_ADDON_INFO_URL = "http://supervisor/addons/{slug}/info"
 ESPHOME_DEFAULT_PORT = 6052
 ESPHOME_WEB_PORT_KEY = "6052/tcp"  # the add-on's optional direct web port mapping
+# Exact path portions (query excluded) of the brokered ESPHome REST subset —
+# matched exactly, never as prefixes, so /devices-x or /edit/../delete are refused.
 ESPHOME_ALLOWED_PATHS = ("/devices", "/version", "/edit")
 ESPHOME_ALLOWED_METHODS = ("GET", "POST")
 # Supervisor add-on state: only a *started* add-on is reachable, so discovery

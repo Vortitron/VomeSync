@@ -32,6 +32,7 @@ import os
 from contextlib import suppress
 from datetime import timedelta
 from typing import Any, Optional
+from urllib.parse import unquote
 
 import aiohttp
 from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
@@ -143,6 +144,23 @@ def _to_ws_url(base_url: Optional[str], path: str) -> str:
 	elif base.startswith("http://"):
 		base = "ws://" + base[len("http://"):]
 	return base + path
+
+
+def _safe_path_portion(path: Any) -> Optional[str]:
+	"""Return the path portion (before any query string) of a relayed path,
+	or ``None`` when it is not a clean absolute path.
+
+	Dot segments are rejected — literal or percent-encoded — because the HTTP
+	client normalises ``..`` when building the URL, so ``/api/../auth/x`` would
+	otherwise pass a ``startswith("/api/")`` check yet reach ``/auth/x``.
+	"""
+	if not isinstance(path, str) or not path.startswith("/"):
+		return None
+	portion = path.split("?", 1)[0]
+	for segment in portion.split("/"):
+		if segment in (".", "..") or unquote(segment) in (".", ".."):
+			return None
+	return portion
 
 
 async def async_ensure_local_access_token(hass: HomeAssistant) -> Optional[str]:
@@ -414,8 +432,10 @@ class RelayClient:
 			})
 			return
 		path = data.get("path") or "/api/websocket"
-		# Only the frontend's own socket is bridgeable; refuse anything else.
-		if not str(path).startswith(RELAY_FORWARD_WS_PATHS):
+		# Only the frontend's own socket is bridgeable; refuse anything else
+		# (exact match on the path portion, not a spoofable prefix).
+		portion = _safe_path_portion(str(path))
+		if portion is None or portion not in RELAY_FORWARD_WS_PATHS:
 			await self._send(ws, {
 				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
 				"code": 1008, "reason": "WebSocket path not permitted.",
@@ -541,7 +561,8 @@ class RelayClient:
 		self, method: Optional[str], path: Optional[str], body: Any
 	) -> tuple[int, Optional[str], Optional[str]]:
 		"""Proxy one HA core REST call.  Only ``/api/...`` paths are permitted."""
-		if not isinstance(path, str) or not (path.startswith("/api/") or path == "/api/"):
+		portion = _safe_path_portion(path)
+		if portion is None or not (portion.startswith("/api/") or portion == "/api/"):
 			return 0, None, "Refusing to execute a non-/api path."
 		method = (method or "GET").upper()
 		if method not in RELAY_ALLOWED_METHODS:
@@ -579,7 +600,10 @@ class RelayClient:
 		commands are not tunnelled.  ``body`` for a YAML write is sent verbatim as
 		``application/yaml``; reads carry no body.
 		"""
-		if not isinstance(path, str) or not path.startswith(ESPHOME_ALLOWED_PATHS):
+		# Exact match on the path portion (query excluded) — a prefix check would
+		# let /devices-x or /edit/../delete slip through.
+		portion = _safe_path_portion(path)
+		if portion is None or portion not in ESPHOME_ALLOWED_PATHS:
 			return 0, None, "Refusing to proxy a non-allowlisted ESPHome path."
 		method = (method or "GET").upper()
 		if method not in ESPHOME_ALLOWED_METHODS:

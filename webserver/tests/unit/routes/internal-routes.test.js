@@ -85,6 +85,80 @@ describe('POST /internal/relay/dispatch', () => {
 		expect(seen.path).toBe('/devices');
 	});
 
+	describe('dispatch policy (server-side allowlist)', () => {
+		let dispatched;
+		beforeEach(() => {
+			dispatched = false;
+			relayManager.dispatch = async () => {
+				dispatched = true;
+				return { status: 200, body: '{}' };
+			};
+		});
+
+		async function send(payload) {
+			return request(app)
+				.post('/internal/relay/dispatch')
+				.set('Authorization', `Bearer ${SECRET}`)
+				.send({ server_id: 'rly-1', ...payload });
+		}
+
+		test('400 for a core path outside /api/', async () => {
+			const res = await send({ method: 'GET', path: '/auth/token' });
+			expect(res.status).toBe(400);
+			expect(dispatched).toBe(false);
+		});
+
+		test('400 for dot-segment escapes, literal and percent-encoded', async () => {
+			for (const path of ['/api/../auth/token', '/api/%2e%2e/auth/token', '/api/./states']) {
+				const res = await send({ method: 'GET', path });
+				expect(res.status).toBe(400);
+			}
+			expect(dispatched).toBe(false);
+		});
+
+		test('400 for a disallowed method', async () => {
+			const res = await send({ method: 'PATCH', path: '/api/states' });
+			expect(res.status).toBe(400);
+			expect(dispatched).toBe(false);
+		});
+
+		test('400 for an unknown target', async () => {
+			const res = await send({ method: 'GET', path: '/api/states', target: 'supervisor' });
+			expect(res.status).toBe(400);
+			expect(dispatched).toBe(false);
+		});
+
+		test('400 for esphome prefix lookalikes and traversal', async () => {
+			for (const path of ['/devices-x', '/editanything', '/edit/../delete?configuration=x']) {
+				const res = await send({ method: 'GET', path, target: 'esphome' });
+				expect(res.status).toBe(400);
+			}
+			expect(dispatched).toBe(false);
+		});
+
+		test('400 for a DELETE against esphome (read/write only)', async () => {
+			const res = await send({ method: 'DELETE', path: '/devices', target: 'esphome' });
+			expect(res.status).toBe(400);
+			expect(dispatched).toBe(false);
+		});
+
+		test('200 for the allowlisted esphome edit path with a query string', async () => {
+			const res = await send({
+				method: 'POST', path: '/edit?configuration=lr.yaml', target: 'esphome'
+			});
+			expect(res.status).toBe(200);
+			expect(dispatched).toBe(true);
+		});
+
+		test('200 for a core /api/ path with a query string', async () => {
+			const res = await send({
+				method: 'GET', path: '/api/history/period?filter_entity_id=light.k'
+			});
+			expect(res.status).toBe(200);
+			expect(dispatched).toBe(true);
+		});
+	});
+
 	test('404 when the component is offline', async () => {
 		relayManager.dispatch = async () => ({ offline: true });
 		const res = await request(app)
