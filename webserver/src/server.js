@@ -230,8 +230,23 @@ class VomeSyncServer {
 			return;
 		}
 		const proxy = createUiProxy({ relayManager });
-		this.forwardServer = http.createServer((req, res) => proxy.httpHandler(req, res));
-		this.forwardServer.on('upgrade', (req, socket, head) => proxy.handleUpgrade(req, socket, head));
+		// Handlers are async (policy lookups); a rejection must kill the one
+		// request, never the process.
+		this.forwardServer = http.createServer((req, res) => {
+			Promise.resolve(proxy.httpHandler(req, res)).catch((err) => {
+				logger.error('Forward proxy request failed:', err.message || err);
+				if (!res.headersSent) {
+					res.writeHead(500);
+				}
+				res.end();
+			});
+		});
+		this.forwardServer.on('upgrade', (req, socket, head) => {
+			Promise.resolve(proxy.handleUpgrade(req, socket, head)).catch((err) => {
+				logger.error('Forward proxy upgrade failed:', err.message || err);
+				socket.destroy();
+			});
+		});
 		logger.info('Created full-UI forwarding proxy server');
 	}
 

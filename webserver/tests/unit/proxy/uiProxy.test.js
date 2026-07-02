@@ -15,8 +15,14 @@ const {
 	collectRequestHeaders,
 	filterResponseHeaders,
 	applyResponseHeaders,
-	stripOwnCookie
+	stripOwnCookie,
+	isWebhookPath
 } = require('../../../src/proxy/uiProxy');
+
+/** Let pending microtasks/immediates run (async authorise path in handlers). */
+function tick() {
+	return new Promise((resolve) => setImmediate(resolve));
+}
 
 function fakeReq({ method = 'GET', url = '/', headers = {}, rawHeaders = [] } = {}) {
 	const req = new EventEmitter();
@@ -202,16 +208,155 @@ describe('uiProxy.httpHandler', () => {
 	});
 });
 
+describe('uiProxy.isWebhookPath', () => {
+	test('accepts a single opaque webhook id (query ignored)', () => {
+		expect(isWebhookPath('/api/webhook/abc123DEF')).toBe(true);
+		expect(isWebhookPath('/api/webhook/my-hook_1.2~x')).toBe(true);
+		expect(isWebhookPath('/api/webhook/abc?x=1')).toBe(true);
+	});
+
+	test('rejects everything else', () => {
+		expect(isWebhookPath('/api/webhook/')).toBe(false);
+		expect(isWebhookPath('/api/webhook/a/b')).toBe(false);
+		expect(isWebhookPath('/api/webhook/..')).toBe(false);
+		expect(isWebhookPath('/api/webhook/%2e%2e')).toBe(false); // '%' not in the id alphabet
+		expect(isWebhookPath('/api/states')).toBe(false);
+		expect(isWebhookPath('/lovelace/0')).toBe(false);
+		expect(isWebhookPath('')).toBe(false);
+	});
+});
+
+describe('uiProxy cookie-less forwarding policy', () => {
+	const host = { host: 'nyvyn.home.vome.io' };
+
+	function policyProxy(policy, relayOverrides = {}) {
+		const forwarded = [];
+		const fetchForwardPolicy = jest.fn(async () => policy);
+		const relay = {
+			isConnected: () => true,
+			forwardHttp: async (serverId, opts) => {
+				forwarded.push({ serverId, opts });
+				return { status: 200, headers: [], bodyB64: undefined };
+			},
+			...relayOverrides
+		};
+		const proxy = createUiProxy({ relayManager: relay, verifyAccessToken: () => null, fetchForwardPolicy });
+		return { proxy, forwarded, fetchForwardPolicy };
+	}
+
+	test('webhook policy admits a cookie-less webhook POST', async () => {
+		const { proxy, forwarded } = policyProxy({ serverId: 'rly-1', webhooks: true, open: false });
+		const req = fakeReq({ method: 'POST', url: '/api/webhook/abc123', headers: host });
+		const res = fakeRes();
+		proxy.httpHandler(req, res);
+		await tick();
+		req.emit('end');
+		await res.done;
+		expect(res.statusCode).toBe(200);
+		expect(forwarded[0].serverId).toBe('rly-1');
+		expect(forwarded[0].opts.path).toBe('/api/webhook/abc123');
+	});
+
+	test('webhook policy does NOT admit non-webhook paths or odd methods', async () => {
+		const { proxy, forwarded } = policyProxy({ serverId: 'rly-1', webhooks: true, open: false });
+		for (const [method, url] of [
+			['POST', '/api/states'],
+			['DELETE', '/api/webhook/abc123'],
+			['POST', '/api/webhook/abc/extra'],
+			['GET', '/lovelace/0']
+		]) {
+			const req = fakeReq({ method, url, headers: host });
+			const res = fakeRes();
+			proxy.httpHandler(req, res);
+			await res.done;
+			expect(res.statusCode).toBe(302);
+		}
+		expect(forwarded).toHaveLength(0);
+	});
+
+	test('open policy admits any cookie-less request', async () => {
+		const { proxy, forwarded } = policyProxy({ serverId: 'rly-1', webhooks: false, open: true });
+		const req = fakeReq({ method: 'GET', url: '/lovelace/0', headers: host });
+		const res = fakeRes();
+		proxy.httpHandler(req, res);
+		await tick();
+		req.emit('end');
+		await res.done;
+		expect(res.statusCode).toBe(200);
+		expect(forwarded[0].opts.path).toBe('/lovelace/0');
+	});
+
+	test('policy miss keeps the cookie gate (302 to authorise)', async () => {
+		const { proxy } = policyProxy(null);
+		const req = fakeReq({ method: 'POST', url: '/api/webhook/abc123', headers: host });
+		const res = fakeRes();
+		proxy.httpHandler(req, res);
+		await res.done;
+		expect(res.statusCode).toBe(302);
+		expect(res.headers.Location).toContain(config.relay.forwardAuthoriseUrl);
+	});
+
+	test('policy lookups are cached per host', async () => {
+		const { proxy, fetchForwardPolicy } = policyProxy({ serverId: 'rly-1', webhooks: true, open: false });
+		for (let i = 0; i < 3; i++) {
+			const req = fakeReq({ method: 'POST', url: '/api/webhook/abc123', headers: host });
+			const res = fakeRes();
+			proxy.httpHandler(req, res);
+			await tick();
+			req.emit('end');
+			await res.done;
+		}
+		expect(fetchForwardPolicy).toHaveBeenCalledTimes(1);
+	});
+
+	test('a failing policy lookup fails closed, not crashed', async () => {
+		const fetchForwardPolicy = jest.fn(async () => { throw new Error('portal down'); });
+		const proxy = createUiProxy({
+			relayManager: {},
+			verifyAccessToken: () => null,
+			fetchForwardPolicy
+		});
+		const req = fakeReq({ method: 'POST', url: '/api/webhook/abc123', headers: host });
+		const res = fakeRes();
+		proxy.httpHandler(req, res);
+		await res.done;
+		expect(res.statusCode).toBe(302);
+	});
+
+	test('open policy admits a cookie-less WebSocket; webhook-only does not', async () => {
+		function fakeSocket() {
+			return { writable: true, written: '', destroyed: false,
+				write(s) { this.written += s; }, destroy() { this.destroyed = true; } };
+		}
+		const open = policyProxy({ serverId: 'rly-1', webhooks: false, open: true },
+			{ isConnected: () => false }); // offline → 502 proves auth passed
+		let socket = fakeSocket();
+		await open.proxy.handleUpgrade(
+			fakeReq({ url: '/api/websocket', headers: host }), socket, Buffer.alloc(0));
+		expect(socket.written).toContain('502');
+
+		const hooksOnly = policyProxy({ serverId: 'rly-1', webhooks: true, open: false });
+		socket = fakeSocket();
+		await hooksOnly.proxy.handleUpgrade(
+			fakeReq({ url: '/api/websocket', headers: host }), socket, Buffer.alloc(0));
+		expect(socket.written).toContain('401');
+	});
+});
+
 describe('uiProxy.handleUpgrade', () => {
 	function fakeSocket() {
 		return { writable: true, written: '', destroyed: false,
 			write(s) { this.written += s; }, destroy() { this.destroyed = true; } };
 	}
 
-	test('aborts an unauthenticated upgrade with 401', () => {
-		const proxy = createUiProxy({ relayManager: { isConnected: () => true }, verifyAccessToken: () => null });
+	test('aborts an unauthenticated upgrade with 401', async () => {
+		const proxy = createUiProxy({
+			relayManager: { isConnected: () => true },
+			verifyAccessToken: () => null,
+			fetchForwardPolicy: async () => null
+		});
 		const socket = fakeSocket();
-		proxy.handleUpgrade(fakeReq({ url: '/api/websocket', headers: { host: 'h.vome.io' } }), socket, Buffer.alloc(0));
+		await proxy.handleUpgrade(fakeReq({ url: '/api/websocket', headers: { host: 'h.vome.io' } }), socket, Buffer.alloc(0));
 		expect(socket.written).toContain('401');
 		expect(socket.destroyed).toBe(true);
 	});

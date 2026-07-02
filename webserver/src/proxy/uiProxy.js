@@ -19,14 +19,45 @@
  * portal mints it only for an owner with an active subscription.  No cookie ⇒ a
  * 302 to the portal authorise page (HTTP) or a 401 (WebSocket).  Vome handles the
  * gate + TLS; the user still signs in to their own Home Assistant as normal.
+ *
+ * Two per-server opt-outs (owner-controlled in the portal, resolved via
+ * utils/relayPortal.fetchForwardPolicy and cached briefly):
+ *   - `webhooks`: cookie-less POST/PUT/GET/HEAD `/api/webhook/<id>` deliveries
+ *     are admitted (Nabu Casa "cloudhook" parity — webhook ids are high-entropy
+ *     secrets and HA treats the endpoint as unauthenticated by design).
+ *   - `open`: the cookie gate is skipped entirely and HA's own login protects
+ *     the instance (Nabu Casa "Remote UI" parity — required for the HA
+ *     companion app, which cannot complete the portal cookie flow).
+ * Policy misses fail closed to cookie-only.
  */
 const WebSocket = require('ws');
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger');
 const config = require('../config/config');
 const relayManagerSingleton = require('../websocket/relayManager');
+const relayPortal = require('../utils/relayPortal');
 const uiAccess = require('./uiAccess');
 const { abortUpgrade } = require('../websocket/upgradeRouter');
+
+// Friendly-host forwarding policy cache: a webhook burst or an app sync must
+// not turn into one portal round-trip per request. Misses are cached too so an
+// unauthenticated crawler can't hammer the portal through us.
+const POLICY_CACHE_TTL_MS = 30 * 1000;
+
+// One opaque webhook id segment: HA generates hex ids but custom automations
+// may use any reasonable token. Slashes and dot segments stay excluded.
+const WEBHOOK_PATH_RE = /^\/api\/webhook\/[A-Za-z0-9_~.-]+$/;
+const WEBHOOK_METHODS = new Set(['POST', 'PUT', 'GET', 'HEAD']);
+
+/** True when `path` (query excluded) is a single-id HA webhook endpoint. */
+function isWebhookPath(path) {
+	const portion = String(path || '').split('?', 1)[0];
+	if (!WEBHOOK_PATH_RE.test(portion)) {
+		return false;
+	}
+	const id = portion.slice('/api/webhook/'.length);
+	return id !== '.' && id !== '..';
+}
 
 // Hop-by-hop headers are per-connection and must not cross the tunnel (RFC 7230
 // §6.1); Host/Content-Length are re-derived at each hop.
@@ -112,10 +143,27 @@ function applyResponseHeaders(res, pairs) {
 function createUiProxy(deps = {}) {
 	const relay = deps.relayManager || relayManagerSingleton;
 	const verify = deps.verifyAccessToken || uiAccess.verifyAccessToken;
+	const fetchPolicy = deps.fetchForwardPolicy || relayPortal.fetchForwardPolicy;
 	const cookieName = config.relay.forwardCookieName;
 	const maxBody = config.relay.forwardMaxBodyBytes;
 	// noServer: the dedicated proxy server's `upgrade` event calls handleUpgrade.
 	const wss = new WebSocket.Server({ noServer: true });
+
+	const policyCache = new Map(); // host -> { policy|null, expiresAt }
+
+	/** Cached forwarding policy for a friendly host (null = cookie-only). */
+	async function policyFor(host) {
+		if (!host) {
+			return null;
+		}
+		const hit = policyCache.get(host);
+		if (hit && hit.expiresAt > Date.now()) {
+			return hit.policy;
+		}
+		const policy = await fetchPolicy(host);
+		policyCache.set(host, { policy, expiresAt: Date.now() + POLICY_CACHE_TTL_MS });
+		return policy;
+	}
 
 	/** Resolve + authorise a request; returns access or null (caller responds). */
 	function authorise(req) {
@@ -124,8 +172,36 @@ function createUiProxy(deps = {}) {
 		return verify(token, host);
 	}
 
-	function httpHandler(req, res) {
-		const access = authorise(req);
+	/**
+	 * Cookie-less admittance: `{ serverId }` when the owner's forwarding policy
+	 * admits this request without the portal cookie, else null.
+	 */
+	async function cookielessAccess(req) {
+		const policy = await policyFor(originalHost(req));
+		if (!policy) {
+			return null;
+		}
+		if (policy.open) {
+			return { serverId: policy.serverId };
+		}
+		if (policy.webhooks
+			&& WEBHOOK_METHODS.has(String(req.method || '').toUpperCase())
+			&& isWebhookPath(req.url)) {
+			return { serverId: policy.serverId };
+		}
+		return null;
+	}
+
+	async function httpHandler(req, res) {
+		let access = authorise(req);
+		if (!access) {
+			try {
+				access = await cookielessAccess(req);
+			} catch (err) {
+				logger.error('Forward policy check failed:', err.message || err);
+				access = null;
+			}
+		}
 		if (!access) {
 			const dest = `${config.relay.forwardAuthoriseUrl}?host=${encodeURIComponent(originalHost(req))}`;
 			res.writeHead(302, { Location: dest });
@@ -184,13 +260,25 @@ function createUiProxy(deps = {}) {
 		});
 	}
 
-	function handleUpgrade(req, socket, head) {
+	async function handleUpgrade(req, socket, head) {
 		const pathname = (req.url || '').split('?')[0];
 		if (pathname !== '/api/websocket') {
 			abortUpgrade(socket, 404, 'Not found');
 			return;
 		}
-		const access = authorise(req);
+		let access = authorise(req);
+		if (!access) {
+			// Only `open` (companion-app) mode admits a cookie-less WebSocket;
+			// the webhook policy never applies here.
+			try {
+				const policy = await policyFor(originalHost(req));
+				if (policy && policy.open) {
+					access = { serverId: policy.serverId };
+				}
+			} catch (err) {
+				logger.error('Forward policy check failed:', err.message || err);
+			}
+		}
 		if (!access) {
 			abortUpgrade(socket, 401, 'Unauthorized');
 			return;
@@ -267,7 +355,7 @@ function createUiProxy(deps = {}) {
 		});
 	}
 
-	return { httpHandler, handleUpgrade, bridge, _wss: wss };
+	return { httpHandler, handleUpgrade, bridge, _wss: wss, _policyCache: policyCache };
 }
 
 module.exports = {
@@ -278,5 +366,7 @@ module.exports = {
 	filterResponseHeaders,
 	applyResponseHeaders,
 	stripOwnCookie,
-	HOP_BY_HOP
+	isWebhookPath,
+	HOP_BY_HOP,
+	POLICY_CACHE_TTL_MS
 };

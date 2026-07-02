@@ -51,4 +51,47 @@ async function verifySecret(secret) {
 	}
 }
 
-module.exports = { verifySecret };
+/**
+ * Resolve a friendly host to its forwarding policy, or null.
+ *
+ * The policy governs cookie-less admittance at the browser proxy: `webhooks`
+ * admits `/api/webhook/<id>` deliveries, `open` skips the cookie gate entirely
+ * (companion-app mode).  Fails closed exactly like verifySecret — any miss or
+ * error yields null, which the proxy treats as "cookie required".
+ *
+ * @param {string} host e.g. "nyvyn.home.vome.io"
+ * @returns {Promise<{serverId: string, webhooks: boolean, open: boolean}|null>}
+ */
+async function fetchForwardPolicy(host) {
+	if (!config.relay.internalSecret || !host || typeof host !== 'string') {
+		return null;
+	}
+	try {
+		const resp = await fetch(config.relay.forwardPolicyUrl, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${config.relay.internalSecret}`
+			},
+			body: JSON.stringify({ host }),
+			signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS)
+		});
+		if (!resp.ok) {
+			return null;
+		}
+		const data = await resp.json();
+		if (!data || data.ok !== true || !data.server_id) {
+			return null;
+		}
+		return {
+			serverId: String(data.server_id),
+			webhooks: data.webhooks === true,
+			open: data.open === true
+		};
+	} catch (err) {
+		logger.error('Forward policy lookup failed:', err.message || err);
+		return null;
+	}
+}
+
+module.exports = { verifySecret, fetchForwardPolicy };

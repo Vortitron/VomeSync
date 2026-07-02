@@ -66,6 +66,10 @@ const config = {
 		forwardPort: parseInt(process.env.FORWARD_PORT, 10) || 0,
 		// Where the proxy sends an unauthenticated browser to obtain a cookie.
 		forwardAuthoriseUrl: process.env.RELAY_FORWARD_AUTHORISE_URL || 'https://vome.io/remote/authorise',
+		// Portal endpoint resolving a friendly host to its forwarding policy
+		// (webhook pass-through / open companion-app access). Same shared
+		// secret as portalVerifyUrl; misses fail closed to cookie-only.
+		forwardPolicyUrl: process.env.RELAY_FORWARD_POLICY_URL || 'https://vome.io/api/internal/relay/forward-policy',
 		// Cookie carrying the access token (scoped to .vome.io by the portal).
 		forwardCookieName: process.env.RELAY_FORWARD_COOKIE || 'vome_fwd',
 		// Largest request body the proxy will buffer before forwarding (25 MiB).

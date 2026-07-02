@@ -86,7 +86,10 @@ services:
       - NGINX_HOST=${WEBSITE_DOMAIN:-sync.vome.io}
       - NGINX_PORT=80
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      # 127.0.0.1, not localhost: busybox wget resolves localhost to ::1 first
+      # but nginx in this image binds IPv4 0.0.0.0:80 only, so the check always
+      # refused while the published port worked (2 months of false "unhealthy").
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -166,7 +169,10 @@ services:
       - NGINX_PORT=80
       - API_URL=http://localhost:3091
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      # 127.0.0.1, not localhost: busybox wget resolves localhost to ::1 first
+      # but nginx in this image binds IPv4 0.0.0.0:80 only, so the check always
+      # refused while the published port worked (2 months of false "unhealthy").
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/"]
       interval: 30s
       timeout: 10s
       retries: 3
