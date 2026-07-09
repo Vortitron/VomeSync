@@ -67,7 +67,9 @@ from .const import (
 	RELAY_FORWARD_WS_PATHS,
 	RELAY_RECONNECT_DELAY,
 	RELAY_RECONNECT_MAX_DELAY,
+	LOVELACE_WS_ALLOWED_COMMANDS,
 	RELAY_RPC_TARGET_ESPHOME,
+	RELAY_RPC_TARGET_WEBSOCKET,
 	RELAY_RPC_TIMEOUT,
 	RELAY_WS_MSG_HA_RPC,
 	RELAY_WS_MSG_HA_RPC_RESPONSE,
@@ -550,12 +552,61 @@ class RelayClient:
 		"""Execute one relayed call locally; return ``(status, body_text, error)``.
 
 		``target`` selects the local service: the HA core REST API (``core``, the
-		default) or the ESPHome dashboard (``esphome``).  ``status`` is 0 on a
-		local failure, so the broker surfaces it as a 502.
+		default), the ESPHome dashboard (``esphome``), or one allowlisted HA
+		WebSocket command (``websocket``).  ``status`` is 0 on a local failure.
 		"""
 		if target == RELAY_RPC_TARGET_ESPHOME:
 			return await self._execute_esphome(method, path, body)
+		if target == RELAY_RPC_TARGET_WEBSOCKET:
+			return await self._execute_websocket(body)
 		return await self._execute_core(method, path, body)
+
+	async def _execute_websocket(
+		self, command: Any
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""Run one allowlisted HA WebSocket command (Lovelace dashboards)."""
+		if not isinstance(command, dict):
+			return 0, None, "WebSocket command must be a JSON object."
+		cmd_type = command.get("type")
+		if not isinstance(cmd_type, str) or cmd_type not in LOVELACE_WS_ALLOWED_COMMANDS:
+			return 0, None, "Refusing to execute a non-allowlisted WebSocket command."
+		base, token = self._resolve_local()
+		if not token:
+			return 0, None, (
+				"No local access token available; the component could not mint "
+				"one (no owner user?) and none is configured in the relay options."
+			)
+		ws_url = _to_ws_url(base, "/api/websocket")
+		session = self._get_session()
+		payload = {k: v for k, v in command.items() if k != "id"}
+		payload["id"] = 1
+		try:
+			async with session.ws_connect(
+				ws_url, heartbeat=30, timeout=aiohttp.ClientTimeout(total=RELAY_RPC_TIMEOUT),
+			) as ws:
+				msg = await ws.receive_json(timeout=RELAY_RPC_TIMEOUT)
+				if msg.get("type") != "auth_required":
+					return 0, None, f"Unexpected WebSocket greeting: {msg.get('type')}"
+				await ws.send_json({"type": "auth", "access_token": token})
+				while True:
+					auth_msg = await ws.receive_json(timeout=RELAY_RPC_TIMEOUT)
+					if auth_msg.get("type") == "auth_ok":
+						break
+					if auth_msg.get("type") == "auth_invalid":
+						return 0, None, "Local Home Assistant rejected the access token."
+				await ws.send_json(payload)
+				while True:
+					result = await ws.receive_json(timeout=RELAY_RPC_TIMEOUT)
+					if result.get("type") == "result" and result.get("id") == 1:
+						if result.get("success"):
+							return 200, json.dumps(result.get("result")), None
+						err = result.get("error") or {}
+						code = int(err.get("code") or 400) if isinstance(err, dict) else 400
+						return code, json.dumps({"error": err}), None
+		except asyncio.TimeoutError:
+			return 0, None, "Local Home Assistant WebSocket timed out."
+		except aiohttp.ClientError as err:
+			return 0, None, f"Local Home Assistant WebSocket error: {err}"
 
 	async def _execute_core(
 		self, method: Optional[str], path: Optional[str], body: Any

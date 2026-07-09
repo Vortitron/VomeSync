@@ -157,6 +157,15 @@ describe('POST /internal/relay/dispatch', () => {
 			expect(res.status).toBe(200);
 			expect(dispatched).toBe(true);
 		});
+
+		test('200 for websocket target without a REST path', async () => {
+			const res = await send({
+				target: 'websocket',
+				body: { type: 'lovelace/dashboards/list' },
+			});
+			expect(res.status).toBe(200);
+			expect(dispatched).toBe(true);
+		});
 	});
 
 	test('404 when the component is offline', async () => {

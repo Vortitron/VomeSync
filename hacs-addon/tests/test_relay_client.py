@@ -128,6 +128,38 @@ class TestExecute:
 		assert kwargs["json"] == {"entity_id": "light.k"}
 
 	@pytest.mark.asyncio
+	async def test_websocket_list_dashboards(self):
+		fake_ws = AsyncMock()
+		fake_ws.receive_json = AsyncMock(side_effect=[
+			{"type": "auth_required"},
+			{"type": "auth_ok"},
+			{"type": "result", "id": 1, "success": True, "result": [{"url_path": "lovelace"}]},
+		])
+		fake_ws.send_json = AsyncMock()
+		fake_cm = MagicMock()
+		fake_cm.__aenter__ = AsyncMock(return_value=fake_ws)
+		fake_cm.__aexit__ = AsyncMock(return_value=False)
+		session = AsyncMock(spec=aiohttp.ClientSession)
+		session.ws_connect = MagicMock(return_value=fake_cm)
+		client = _client(session, local_token="llt")
+		status, body, error = await client.execute(
+			None, None, {"type": "lovelace/dashboards/list"}, target="websocket"
+		)
+		assert status == 200 and error is None
+		assert json.loads(body) == [{"url_path": "lovelace"}]
+		session.ws_connect.assert_called_once()
+
+	@pytest.mark.asyncio
+	async def test_websocket_rejects_non_allowlisted_command(self):
+		session, _ = _mock_session_with_response()
+		client = _client(session, local_token="llt")
+		status, body, error = await client.execute(
+			None, None, {"type": "config/area_registry/list"}, target="websocket"
+		)
+		assert status == 0 and "allowlisted" in error
+		session.ws_connect.assert_not_called()
+
+	@pytest.mark.asyncio
 	async def test_default_local_url_when_not_configured(self):
 		session, _ = _mock_session_with_response(status=200, text="[]")
 		client = _client(session, local_token="llt")

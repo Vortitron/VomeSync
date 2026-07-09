@@ -97,6 +97,21 @@ RELAY_FORWARD_STRIP_HEADERS = frozenset({
 # without any inbound exposure.
 RELAY_RPC_TARGET_CORE = "core"
 RELAY_RPC_TARGET_ESPHOME = "esphome"
+RELAY_RPC_TARGET_WEBSOCKET = "websocket"
+
+# Allowlisted Home Assistant WebSocket commands for brokered Lovelace dashboard
+# access (must match portal/ha_ws_command.py).
+LOVELACE_WS_READ_COMMANDS = frozenset({
+	"lovelace/dashboards/list",
+	"lovelace/config",
+})
+LOVELACE_WS_WRITE_COMMANDS = frozenset({
+	"lovelace/config/save",
+	"lovelace/dashboards/create",
+	"lovelace/dashboards/delete",
+	"lovelace/dashboards/update",
+})
+LOVELACE_WS_ALLOWED_COMMANDS = LOVELACE_WS_READ_COMMANDS | LOVELACE_WS_WRITE_COMMANDS
 
 # ESPHome dashboard: discovered via the Supervisor add-on API on HAOS / Supervised
 # installs, or set explicitly (CONF_RELAY_ESPHOME_URL).  Only the REST subset is

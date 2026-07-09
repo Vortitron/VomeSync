@@ -21,6 +21,7 @@ const router = express.Router();
 // customer's Home Assistant.
 const RELAY_TARGET_CORE = 'core';
 const RELAY_TARGET_ESPHOME = 'esphome';
+const RELAY_TARGET_WEBSOCKET = 'websocket';
 const CORE_ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 const ESPHOME_ALLOWED_METHODS = new Set(['GET', 'POST']);
 // Exact path portions (query string excluded) of the brokered ESPHome REST
@@ -44,6 +45,14 @@ function decodedSegment(segment) {
  * escape a prefix allowlist.
  */
 function dispatchPolicyError({ method, path, target } = {}) {
+	const kind = (target === undefined || target === null || target === '')
+		? RELAY_TARGET_CORE
+		: target;
+	if (kind === RELAY_TARGET_WEBSOCKET) {
+		// Lovelace dashboard commands — body is validated on the portal; the
+		// component enforces its own allowlist before executing locally.
+		return null;
+	}
 	if (typeof path !== 'string' || !path.startsWith('/')) {
 		return 'path must be an absolute path string';
 	}
@@ -55,9 +64,6 @@ function dispatchPolicyError({ method, path, target } = {}) {
 		}
 	}
 	const upperMethod = String(method || 'GET').toUpperCase();
-	const kind = (target === undefined || target === null || target === '')
-		? RELAY_TARGET_CORE
-		: target;
 	if (kind === RELAY_TARGET_ESPHOME) {
 		if (!ESPHOME_ALLOWED_METHODS.has(upperMethod)) {
 			return `method ${upperMethod} is not allowed for the esphome target`;
@@ -106,7 +112,11 @@ router.post('/relay/dispatch', async (req, res) => {
 		return res.status(401).json({ error: 'unauthorized' });
 	}
 	const { server_id: serverId, method, path, body, expect, timeout, target } = req.body || {};
-	if (!serverId || !path) {
+	if (!serverId) {
+		return res.status(400).json({ error: 'server_id is required' });
+	}
+	const kind = (target === undefined || target === null || target === '') ? RELAY_TARGET_CORE : target;
+	if (kind !== RELAY_TARGET_WEBSOCKET && !path) {
 		return res.status(400).json({ error: 'server_id and path are required' });
 	}
 	const policyError = dispatchPolicyError({ method, path, target });
