@@ -43,12 +43,13 @@ VomeSync consists of four main components:
 - **Management**: Automated deployment scripts
 
 ### 5. **Official Home Assistant Add-on** (`/addons/vome/`)
-- **Status**: Scaffolded — installs the shared integration; companions TBD
-- **Purpose**: Supervisor install path without HACS; future home for heavier sidecars (e.g. browser RDP / Guacamole)
+- **Status**: Scaffolded — shared integration install + ingress tree control panel
+- **Purpose**: Supervisor install path without HACS; clearer remote-access / LAN UI; future home for heavier sidecars (e.g. browser RDP / Guacamole)
 - **Design**:
   - `build.sh` stages `custom_components/vomesync` into the image (same code HACS uses — no fork)
   - On start, copies the integration into `/config/custom_components/vomesync` and writes `/config/vome/addon.marker`
-  - LAN `/t/<slug>/` tunnels live in the shared integration (options UI), not duplicated in the add-on
+  - Ingress panel (`panel/`) calls shared services (`get_remote_status`, `set_forward_ui`, `add_lan_route`, …)
+  - Jenkins: `VomeSync/vome-addon-ci` + `VomeSync/vome-addon-release` (declared in VomeHome `jenkins/casc.yaml`)
 - **Notes**: Add the repo via Add-on Store → Repositories (`addons/repository.yaml`). Run `./build.sh` before building the image.
 
 This README outlines the architecture, setup, and user flow for developers, contributors, and users.

@@ -6,5 +6,9 @@ FROM $BUILD_FROM
 # (copied from ../../custom_components/vomesync — single source of truth).
 COPY rootfs /
 COPY staged_integration/ /usr/share/vome/custom_components/vomesync/
+COPY panel/ /usr/share/vome/panel/
 
-RUN chmod +x /etc/cont-init.d/*.sh /etc/services.d/vome/run
+RUN chmod +x \
+	/etc/cont-init.d/*.sh \
+	/etc/services.d/vome/run \
+	/usr/share/vome/panel/server.py

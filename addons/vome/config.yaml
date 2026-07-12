@@ -1,11 +1,11 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome
-version: "0.1.0"
+version: "0.2.0"
 slug: vome
 description: >
-  Installs and keeps the Vome Home Assistant integration up to date, and is the
-  home for heavier companions (LAN helpers, future browser RDP). The Python
-  integration code is the same tree HACS uses — one codebase, two install paths.
+  Installs the shared Vome integration (same code as HACS) and serves a tree-view
+  control panel for remote access and LAN tunnels. Future companions (browser RDP)
+  land here too.
 url: https://github.com/Vortitron/VomeSync
 arch:
   - aarch64
@@ -18,8 +18,11 @@ map:
   - config:rw
 startup: application
 boot: auto
+ingress: true
+ingress_port: 8099
+ingress_stream: true
+panel_icon: mdi:home-analytics
+panel_title: Vome
 options: {}
 schema: {}
 image: false
-panel_icon: mdi:home-analytics
-panel_title: Vome

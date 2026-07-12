@@ -1,8 +1,8 @@
 # Vome Home Assistant Add-on
 
 Supervisor add-on that installs the **same** `custom_components/vomesync` tree
-HACS uses, and is the place for heavier companions (LAN helpers that need extra
-software, future browser-RDP / Guacamole, diagnostics).
+HACS uses, and serves a **tree-view control panel** (ingress) for remote access
+and LAN tunnels. Heavier companions (browser RDP / Guacamole, …) will land here.
 
 ## HACS vs add-on
 
@@ -10,27 +10,40 @@ software, future browser-RDP / Guacamole, diagnostics).
 |--|------------------|-------------|
 | Switches / subscribe | yes | yes (same code) |
 | Relay link to Vome Home | yes | yes |
-| Full-UI forwarding + LAN `/t/<slug>/` tunnels | yes (in the shared component) | yes |
+| Full-UI + LAN `/t/<slug>/` | yes (options menu) | yes + **tree panel** |
 | Extra sidecars (browser RDP, …) | no | yes (planned) |
 | Install without HACS | no | yes |
 
-**One codebase:** `custom_components/vomesync/`. Before building the add-on image,
-run `./build.sh` in this directory to stage that tree into `staged_integration/`.
+**One codebase:** `custom_components/vomesync/`. Before building the image, run
+`./build.sh` to stage that tree into `staged_integration/`.
+
+Jenkins (see `jenkins/casc.yaml` in the VomeHome repo):
+
+- `VomeSync/vome-addon-ci` — stage + package checks + LAN/relay tests
+- `VomeSync/vome-addon-release` — ZIP artifact for distribution
 
 ## Install (custom repository)
 
 1. Settings → Add-ons → Add-on Store → ⋮ → Repositories
-2. Add the VomeSync repo URL (or the path that serves `addons/repository.yaml`)
-3. Install **Vome**, start it
+2. Add the VomeSync add-ons repo (`addons/repository.yaml`)
+3. Install **Vome**, start it — open the **Vome** sidebar panel
 4. Restart Home Assistant once so it picks up `custom_components/vomesync`
-5. Settings → Devices & services → Add Integration → **Vome**
-6. Link to Vome Home, enable remote access / LAN tunnels as needed
+5. Settings → Devices & services → Add Integration → **Vome** (if not present)
+6. Link to Vome Home, then manage forwarding / LAN tunnels in the add-on panel
+
+## Control panel
+
+Ingress UI with a left-hand tree:
+
+- Overview
+- Remote access → Home Assistant UI / LAN tunnels
+- Account → Link status
+- About
+
+Mutations call the shared integration services (`vomesync.set_forward_ui`,
+`add_lan_route`, …) so the HACS options menu and the panel stay in sync.
 
 ## LAN tunnels
-
-Configured in the integration options (Remote access & LAN tunnels), not in
-add-on options — the relay runs inside Home Assistant Core and must own the
-LAN target list. After a friendly domain is active on vome.io:
 
 ```
 https://your-slug.home.vome.io/t/nas/     →  http://192.168.1.5:5000/

@@ -88,3 +88,112 @@ delete_switch:
       required: true
       selector:
         text:
+
+get_remote_status:
+  name: Get remote access status
+  description: Return link / full-UI / LAN tunnel status (used by the Vome add-on panel)
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+
+set_forward_ui:
+  name: Set full-UI forwarding
+  description: Enable or disable Home Assistant full-UI forwarding on the friendly domain
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    forward_ui:
+      name: Allow full-UI forwarding
+      required: true
+      selector:
+        boolean:
+
+set_lan_routes:
+  name: Replace LAN routes
+  description: Replace the full list of LAN path tunnels
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    routes:
+      name: Routes
+      required: true
+      selector:
+        object:
+
+add_lan_route:
+  name: Add LAN route
+  description: Add one /t/<slug>/ tunnel to a LAN host
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    slug:
+      name: Slug
+      required: true
+      selector:
+        text:
+    name:
+      name: Display name
+      required: false
+      selector:
+        text:
+    host:
+      name: LAN host
+      required: true
+      selector:
+        text:
+    port:
+      name: Port
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 65535
+          mode: box
+    scheme:
+      name: Scheme
+      required: false
+      default: http
+      selector:
+        select:
+          options:
+            - http
+            - https
+    enabled:
+      name: Enabled
+      required: false
+      default: true
+      selector:
+        boolean:
+    websocket:
+      name: Allow WebSocket
+      required: false
+      default: true
+      selector:
+        boolean:
+
+remove_lan_route:
+  name: Remove LAN route
+  description: Remove a LAN path tunnel by slug
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    slug:
+      name: Slug
+      required: true
+      selector:
+        text:

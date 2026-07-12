@@ -1,6 +1,9 @@
 #!/command/with-contenv bashio
-# Keep the add-on container alive.  Future companions (e.g. browser RDP /
-# Guacamole) will run as additional s6 services alongside this placeholder.
+# Serve the tree-view control panel (ingress) and keep the add-on alive.
 set -e
-bashio::log.info "Vome add-on running (integration installer). Companions TBD."
-exec sleep infinity
+
+export VOME_PANEL_PORT="${VOME_PANEL_PORT:-8099}"
+export VOME_PANEL_STATIC="/usr/share/vome/panel/static"
+
+bashio::log.info "Starting Vome control panel on :${VOME_PANEL_PORT}"
+exec python3 /usr/share/vome/panel/server.py

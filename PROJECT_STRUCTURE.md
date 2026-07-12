@@ -71,8 +71,10 @@ VomeSync/
 ### Official Home Assistant Add-on
 - Location: `addons/vome/` (+ `addons/repository.yaml` for the Add-on Store)
 - Installs the shared `custom_components/vomesync` tree (staged by `addons/vome/build.sh`)
+- Ingress tree control panel for remote access + LAN tunnels (same services as HACS options)
+- CI/release: `jenkins/pipelines/Jenkinsfile.vome-addon-ci` and `Jenkinsfile.vome-addon-release`, wired in VomeHome `jenkins/casc.yaml` as `VomeSync/vome-addon-ci` / `vome-addon-release`
 - Future: Guacamole / other companions as extra s6 services in the same add-on
-- HACS remains the light path for switches + relay; the add-on is the full packaging path
+- HACS remains the light path for switches + relay; the add-on is the full packaging + control UI path
 
 ### LAN path tunnels
 - Friendly-domain paths `/t/<slug>/…` → LAN `host:port` (see `lan_routes.py`)

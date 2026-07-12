@@ -1,0 +1,121 @@
+// =============================================================================
+// Vome Supervisor add-on — Release packaging (VomeSync repo)
+//
+// Stages the shared integration, builds a distributable ZIP of the add-on
+// (config + rootfs + panel + staged integration), and archives it in Jenkins.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    parameters {
+        string(
+            name: 'RELEASE_TAG',
+            defaultValue: '',
+            description: 'Optional release label (example: v0.2.0). Leave empty to use config.yaml version.'
+        )
+    }
+
+    options {
+        ansiColor('xterm')
+        timestamps()
+        timeout(time: 25, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    stages {
+        stage('Validate') {
+            steps {
+                sh '''
+                    test -f addons/vome/config.yaml
+                    test -f addons/vome/Dockerfile
+                    test -f addons/vome/build.sh
+                    test -f addons/vome/panel/server.py
+                    test -f custom_components/vomesync/manifest.json
+                    test -f custom_components/vomesync/services_remote.py
+                '''
+            }
+        }
+
+        stage('Stage + Test') {
+            steps {
+                sh '''
+                    chmod +x addons/vome/build.sh
+                    ./addons/vome/build.sh
+
+                    python3.11 -m venv .venv-addon
+                    . .venv-addon/bin/activate
+                    python -m pip install --upgrade pip
+                    pip install -r hacs-addon/tests/requirements.txt
+                    python -m pytest \
+                        hacs-addon/tests/test_lan_routes.py \
+                        --tb=short -q \
+                        --junitxml=junit-vome-addon-release.xml
+                '''
+            }
+            post {
+                always {
+                    junit 'junit-vome-addon-release.xml'
+                }
+            }
+        }
+
+        stage('Build Release Artifact') {
+            steps {
+                sh '''
+                    python3 - <<'PY'
+                    import os
+                    import pathlib
+                    import re
+                    import zipfile
+
+                    addon_root = pathlib.Path("addons/vome")
+                    config_text = (addon_root / "config.yaml").read_text(encoding="utf-8")
+                    match = re.search(r'^version:\\s*"([^"]+)"', config_text, re.M)
+                    config_version = match.group(1) if match else "0.0.0"
+                    release_tag = os.getenv("RELEASE_TAG", "").strip() or f"v{config_version}"
+
+                    dist_dir = pathlib.Path("dist")
+                    dist_dir.mkdir(exist_ok=True)
+                    artifact_path = dist_dir / f"vome-addon-{release_tag}.zip"
+
+                    skip_dirs = {"__pycache__", ".git"}
+                    skip_names = {".gitignore"}
+
+                    with zipfile.ZipFile(artifact_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for path in addon_root.rglob("*"):
+                            if any(part in skip_dirs for part in path.parts):
+                                continue
+                            if path.name in skip_names or path.suffix == ".pyc":
+                                continue
+                            if path.is_file():
+                                zf.write(path, path.relative_to(addon_root.parent))
+                        # Include repository index next to the add-on for Store installs
+                        repo = pathlib.Path("addons/repository.yaml")
+                        if repo.is_file():
+                            zf.write(repo, "addons/repository.yaml")
+
+                    (dist_dir / "vome-addon-release.txt").write_text(
+                        f"tag={release_tag}\\nconfig_version={config_version}\\nartifact={artifact_path.name}\\n",
+                        encoding="utf-8",
+                    )
+                    print(f"Built: {artifact_path}")
+                    PY
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            archiveArtifacts artifacts: 'dist/vome-addon-*.zip,dist/vome-addon-release.txt', fingerprint: true
+            echo 'Vome add-on release artifact created and archived.'
+        }
+        failure {
+            echo 'Vome add-on release pipeline failed.'
+        }
+        cleanup {
+            cleanWs()
+        }
+    }
+}

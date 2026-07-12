@@ -1,0 +1,140 @@
+// =============================================================================
+// Vome Supervisor add-on — CI Pipeline (VomeSync repo)
+//
+// Stages the shared integration, validates add-on packaging, and runs the
+// LAN-route / relay tests that the add-on control panel depends on.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    options {
+        ansiColor('xterm')
+        timestamps()
+        timeout(time: 20, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    parameters {
+        booleanParam(
+            name: 'FORCE_RUN',
+            defaultValue: false,
+            description: 'Run add-on checks even when files outside addons/vome (and related paths) did not change'
+        )
+    }
+
+    environment {
+        RUN_ADDON_PIPELINE = 'true'
+    }
+
+    stages {
+        stage('Scope Check') {
+            steps {
+                script {
+                    def forceRun = (params.FORCE_RUN ?: false)
+                    def changedFiles = []
+                    def firstBuild = (currentBuild.number == 1)
+
+                    for (def changeSet in currentBuild.changeSets) {
+                        for (def entry in changeSet.items) {
+                            for (def file in entry.affectedFiles) {
+                                changedFiles << file.path
+                            }
+                        }
+                    }
+
+                    def addonChanged = changedFiles.any { path ->
+                        path.startsWith('addons/vome/') ||
+                        path.startsWith('custom_components/vomesync/') ||
+                        path == 'addons/repository.yaml' ||
+                        path == 'jenkins/pipelines/Jenkinsfile.vome-addon-ci' ||
+                        path == 'jenkins/pipelines/Jenkinsfile.vome-addon-release'
+                    }
+
+                    if (forceRun || addonChanged || firstBuild) {
+                        env.RUN_ADDON_PIPELINE = 'true'
+                        echo "Vome add-on CI enabled (force=${forceRun}, addonChanged=${addonChanged}, firstBuild=${firstBuild}, changedFiles=${changedFiles.size()})"
+                    } else {
+                        env.RUN_ADDON_PIPELINE = 'false'
+                        currentBuild.description = 'No add-on-related changes'
+                        echo 'No Vome add-on related file changes detected. Skipping.'
+                    }
+                }
+            }
+        }
+
+        stage('Stage integration') {
+            when {
+                expression { env.RUN_ADDON_PIPELINE == 'true' }
+            }
+            steps {
+                sh '''
+                    test -f addons/vome/build.sh
+                    test -f addons/vome/config.yaml
+                    test -f addons/vome/Dockerfile
+                    test -f addons/vome/panel/server.py
+                    chmod +x addons/vome/build.sh
+                    ./addons/vome/build.sh
+                    test -f addons/vome/staged_integration/manifest.json
+                    test -f addons/vome/staged_integration/lan_routes.py
+                    test -f addons/vome/staged_integration/services_remote.py
+                    python3 -m py_compile addons/vome/panel/server.py
+                    python3 -m py_compile addons/vome/staged_integration/lan_routes.py
+                    python3 -m py_compile addons/vome/staged_integration/services_remote.py
+                    echo "── staged integration file count ──"
+                    find addons/vome/staged_integration -type f | wc -l
+                '''
+            }
+        }
+
+        stage('Setup') {
+            when {
+                expression { env.RUN_ADDON_PIPELINE == 'true' }
+            }
+            steps {
+                sh '''
+                    python3.11 -m venv .venv-addon
+                    . .venv-addon/bin/activate
+                    python -m pip install --upgrade pip
+                    pip install -r hacs-addon/tests/requirements.txt
+                '''
+            }
+        }
+
+        stage('Test') {
+            when {
+                expression { env.RUN_ADDON_PIPELINE == 'true' }
+            }
+            steps {
+                sh '''
+                    . .venv-addon/bin/activate
+                    python -m pytest \
+                        hacs-addon/tests/test_lan_routes.py \
+                        hacs-addon/tests/test_relay_client.py \
+                        --tb=short -q \
+                        --junitxml=junit-vome-addon.xml
+                '''
+            }
+            post {
+                always {
+                    junit 'junit-vome-addon.xml'
+                }
+            }
+        }
+
+        stage('Skipped') {
+            when {
+                expression { env.RUN_ADDON_PIPELINE != 'true' }
+            }
+            steps {
+                echo 'No Vome add-on changes in this push. Nothing to test.'
+            }
+        }
+    }
+
+    post {
+        success { echo '✓ Vome add-on CI passed.' }
+        failure { echo '✗ Vome add-on CI failed.' }
+        cleanup { cleanWs() }
+    }
+}

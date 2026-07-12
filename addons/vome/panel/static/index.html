@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Vome</title>
+	<link rel="stylesheet" href="static/styles.css">
+</head>
+<body>
+	<aside class="tree" aria-label="Vome navigation">
+		<div class="brand">Vome</div>
+		<nav>
+			<button type="button" class="tree-item active" data-view="overview">Overview</button>
+			<details open>
+				<summary>Remote access</summary>
+				<button type="button" class="tree-item" data-view="forward">Home Assistant UI</button>
+				<button type="button" class="tree-item" data-view="lan">LAN tunnels</button>
+			</details>
+			<details open>
+				<summary>Account</summary>
+				<button type="button" class="tree-item" data-view="link">Link status</button>
+			</details>
+			<button type="button" class="tree-item" data-view="about">About</button>
+		</nav>
+	</aside>
+	<main>
+		<header class="top">
+			<h1 id="view-title">Overview</h1>
+			<button type="button" id="btn-refresh" class="ghost">Refresh</button>
+		</header>
+		<p id="banner" class="banner hidden" role="status"></p>
+		<section id="view" class="view"></section>
+	</main>
+	<script src="static/app.js"></script>
+</body>
+</html>

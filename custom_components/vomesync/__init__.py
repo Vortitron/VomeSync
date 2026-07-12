@@ -203,6 +203,9 @@ def _register_services(hass: HomeAssistant) -> None:
 		}),
 	)
 
+	from .services_remote import async_register_remote_services
+	async_register_remote_services(hass)
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	"""Unload a config entry."""
