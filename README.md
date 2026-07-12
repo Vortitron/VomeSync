@@ -42,15 +42,14 @@ VomeSync consists of four main components:
 - **Features**: SSL termination, load balancing, monitoring
 - **Management**: Automated deployment scripts
 
-### 5. (Planned) **Official Home Assistant Add-on**
-- **Status**: Planned – not yet implemented
-- **Purpose**: Optional, non-HACS installation path that bundles a small companion service and auto-configures the integration
-- **Why**: Broader availability for users without HACS; one-click install via Add-on Store (custom repo initially)
-- **High-level design**:
-  - Lightweight container acting as a proxy/utility (optional), health checks, and onboarding helper
-  - Installs/links the VomeSync integration via config flow (no business logic duplication)
-  - Exposes useful diagnostics and status page
-- **Notes**: We will avoid duplicating integration logic. The integration remains the primary interface; the add-on is an optional convenience layer.
+### 5. **Official Home Assistant Add-on** (`/addons/vome/`)
+- **Status**: Scaffolded — installs the shared integration; companions TBD
+- **Purpose**: Supervisor install path without HACS; future home for heavier sidecars (e.g. browser RDP / Guacamole)
+- **Design**:
+  - `build.sh` stages `custom_components/vomesync` into the image (same code HACS uses — no fork)
+  - On start, copies the integration into `/config/custom_components/vomesync` and writes `/config/vome/addon.marker`
+  - LAN `/t/<slug>/` tunnels live in the shared integration (options UI), not duplicated in the add-on
+- **Notes**: Add the repo via Add-on Store → Repositories (`addons/repository.yaml`). Run `./build.sh` before building the image.
 
 This README outlines the architecture, setup, and user flow for developers, contributors, and users.
 The project is maintained by Vortitron, with monetization via subscriptions for premium features.

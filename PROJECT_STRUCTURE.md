@@ -68,13 +68,16 @@ VomeSync/
 
 ## Planned Components
 
-### Official Home Assistant Add-on (Planned)
-- We plan to add an optional official add-on to complement the HACS integration.
-- Purpose: provide a non-HACS installation path and improved onboarding/diagnostics.
-- Scope (tentative):
-  - Containerised helper that surfaces status/health and assists with config flow.
-  - No duplication of integration logic (the integration remains the source of truth).
-  - Distributed initially via a custom add-on repository; target official store later.
+### Official Home Assistant Add-on
+- Location: `addons/vome/` (+ `addons/repository.yaml` for the Add-on Store)
+- Installs the shared `custom_components/vomesync` tree (staged by `addons/vome/build.sh`)
+- Future: Guacamole / other companions as extra s6 services in the same add-on
+- HACS remains the light path for switches + relay; the add-on is the full packaging path
+
+### LAN path tunnels
+- Friendly-domain paths `/t/<slug>/…` → LAN `host:port` (see `lan_routes.py`)
+- Configured in integration options when linked to Vome Home
+- Independent of full-UI HA forwarding
 
 ## Component Overview
 

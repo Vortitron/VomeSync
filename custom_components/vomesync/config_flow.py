@@ -16,6 +16,7 @@ from homeassistant.helpers.selector import selector
 from .api_client import VomeSyncAPIClient, VomeSyncAPIError
 from .options_flow_links import VomeSyncOptionsFlowLinkEntitiesMixin
 from .options_flow_relay import VomeSyncOptionsFlowRelayMixin
+from .options_flow_lan import VomeSyncOptionsFlowLanMixin
 from .const import (
 	DOMAIN,
 	CONF_PERSONAL_KEY,
@@ -300,6 +301,7 @@ class VomeSyncOptionsFlow(
 	config_entries.OptionsFlow,
 	VomeSyncOptionsFlowLinkEntitiesMixin,
 	VomeSyncOptionsFlowRelayMixin,
+	VomeSyncOptionsFlowLanMixin,
 ):
 	"""Handle options flow for VomeSync."""
 
@@ -569,7 +571,11 @@ class VomeSyncOptionsFlow(
 		menu_options = ["create_switch", "subscribe_switch", "manage_switches"]
 		# Connecting this HA to a Vome account is a headline feature — keep it
 		# top-level rather than buried in "More…".
-		menu_options.append("unlink_vome" if self._relay_is_linked() else "link_vome")
+		if self._relay_is_linked():
+			menu_options.append("remote_access")
+			menu_options.append("unlink_vome")
+		else:
+			menu_options.append("link_vome")
 		menu_options.append("more")
 		return self.async_show_menu(
 			step_id="init",

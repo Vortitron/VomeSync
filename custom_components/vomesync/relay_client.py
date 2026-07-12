@@ -43,6 +43,7 @@ from .const import (
 	CONF_RELAY,
 	CONF_RELAY_ESPHOME_URL,
 	CONF_RELAY_FORWARD_UI,
+	CONF_RELAY_LAN_ROUTES,
 	CONF_RELAY_LOCAL_TOKEN,
 	CONF_RELAY_LOCAL_URL,
 	CONF_RELAY_SECRET,
@@ -67,10 +68,11 @@ from .const import (
 	RELAY_FORWARD_WS_PATHS,
 	RELAY_RECONNECT_DELAY,
 	RELAY_RECONNECT_MAX_DELAY,
-	LOVELACE_WS_ALLOWED_COMMANDS,
 	RELAY_RPC_TARGET_ESPHOME,
 	RELAY_RPC_TARGET_WEBSOCKET,
 	RELAY_RPC_TIMEOUT,
+	RELAY_WS_MAX_COMMAND_BYTES,
+	WS_COMMAND_TYPE_RE,
 	RELAY_WS_MSG_HA_RPC,
 	RELAY_WS_MSG_HA_RPC_RESPONSE,
 	RELAY_WS_MSG_HELLO,
@@ -85,6 +87,14 @@ from .const import (
 	SUPERVISOR_ADDON_INFO_URL,
 	SUPERVISOR_ADDONS_URL,
 	SUPERVISOR_TOKEN_ENV,
+)
+from .lan_routes import (
+	find_route,
+	normalise_routes,
+	parse_lan_path,
+	rewrite_response_headers,
+	route_allows_websocket,
+	route_base_url,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -216,6 +226,7 @@ class RelayClient:
 		local_url: Optional[str] = None,
 		esphome_url: Optional[str] = None,
 		forward_ui: bool = False,
+		lan_routes: Optional[list] = None,
 		session: Optional[aiohttp.ClientSession] = None,
 	) -> None:
 		self._hass = hass
@@ -228,6 +239,8 @@ class RelayClient:
 		# Full-UI forwarding is opt-in: it brokers the whole browser session, not
 		# just the scoped /api surface, so the owner must enable it deliberately.
 		self._forward_ui = bool(forward_ui)
+		# Path→LAN tunnels (``/t/<slug>/…``).  Independent of forward_ui.
+		self._lan_routes = normalise_routes(lan_routes)
 		# Cache for the auto-discovered ESPHome dashboard base (Supervisor installs).
 		self._esphome_base_cache: Optional[str] = None
 		self._session = session
@@ -380,13 +393,60 @@ class RelayClient:
 		``status`` is 0 on a local failure so the backend surfaces a 502.  Local
 		redirects are returned verbatim (``allow_redirects=False``) so the browser
 		follows them within the friendly domain.
+
+		Paths under ``/t/<slug>/`` go to a configured LAN target (independent of
+		``forward_ui``).  Everything else requires full-UI forwarding to local HA.
 		"""
-		if not self._forward_ui:
-			return 0, None, None, "Full-UI forwarding is disabled for this Home Assistant."
 		method = str(data.get("method") or "GET").upper()
 		path = data.get("path")
 		if not isinstance(path, str) or not path.startswith("/"):
 			return 0, None, None, "Refusing to proxy a non-absolute path."
+
+		lan = parse_lan_path(path)
+		if lan is not None:
+			return await self._execute_lan_http_proxy(method, lan[0], lan[1], data)
+
+		if not self._forward_ui:
+			return 0, None, None, "Full-UI forwarding is disabled for this Home Assistant."
+		return await self._proxy_http_to(
+			method, self._local_url.rstrip("/") + path, data,
+			error_timeout="Local Home Assistant timed out.",
+			error_client="Local Home Assistant error",
+		)
+
+	async def _execute_lan_http_proxy(
+		self,
+		method: str,
+		slug: str,
+		remainder: str,
+		data: dict,
+	) -> tuple[int, Optional[list], Optional[str], Optional[str]]:
+		"""Proxy one request to a configured LAN route under ``/t/<slug>/``."""
+		route = find_route(self._lan_routes, slug)
+		if route is None:
+			return 0, None, None, f"No LAN route configured for '{slug}'."
+		base = route_base_url(route)
+		if not base:
+			return 0, None, None, f"LAN route '{slug}' has an invalid host/port."
+		status, headers, body_b64, error = await self._proxy_http_to(
+			method, base.rstrip("/") + remainder, data,
+			error_timeout=f"LAN target '{slug}' timed out.",
+			error_client=f"LAN target '{slug}' error",
+		)
+		if headers is not None:
+			headers = rewrite_response_headers(headers, slug=slug, route=route)
+		return status, headers, body_b64, error
+
+	async def _proxy_http_to(
+		self,
+		method: str,
+		url: str,
+		data: dict,
+		*,
+		error_timeout: str,
+		error_client: str,
+	) -> tuple[int, Optional[list], Optional[str], Optional[str]]:
+		"""Shared HTTP forward to ``url`` (local HA or a LAN device)."""
 		req_headers = {
 			name: value for name, value in _normalise_header_input(data.get("headers"))
 			if name.lower() not in RELAY_FORWARD_STRIP_HEADERS
@@ -400,7 +460,6 @@ class RelayClient:
 				return 0, None, None, "Malformed request body."
 			if len(body) > RELAY_FORWARD_MAX_BODY:
 				return 0, None, None, "Request body too large."
-		url = self._local_url.rstrip("/") + path
 		session = self._get_session()
 		try:
 			async with session.request(
@@ -416,9 +475,9 @@ class RelayClient:
 				out_headers = _filter_forward_headers(resp.headers.items())
 				return resp.status, out_headers, base64.b64encode(raw).decode("ascii"), None
 		except asyncio.TimeoutError:
-			return 0, None, None, "Local Home Assistant timed out."
+			return 0, None, None, error_timeout
 		except aiohttp.ClientError as err:
-			return 0, None, None, f"Local Home Assistant error: {err}"
+			return 0, None, None, f"{error_client}: {err}"
 
 	# ── Full-UI forwarding: frontend WebSocket bridge ───────────────────────
 
@@ -427,13 +486,17 @@ class RelayClient:
 		socket_id = data.get("socketId")
 		if not socket_id:
 			return
+		path = data.get("path") or "/api/websocket"
+		lan = parse_lan_path(path)
+		if lan is not None:
+			await self._handle_lan_ws_open(ws, socket_id, lan[0], lan[1])
+			return
 		if not self._forward_ui:
 			await self._send(ws, {
 				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
 				"code": 1008, "reason": "Full-UI forwarding is disabled.",
 			})
 			return
-		path = data.get("path") or "/api/websocket"
 		# Only the frontend's own socket is bridgeable; refuse anything else
 		# (exact match on the path portion, not a spoofable prefix).
 		portion = _safe_path_portion(str(path))
@@ -443,10 +506,41 @@ class RelayClient:
 				"code": 1008, "reason": "WebSocket path not permitted.",
 			})
 			return
+		await self._open_bridged_ws(ws, socket_id, _to_ws_url(self._local_url, path))
+
+	async def _handle_lan_ws_open(
+		self,
+		ws: aiohttp.ClientWebSocketResponse,
+		socket_id: str,
+		slug: str,
+		remainder: str,
+	) -> None:
+		"""Open a WebSocket to a configured LAN route under ``/t/<slug>/``."""
+		route = find_route(self._lan_routes, slug)
+		if route is None or not route_allows_websocket(route):
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1008, "reason": f"LAN WebSocket not permitted for '{slug}'.",
+			})
+			return
+		base = route_base_url(route)
+		if not base:
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1008, "reason": f"LAN route '{slug}' is invalid.",
+			})
+			return
+		await self._open_bridged_ws(ws, socket_id, _to_ws_url(base, remainder))
+
+	async def _open_bridged_ws(
+		self,
+		ws: aiohttp.ClientWebSocketResponse,
+		socket_id: str,
+		local_url: str,
+	) -> None:
+		"""Connect to ``local_url`` and register the pump for this bridge."""
 		try:
-			local = await self._get_session().ws_connect(
-				_to_ws_url(self._local_url, path), heartbeat=30,
-			)
+			local = await self._get_session().ws_connect(local_url, heartbeat=30)
 		except (aiohttp.ClientError, asyncio.TimeoutError) as err:
 			await self._send(ws, {
 				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
@@ -564,12 +658,18 @@ class RelayClient:
 	async def _execute_websocket(
 		self, command: Any
 	) -> tuple[int, Optional[str], Optional[str]]:
-		"""Run one allowlisted HA WebSocket command (Lovelace dashboards)."""
+		"""Run one HA WebSocket command (portal validates scope before dispatch)."""
 		if not isinstance(command, dict):
 			return 0, None, "WebSocket command must be a JSON object."
 		cmd_type = command.get("type")
-		if not isinstance(cmd_type, str) or cmd_type not in LOVELACE_WS_ALLOWED_COMMANDS:
-			return 0, None, "Refusing to execute a non-allowlisted WebSocket command."
+		if not isinstance(cmd_type, str) or not WS_COMMAND_TYPE_RE.match(cmd_type):
+			return 0, None, "Refusing to execute a malformed WebSocket command."
+		try:
+			raw = json.dumps(command)
+		except (TypeError, ValueError):
+			return 0, None, "WebSocket command must be JSON-serialisable."
+		if len(raw) > RELAY_WS_MAX_COMMAND_BYTES:
+			return 0, None, "WebSocket command too large."
 		base, token = self._resolve_local()
 		if not token:
 			return 0, None, (
@@ -865,6 +965,7 @@ async def async_start_relay(hass: HomeAssistant, entry) -> None:
 		local_url=relay.get(CONF_RELAY_LOCAL_URL),
 		esphome_url=relay.get(CONF_RELAY_ESPHOME_URL),
 		forward_ui=bool(relay.get(CONF_RELAY_FORWARD_UI)),
+		lan_routes=relay.get(CONF_RELAY_LAN_ROUTES),
 	)
 	hass.data.setdefault(DOMAIN, {}).setdefault(_RELAYS_KEY, {})[entry.entry_id] = client
 	client.start()

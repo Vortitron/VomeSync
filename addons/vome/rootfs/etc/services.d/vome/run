@@ -1,0 +1,6 @@
+#!/command/with-contenv bashio
+# Keep the add-on container alive.  Future companions (e.g. browser RDP /
+# Guacamole) will run as additional s6 services alongside this placeholder.
+set -e
+bashio::log.info "Vome add-on running (integration installer). Companions TBD."
+exec sleep infinity

@@ -1,4 +1,5 @@
 """Constants for VomeSync integration."""
+import re
 
 # Integration domain
 DOMAIN = "vomesync"
@@ -37,6 +38,10 @@ CONF_RELAY_ESPHOME_URL = "esphome_url"  # optional explicit ESPHome dashboard ba
 # assistant uses.  The owner opts in explicitly; Vome still gates who may reach
 # the address (login + active subscription) before any byte is tunnelled.
 CONF_RELAY_FORWARD_UI = "forward_ui"
+# Path-based LAN tunnels on the same friendly domain: ``/t/<slug>/…`` is
+# proxied to a configured LAN host:port.  List of route dicts (see lan_routes.py).
+# Independent of forward_ui — you can expose a NAS without opening the HA UI.
+CONF_RELAY_LAN_ROUTES = "lan_routes"
 
 # The portal (account / device-authorisation) lives on vome.io; the relay
 # WebSocket lives on sync.vome.io.  The portal tells us the WS URL at link time.
@@ -112,6 +117,11 @@ LOVELACE_WS_WRITE_COMMANDS = frozenset({
 	"lovelace/dashboards/update",
 })
 LOVELACE_WS_ALLOWED_COMMANDS = LOVELACE_WS_READ_COMMANDS | LOVELACE_WS_WRITE_COMMANDS
+
+# Portal validates scope before dispatch; the relay accepts any well-formed HA
+# WebSocket command type (full mode for registries, etc.).
+WS_COMMAND_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*/[a-z0-9_./-]{0,120}$")
+RELAY_WS_MAX_COMMAND_BYTES = 2_000_000
 
 # ESPHome dashboard: discovered via the Supervisor add-on API on HAOS / Supervised
 # installs, or set explicitly (CONF_RELAY_ESPHOME_URL).  Only the REST subset is

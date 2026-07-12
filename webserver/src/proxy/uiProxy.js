@@ -9,6 +9,7 @@
  * a home behind the relay.  The flow:
  *
  *   browser ──HTTPS/WSS──▶ nginx (*.home.vome.io) ──▶ this proxy ──relay WS──▶ component ──▶ HA
+ *                                                                          └──────────────▶ LAN /t/<slug>/
  *
  * HTTP: each request is buffered and handed to relayManager.forwardHttp, then the
  * component's response (status + headers + base64 body) is written back verbatim.
@@ -262,7 +263,10 @@ function createUiProxy(deps = {}) {
 
 	async function handleUpgrade(req, socket, head) {
 		const pathname = (req.url || '').split('?')[0];
-		if (pathname !== '/api/websocket') {
+		// HA frontend socket, or a LAN-tunnel WebSocket under /t/<slug>/…
+		const isHaFrontend = pathname === '/api/websocket';
+		const isLanTunnel = /^\/t\/[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?(?:\/|$)/.test(pathname);
+		if (!isHaFrontend && !isLanTunnel) {
 			abortUpgrade(socket, 404, 'Not found');
 			return;
 		}

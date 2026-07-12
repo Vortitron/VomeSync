@@ -368,6 +368,19 @@ describe('uiProxy.handleUpgrade', () => {
 		expect(socket.written).toContain('404');
 	});
 
+	test('admits a LAN-tunnel WebSocket path past the path gate (auth still applies)', async () => {
+		const proxy = createUiProxy({
+			relayManager: { isConnected: () => false },
+			verifyAccessToken: () => ({ serverId: 'rly-1' }),
+			fetchForwardPolicy: async () => null
+		});
+		const socket = fakeSocket();
+		await proxy.handleUpgrade(
+			fakeReq({ url: '/t/nas/ws', headers: { host: 'h.vome.io' } }), socket, Buffer.alloc(0));
+		// Path allowed; home offline → 502 (not 404).
+		expect(socket.written).toContain('502');
+	});
+
 	test('aborts with 502 when the home is offline', () => {
 		const proxy = createUiProxy({ relayManager: { isConnected: () => false }, verifyAccessToken: () => ({ serverId: 'rly-1' }) });
 		const socket = fakeSocket();

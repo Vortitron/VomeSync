@@ -150,13 +150,34 @@ class TestExecute:
 		session.ws_connect.assert_called_once()
 
 	@pytest.mark.asyncio
-	async def test_websocket_rejects_non_allowlisted_command(self):
-		session, _ = _mock_session_with_response()
+	async def test_websocket_registry_list_allowed(self):
+		fake_ws = AsyncMock()
+		fake_ws.receive_json = AsyncMock(side_effect=[
+			{"type": "auth_required"},
+			{"type": "auth_ok"},
+			{"type": "result", "id": 1, "success": True, "result": [{"area_id": "kitchen"}]},
+		])
+		fake_ws.send_json = AsyncMock()
+		fake_cm = MagicMock()
+		fake_cm.__aenter__ = AsyncMock(return_value=fake_ws)
+		fake_cm.__aexit__ = AsyncMock(return_value=False)
+		session = AsyncMock(spec=aiohttp.ClientSession)
+		session.ws_connect = MagicMock(return_value=fake_cm)
 		client = _client(session, local_token="llt")
 		status, body, error = await client.execute(
 			None, None, {"type": "config/area_registry/list"}, target="websocket"
 		)
-		assert status == 0 and "allowlisted" in error
+		assert status == 200 and error is None
+		assert json.loads(body) == [{"area_id": "kitchen"}]
+
+	@pytest.mark.asyncio
+	async def test_websocket_rejects_malformed_command(self):
+		session, _ = _mock_session_with_response()
+		client = _client(session, local_token="llt")
+		status, body, error = await client.execute(
+			None, None, {"type": "not valid"}, target="websocket"
+		)
+		assert status == 0 and "malformed" in error
 		session.ws_connect.assert_not_called()
 
 	@pytest.mark.asyncio
