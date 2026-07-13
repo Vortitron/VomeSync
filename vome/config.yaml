@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome
-version: "0.2.1"
+version: "0.2.2"
 slug: vome
 description: >
   Installs the shared Vome integration (same code as HACS) and serves a tree-view
@@ -10,7 +10,6 @@ url: https://github.com/Vortitron/VomeSync
 arch:
   - aarch64
   - amd64
-  - armv7
 init: false
 homeassistant_api: true
 hassio_api: true
