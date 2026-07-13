@@ -1,0 +1,3 @@
+# Local-only artefacts — the vendored custom_components/ tree IS committed
+# (Supervisor builds from GitHub need it inside this folder).
+staged_integration/

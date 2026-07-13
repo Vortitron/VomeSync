@@ -13,7 +13,7 @@ import zipfile
 
 
 def main() -> None:
-	addon_root = pathlib.Path("addons/vome")
+	addon_root = pathlib.Path("vome")
 	config_text = (addon_root / "config.yaml").read_text(encoding="utf-8")
 	match = re.search(r'^version:\s*"([^"]+)"', config_text, re.M)
 	config_version = match.group(1) if match else "0.0.0"
@@ -34,10 +34,9 @@ def main() -> None:
 				continue
 			if path.is_file():
 				zf.write(path, path.relative_to(addon_root.parent))
-		# Include repository index next to the add-on for Store installs
-		repo = pathlib.Path("addons/repository.yaml")
+		repo = pathlib.Path("repository.yaml")
 		if repo.is_file():
-			zf.write(repo, "addons/repository.yaml")
+			zf.write(repo, "repository.yaml")
 
 	(dist_dir / "vome-addon-release.txt").write_text(
 		f"tag={release_tag}\nconfig_version={config_version}\nartifact={artifact_path.name}\n",

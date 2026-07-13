@@ -2,10 +2,10 @@
 ARG BUILD_FROM
 FROM $BUILD_FROM
 
-# Integration sources are staged next to this Dockerfile by build.sh
-# (copied from ../../custom_components/vomesync — single source of truth).
+# custom_components/vomesync is synced from the repo root by build.sh / CI and
+# must be present in git — Supervisor builds with this folder as the context.
 COPY rootfs /
-COPY staged_integration/ /usr/share/vome/custom_components/vomesync/
+COPY custom_components/vomesync/ /usr/share/vome/custom_components/vomesync/
 COPY panel/ /usr/share/vome/panel/
 
 RUN chmod +x \

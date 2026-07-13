@@ -42,15 +42,15 @@ VomeSync consists of four main components:
 - **Features**: SSL termination, load balancing, monitoring
 - **Management**: Automated deployment scripts
 
-### 5. **Official Home Assistant Add-on** (`/addons/vome/`)
-- **Status**: Scaffolded — shared integration install + ingress tree control panel
-- **Purpose**: Supervisor install path without HACS; clearer remote-access / LAN UI; future home for heavier sidecars (e.g. browser RDP / Guacamole)
+### 5. **Official Home Assistant Add-on** (`/vome/` + root `repository.yaml`)
+- **Status**: Store-ready layout — shared integration vendored into the add-on folder
+- **Purpose**: Supervisor install path without HACS; clearer remote-access / LAN UI; future companions
+- **Add-on Store URL**: `https://github.com/Vortitron/VomeSync` (requires `repository.yaml` at repo root)
 - **Design**:
-  - `build.sh` stages `custom_components/vomesync` into the image (same code HACS uses — no fork)
-  - On start, copies the integration into `/config/custom_components/vomesync` and writes `/config/vome/addon.marker`
-  - Ingress panel (`panel/`) calls shared services (`get_remote_status`, `set_forward_ui`, `add_lan_route`, …)
-  - Jenkins: `VomeSync/vome-addon-ci` + `VomeSync/vome-addon-release` (declared in VomeHome `jenkins/casc.yaml`)
-- **Notes**: Add the repo via Add-on Store → Repositories (`addons/repository.yaml`). Run `./build.sh` before building the image.
+  - `vome/build.sh` syncs `custom_components/vomesync` → `vome/custom_components/vomesync` (committed; Supervisor build context cannot see the parent tree)
+  - Ingress panel for remote access / LAN tunnels
+  - MCP: `ha_addon_install_vome` (+ `ha_supervisor_api`) on Supervised/HAOS targets
+  - Jenkins: `VomeSync/vome-addon-ci` + `VomeSync/vome-addon-release`
 
 This README outlines the architecture, setup, and user flow for developers, contributors, and users.
 The project is maintained by Vortitron, with monetization via subscriptions for premium features.

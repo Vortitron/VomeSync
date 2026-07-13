@@ -1,0 +1,426 @@
+{
+	"config": {
+		"step": {
+			"user": {
+				"title": "Set up Vome",
+				"description": "Vome uses **keypair authentication** with a locally stored signing key.\n\nUse **Generate new user key** to create a fresh signing key, or untick to paste an existing one after submit. After setup, back up the signing key from **More → Backup signing key**.\n\n⚠️ Anyone with the UID can view switch state and activity in Public mode.",
+				"data": {
+					"uid": "Switch UID or uid/key (optional)",
+					"generate_new_key": "Generate new user key",
+					"use_default_urls": "Default URLs (sync.vome.io)",
+					"server_url": "Server URL",
+					"websocket_url": "WebSocket URL (optional)",
+					"crypto_seed": "Signing key (private)"
+				}
+			},
+			"generate_key": {
+				"title": "Generate a personal key",
+				"description": "Tick consent to create and store a personal key on the Vome server for authentication. You can delete it later from the integration options (GDPR delete key).",
+				"data": {
+					"consent": "I consent to storing a personal key on the Vome server for authentication."
+				}
+			}
+		},
+		"error": {
+			"invalid_key": "The personal key is invalid.",
+			"generate_key_failed": "Could not generate a personal key. Check network access to the server.",
+			"switch_not_found": "Switch UID not found.",
+			"invalid_uid": "UID must be a valid switch UID.",
+			"missing_signing_key": "Enter your signing key or tick Generate new user key.",
+			"missing_server_url": "Enter a server URL or tick Default URLs."
+		}
+	},
+	"options": {
+		"step": {
+			"init": {
+				"title": "Manage Vome",
+				"menu_options": {
+					"create_switch": "➕ Create switch",
+					"subscribe_switch": "👁️ Subscribe to switch",
+					"manage_switches": "🛠️ Manage switches",
+					"link_vome": "🏠 Connect to Vome Home",
+					"unlink_vome": "🔌 Disconnect from Vome Home",
+					"remote_access": "🌐 Remote access & LAN tunnels",
+					"more": "⋯ More"
+				}
+			},
+			"more": {
+				"title": "More",
+				"menu_options": {
+					"backup_signing_key": "🔐 Backup signing key",
+					"import_switches": "⬇️ Import switches from API",
+					"reannounce_owned_switches": "📣 Re-announce owned switches",
+					"cleanup_orphaned_devices": "🧹 Clean up orphaned devices",
+					"edit_connection": "⚙️ Edit connection URLs",
+					"back": "← Back"
+				}
+			},
+			"backup_signing_key": {
+				"title": "Backup signing key",
+				"description": "{info}"
+			},
+			"import_switches": {
+				"title": "Import switches",
+				"description": "{info}",
+				"data": {
+					"switches": "Select switches to import"
+				}
+			},
+			"create_switch": {
+				"title": "Create a switch",
+				"description": "{error}",
+				"data": {
+					"name": "Name",
+					"description": "Description (optional)",
+					"location": "Location (optional, think opsec: city only)",
+					"category": "Category",
+					"publicize": "List on sync.Vome.io",
+					"advanced_fields": "Add optional website fields (link/icon/banner)",
+					"show_signing_key_after": "View signing key after creating this switch"
+				},
+				"data_description": {
+					"publicize": "If not listed it is still viewable by anyone with its Unique Key (UID).",
+					"show_signing_key_after": "The switch is linked to your key, Keep your key safe, we cannot recover it if you lose it."
+				}
+			},
+			"confirm_backup_signing_key": {
+				"title": "Backup signing key",
+				"description": "Before creating switches, back up your signing key.",
+				"menu_options": {
+					"reveal_signing_key": "Show signing key",
+					"confirm_backup_signing_key_done": "I have backed up my signing key"
+				}
+			},
+			"reveal_signing_key": {
+				"title": "Backup signing key",
+				"description": "{info}",
+				"data": {
+					"confirmed": "I have backed up my signing key"
+				}
+			},
+			"post_create_signing_key": {
+				"title": "Backup signing key",
+				"description": "{info}"
+			},
+			"create_switch_advanced": {
+				"title": "Create a switch (website fields)",
+				"description": "{info}",
+				"data": {
+					"link": "Link (optional)",
+					"icon_url": "Icon URL (optional)",
+					"banner_url": "Banner URL (optional)",
+					"captcha_token": "CAPTCHA token (optional)"
+				}
+			},
+			"subscribe_switch": {
+				"title": "Subscribe to a switch",
+				"description": "Enter a switch UID, or paste a **uid/key** composite (e.g. `vs_abc123/your-access-key`). The name will be fetched automatically.\n\nAccess keys enable toggling. Find public switches at sync.vome.io.",
+				"data": {
+					"uid": "Switch UID (or uid/key)",
+					"access_key": "Access key (optional, enables toggling)"
+				}
+			},
+			"manage_switches": {
+				"title": "Manage switches",
+				"description": "Select a switch to view, edit, or delete",
+				"data": {
+					"switch": "Select switch"
+				}
+			},
+			"manage_switch_action": {
+				"title": "Switch actions",
+				"description": "UID: `{uid}`\nActions for **{name}** (…{uid_hint})\nEntity ID: `{entity_id}`",
+				"menu_options": {
+					"view_switch": "View details",
+					"edit_switch": "Edit settings",
+					"access_keys": "Access keys (delegation)",
+					"manage_on_website": "Manage on website",
+					"link_entities": "Link local entities",
+					"delete_switch": "Delete switch",
+					"remove_from_installation": "Remove from this installation"
+				}
+			},
+			"manage_on_website": {
+				"title": "Manage on website",
+				"description": "{info}",
+				"data": {
+					"website_management_url": "Website management URL",
+					"access_key": "Access key (copy and save)",
+					"regenerate": "Regenerate access key",
+					"stay_logged_in": "Stay logged in (up to 30 days)"
+				}
+			},
+			"access_keys": {
+				"title": "Access keys ({count})",
+				"description": "Select an access key to view details, or create a new one.",
+				"data": {
+					"selected_key": "Access key"
+				}
+			},
+			"access_key_detail": {
+				"title": "Access key details",
+				"description": "{info}",
+				"data": {
+					"action": "Action"
+				}
+			},
+			"access_key_pause": {
+				"title": "Confirm {action}",
+				"description": "Are you sure you want to {action} access key **{key_name}** ({key_hint}…)?",
+				"data": {
+					"confirm": "Confirm"
+				}
+			},
+			"access_key_permissions": {
+				"title": "Update permissions",
+				"description": "Change permissions for **{key_name}** ({key_hint}…).",
+				"data": {
+					"permissions": "Permissions"
+				}
+			},
+			"create_access_key_v2": {
+				"title": "Create access key",
+				"description": "Create an access key you can share with someone else. Permissions control what they can do.",
+				"data": {
+					"name": "Name (optional)",
+					"permissions": "Permissions"
+				}
+			},
+			"create_access_key_v2_success": {
+				"title": "Access key created",
+				"description": "{info}",
+				"data": {
+					"api_key": "Access key",
+					"api_key_with_uid": "Access key with UID (uid/key format)"
+				}
+			},
+			"revoke_access_key_v2": {
+				"title": "Revoke access key",
+				"description": "Permanently revoke **{key_name}** ({key_hint}…)? This cannot be undone.",
+				"data": {
+					"confirm": "Confirm revocation"
+				}
+			},
+			"revoke_access_key_v2_success": {
+				"title": "Access key revoked",
+				"description": "{info}"
+			},
+			"connect_website": {
+				"title": "Connect to Vome website",
+				"description": "Copy the URL below and paste it into your browser to sign in to the Vome website. The token is one-time and expires in 5 minutes.\n\nLogin URL:\n{login_url}\n\nSession Token:\n{session_token}"
+			},
+			"view_switch": {
+				"title": "Switch details",
+				"description": "{info}",
+				"data": {
+					"uid": "UID",
+					"entity_id": "Entity ID",
+					"website_url": "Website URL",
+					"websocket_url": "WebSocket URL",
+					"webhook_url": "Webhook URL",
+					"curl_command": "curl command",
+					"access_key": "Access key (optional)"
+				}
+			},
+			"edit_switch": {
+				"title": "Edit switch",
+				"description": "Update switch settings (only owners can edit){error}",
+				"data": {
+					"name": "Name",
+					"description": "Description",
+					"location": "Location",
+					"category": "Category",
+					"publicize": "Publicise (list publicly)",
+					"link": "Link (optional)",
+					"icon_url": "Icon URL (optional)",
+					"banner_url": "Banner URL (optional)",
+					"captcha_token": "CAPTCHA token (optional)"
+				}
+			},
+			"link_entities": {
+				"title": "Link local entities",
+				"description": "{info}",
+				"data": {
+					"entities": "Select entities to link",
+					"direction": "Direction"
+				}
+			},
+			"link_entities_behaviour": {
+				"title": "Link behaviour",
+				"description": "{info}",
+				"data": {
+					"mode": "Behaviour",
+					"master": "Master entity (only used for Master mode)",
+					"direction": "Direction"
+				}
+			},
+			"delete_switch": {
+				"title": "Delete switch",
+				"description": "{warning}",
+				"data": {
+					"confirm": "Confirm deletion"
+				}
+			},
+			"remove_from_installation": {
+				"title": "Remove from installation",
+				"description": "{warning}",
+				"data": {
+					"confirm": "Confirm removal"
+				}
+			},
+			"reannounce_owned_switches": {
+				"title": "Re-announce owned switches",
+				"description": "{info}",
+				"data": {
+					"confirm": "Confirm"
+				}
+			},
+			"reannounce_owned_switches_result": {
+				"title": "Re-announce results",
+				"description": "{info}"
+			},
+			"cleanup_orphaned_devices": {
+				"title": "Clean up orphaned devices",
+				"description": "{info}",
+				"data": {
+					"devices": "Select devices to remove"
+				}
+			},
+			"edit_connection": {
+				"title": "Edit connection URLs",
+				"description": "{info}",
+				"data": {
+					"server_url": "Server URL",
+					"websocket_url": "WebSocket URL",
+					"test_connection": "Test connection before saving"
+				}
+			},
+			"link_vome": {
+				"title": "Connect to Vome Home",
+				"description": "1. Open **{verification_uri}** and sign in with GitHub.\n2. Enter this code: **{user_code}**\n3. Come back here and continue.\n\nYour Home Assistant will then appear in your Vome account and can be brokered by the home-assistant-mcp server — no public IP, port-forwarding or Nabu Casa needed.",
+				"menu_options": {
+					"link_vome_confirm": "✅ I've approved the code — connect",
+					"link_vome_alt": "⚙️ Alternative connection (manual token / ESPHome URL)"
+				}
+			},
+			"link_vome_retry": {
+				"title": "Connect to Vome Home",
+				"description": "The Vome portal could not be reached to start the connection. Press **Submit** to try again."
+			},
+			"link_vome_confirm": {
+				"title": "Connect to Vome Home",
+				"description": "Approve the code **{user_code}** at **{verification_uri}**, then press **Submit**.\n\nNothing else is needed — the component creates its own local access token (it appears in your profile as “Vome relay”)."
+			},
+			"link_vome_alt": {
+				"title": "Alternative connection",
+				"description": "Approve the code **{user_code}** at **{verification_uri}**, then press **Submit**.\n\nOnly fill these in if the automatic connection does not work for your setup (custom `server_host`, TLS on the local API, or an ESPHome dashboard that add-on discovery cannot find).",
+				"data": {
+					"local_token": "Local long-lived access token (overrides the automatic one)",
+					"esphome_url": "ESPHome dashboard URL (auto-detected on HAOS / Supervised)"
+				}
+			},
+			"unlink_vome": {
+				"title": "Disconnect from Vome Home",
+				"description": "This will stop the relay and remove this Home Assistant from your Vome account's relay access."
+			},
+			"remote_access": {
+				"title": "Remote access & LAN tunnels",
+				"description": "With an active friendly domain on vome.io, traffic reaches this home over the outbound relay (no router port-forward).\n\n**Allow full-UI forwarding** exposes this Home Assistant at your friendly domain. Keep it off unless you need browser access to HA itself.\n\n**LAN tunnels** map `https://your-domain/t/<slug>/` to a device on your network (NAS, router, printer UI, Guacamole, …). You currently have **{lan_enabled}** of **{lan_count}** route(s) enabled.",
+				"data": {
+					"forward_ui": "Allow full-UI forwarding (Home Assistant on the friendly domain)",
+					"manage_lan": "Manage LAN tunnels next"
+				}
+			},
+			"lan_routes": {
+				"title": "LAN tunnels",
+				"description": "Each route is reachable as `/t/<slug>/` on your friendly domain after you sign in at vome.io.\n\n{routes_summary}\n\nTip: devices that generate absolute URLs (or ignore a reverse-proxy base path) may need their own “base URL” setting pointed at `/t/<slug>/`.",
+				"data": {
+					"action": "Action",
+					"remove_slug": "Route to remove (when action is Remove)"
+				}
+			},
+			"lan_route_add": {
+				"title": "Add LAN tunnel",
+				"description": "Slug becomes the URL path: `/t/<slug>/`. Host must be reachable from this Home Assistant (LAN IP or hostname).",
+				"data": {
+					"slug": "Slug (e.g. nas, router, rdp)",
+					"name": "Display name (optional)",
+					"host": "LAN host or IP",
+					"port": "Port",
+					"scheme": "Scheme",
+					"enabled": "Enabled",
+					"websocket": "Allow WebSocket (needed by many modern UIs)"
+				}
+			},
+			"manage_api_keys": {
+				"title": "Manage API keys",
+				"description": "API keys allow webhook authentication without exposing your personal key. You have {api_key_count} key(s).",
+				"data": {
+					"delete_key": "Select key to delete",
+					"create_key": "Create new API key"
+				}
+			},
+			"create_api_key": {
+				"title": "Create API key",
+				"description": "Create a new API key for webhook authentication. Give it a label to identify its purpose.",
+				"data": {
+					"label": "Label (optional)"
+				}
+			},
+			"create_api_key_success": {
+				"title": "API key created",
+				"description": "{info}",
+				"data": {
+					"api_key": "API key (copy and save)"
+				}
+			},
+			"delete_api_key": {
+				"title": "Delete API key",
+				"description": "Are you sure you want to delete API key {api_key}? This cannot be undone.",
+				"data": {
+					"confirm": "Confirm deletion"
+				}
+			}
+		},
+		"error": {
+			"create_failed": "Failed to create switch. Check the error above for the invalid field(s).",
+			"update_failed": "Failed to update switch. Check the error above for the invalid field(s).",
+			"captcha_required": "CAPTCHA token required to publicise this switch on this server.",
+			"backup_required": "Please confirm you have backed up your signing key.",
+			"access_key_create_failed": "Failed to create access key. Check connectivity and try again.",
+			"access_key_revoke_failed": "Failed to revoke access key. Check connectivity and try again.",
+			"access_key_pause_failed": "Failed to pause/unpause access key. Check connectivity and try again.",
+			"access_key_permissions_failed": "Failed to update access key permissions. Check connectivity and try again.",
+			"access_key_permissions_empty": "At least one permission must be selected.",
+			"subscribe_failed": "Failed to subscribe to switch.",
+			"subscription_limit_reached": "Subscription limit reached for the free tier.",
+			"connect_failed": "Failed to create session token. Check server URL/key and try again.",
+			"fetch_failed": "Failed to fetch API keys from server.",
+			"delete_failed": "Failed to delete API key.",
+			"test_failed": "Connection test failed. Check the URLs and try again.",
+			"relay_pending": "Not approved yet. Approve the code on vome.io, then press Submit again.",
+			"relay_expired": "That code expired. A new one is shown above — approve it on vome.io, then press Submit.",
+			"relay_code_failed": "Could not start the Vome connection. Check your internet connection and try again.",
+			"relay_poll_failed": "Could not check approval status. Check your internet connection and try again.",
+			"lan_slug_invalid": "Slug must be 1–32 characters: lowercase letters, digits, and hyphens (not starting/ending with a hyphen).",
+			"lan_slug_duplicate": "That slug is already used by another LAN route.",
+			"lan_host_invalid": "Enter a LAN IP or hostname (no http:// or path).",
+			"lan_port_invalid": "Port must be between 1 and 65535.",
+			"lan_scheme_invalid": "Scheme must be http or https.",
+			"lan_route_invalid": "That LAN route is not valid.",
+			"lan_too_many": "You already have the maximum number of LAN routes."
+		},
+		"abort": {
+			"no_switches": "No switches to manage. Create or subscribe to switches first.",
+			"not_owner": "Only switch owners can edit settings.",
+			"not_v2_switch": "This action is only available for crypto-authenticated switches.",
+			"crypto_required": "This action requires crypto mode to be enabled for this integration.",
+			"no_access_keys": "No access keys exist for this switch.",
+			"no_linkable_entities": "No linkable entities found. Add switches, lights, or other controllable entities first.",
+			"no_switches_selected": "No switches were selected to import.",
+			"api_error": "Failed to fetch switches from API. Check your connection and try again.",
+			"no_orphaned_devices": "No orphaned devices found."
+		}
+	}
+}
+

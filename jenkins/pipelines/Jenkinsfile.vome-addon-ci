@@ -1,8 +1,8 @@
 // =============================================================================
 // Vome Supervisor add-on — CI Pipeline (VomeSync repo)
 //
-// Stages the shared integration, validates add-on packaging, and runs the
-// LAN-route / relay tests that the add-on control panel depends on.
+// Syncs the shared integration into vome/, validates add-on packaging, and runs
+// the LAN-route / relay tests that the add-on control panel depends on.
 // =============================================================================
 
 pipeline {
@@ -19,7 +19,7 @@ pipeline {
         booleanParam(
             name: 'FORCE_RUN',
             defaultValue: false,
-            description: 'Run add-on checks even when files outside addons/vome (and related paths) did not change'
+            description: 'Run add-on checks even when files outside vome/ (and related paths) did not change'
         )
     }
 
@@ -44,9 +44,9 @@ pipeline {
                     }
 
                     def addonChanged = changedFiles.any { path ->
-                        path.startsWith('addons/vome/') ||
+                        path.startsWith('vome/') ||
                         path.startsWith('custom_components/vomesync/') ||
-                        path == 'addons/repository.yaml' ||
+                        path == 'repository.yaml' ||
                         path == 'jenkins/pipelines/Jenkinsfile.vome-addon-ci' ||
                         path == 'jenkins/pipelines/Jenkinsfile.vome-addon-release'
                     }
@@ -63,26 +63,29 @@ pipeline {
             }
         }
 
-        stage('Stage integration') {
+        stage('Sync + validate') {
             when {
                 expression { env.RUN_ADDON_PIPELINE == 'true' }
             }
             steps {
                 sh '''
-                    test -f addons/vome/build.sh
-                    test -f addons/vome/config.yaml
-                    test -f addons/vome/Dockerfile
-                    test -f addons/vome/panel/server.py
-                    chmod +x addons/vome/build.sh
-                    ./addons/vome/build.sh
-                    test -f addons/vome/staged_integration/manifest.json
-                    test -f addons/vome/staged_integration/lan_routes.py
-                    test -f addons/vome/staged_integration/services_remote.py
-                    python3 -m py_compile addons/vome/panel/server.py
-                    python3 -m py_compile addons/vome/staged_integration/lan_routes.py
-                    python3 -m py_compile addons/vome/staged_integration/services_remote.py
-                    echo "── staged integration file count ──"
-                    find addons/vome/staged_integration -type f | wc -l
+                    test -f repository.yaml
+                    test -f vome/build.sh
+                    test -f vome/config.yaml
+                    test -f vome/Dockerfile
+                    test -f vome/panel/server.py
+                    chmod +x vome/build.sh
+                    ./vome/build.sh
+                    test -f vome/custom_components/vomesync/manifest.json
+                    test -f vome/custom_components/vomesync/lan_routes.py
+                    test -f vome/custom_components/vomesync/services_remote.py
+                    # Vendored tree must match the HACS source of truth
+                    diff -qr custom_components/vomesync vome/custom_components/vomesync
+                    python3 -m py_compile vome/panel/server.py
+                    python3 -m py_compile vome/custom_components/vomesync/lan_routes.py
+                    python3 -m py_compile vome/package_release.py
+                    echo "── vendored integration file count ──"
+                    find vome/custom_components/vomesync -type f | wc -l
                 '''
             }
         }

@@ -1,0 +1,199 @@
+create_switch:
+  name: Create Switch
+  description: Create a new VomeSync switch
+  fields:
+    name:
+      name: Switch Name
+      description: Name for the switch entity
+      required: true
+      selector:
+        text:
+    description:
+      name: Description
+      description: Optional description for the switch
+      required: false
+      selector:
+        text:
+    location:
+      name: Location
+      description: Optional location (city-level for privacy)
+      required: false
+      selector:
+        text:
+    category:
+      name: Category
+      description: Switch category
+      required: false
+      default: "Other"
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - "Community"
+            - "Personal"
+            - "Event"
+            - "Test"
+            - "Other"
+    publicize:
+      name: Publicize
+      description: List switch publicly on sync.vome.io
+      required: false
+      default: false
+      selector:
+        boolean:
+    link:
+      name: Link (optional)
+      description: Optional external link shown on the switch page
+      required: false
+      selector:
+        text:
+    icon_url:
+      name: Icon URL (optional)
+      description: Optional icon image URL for the switch page
+      required: false
+      selector:
+        text:
+    banner_url:
+      name: Banner URL (optional)
+      description: Optional banner image URL for the switch page
+      required: false
+      selector:
+        text:
+    captcha_token:
+      name: CAPTCHA token (optional)
+      description: If the server requires CAPTCHA for public switches, provide a token (or bypass token if configured)
+      required: false
+      selector:
+        text:
+          type: text
+
+subscribe_switch:
+  name: Subscribe to Switch
+  description: Subscribe to an existing VomeSync switch
+  fields:
+    uid:
+      name: Switch UID
+      description: UID of the switch to subscribe to
+      required: true
+      selector:
+        text:
+
+delete_switch:
+  name: Delete Switch
+  description: Delete a VomeSync switch
+  fields:
+    uid:
+      name: Switch UID
+      description: UID of the switch to delete
+      required: true
+      selector:
+        text:
+
+get_remote_status:
+  name: Get remote access status
+  description: Return link / full-UI / LAN tunnel status (used by the Vome add-on panel)
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+
+set_forward_ui:
+  name: Set full-UI forwarding
+  description: Enable or disable Home Assistant full-UI forwarding on the friendly domain
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    forward_ui:
+      name: Allow full-UI forwarding
+      required: true
+      selector:
+        boolean:
+
+set_lan_routes:
+  name: Replace LAN routes
+  description: Replace the full list of LAN path tunnels
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    routes:
+      name: Routes
+      required: true
+      selector:
+        object:
+
+add_lan_route:
+  name: Add LAN route
+  description: Add one /t/<slug>/ tunnel to a LAN host
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    slug:
+      name: Slug
+      required: true
+      selector:
+        text:
+    name:
+      name: Display name
+      required: false
+      selector:
+        text:
+    host:
+      name: LAN host
+      required: true
+      selector:
+        text:
+    port:
+      name: Port
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 65535
+          mode: box
+    scheme:
+      name: Scheme
+      required: false
+      default: http
+      selector:
+        select:
+          options:
+            - http
+            - https
+    enabled:
+      name: Enabled
+      required: false
+      default: true
+      selector:
+        boolean:
+    websocket:
+      name: Allow WebSocket
+      required: false
+      default: true
+      selector:
+        boolean:
+
+remove_lan_route:
+  name: Remove LAN route
+  description: Remove a LAN path tunnel by slug
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    slug:
+      name: Slug
+      required: true
+      selector:
+        text:

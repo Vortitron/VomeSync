@@ -1,8 +1,5 @@
 // =============================================================================
 // Vome Supervisor add-on — Release packaging (VomeSync repo)
-//
-// Stages the shared integration, builds a distributable ZIP of the add-on
-// (config + rootfs + panel + staged integration), and archives it in Jenkins.
 // =============================================================================
 
 pipeline {
@@ -12,7 +9,7 @@ pipeline {
         string(
             name: 'RELEASE_TAG',
             defaultValue: '',
-            description: 'Optional release label (example: v0.2.0). Leave empty to use config.yaml version.'
+            description: 'Optional release label (example: v0.2.1). Leave empty to use config.yaml version.'
         )
     }
 
@@ -27,22 +24,24 @@ pipeline {
         stage('Validate') {
             steps {
                 sh '''
-                    test -f addons/vome/config.yaml
-                    test -f addons/vome/Dockerfile
-                    test -f addons/vome/build.sh
-                    test -f addons/vome/package_release.py
-                    test -f addons/vome/panel/server.py
+                    test -f repository.yaml
+                    test -f vome/config.yaml
+                    test -f vome/Dockerfile
+                    test -f vome/build.sh
+                    test -f vome/package_release.py
+                    test -f vome/panel/server.py
                     test -f custom_components/vomesync/manifest.json
                     test -f custom_components/vomesync/services_remote.py
                 '''
             }
         }
 
-        stage('Stage + Test') {
+        stage('Sync + Test') {
             steps {
                 sh '''
-                    chmod +x addons/vome/build.sh
-                    ./addons/vome/build.sh
+                    chmod +x vome/build.sh
+                    ./vome/build.sh
+                    diff -qr custom_components/vomesync vome/custom_components/vomesync
 
                     python3.11 -m venv .venv-addon
                     . .venv-addon/bin/activate
@@ -64,8 +63,8 @@ pipeline {
         stage('Build Release Artifact') {
             steps {
                 sh '''
-                    test -f addons/vome/package_release.py
-                    python3 addons/vome/package_release.py
+                    test -f vome/package_release.py
+                    python3 vome/package_release.py
                     test -f dist/vome-addon-release.txt
                     ls -la dist/vome-addon-*.zip
                 '''
