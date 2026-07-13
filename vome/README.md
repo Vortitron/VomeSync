@@ -46,9 +46,15 @@ vomehome_create_instance  →  name: "Vome addon test"
 ha_addon_install_vome     →  adds the GitHub repo, installs + starts Vome
 ```
 
-Requires `HA_ALLOW_WRITE=true` (and `VOMEHOME_ALLOW_CREATE=true` to create).
+In brokered MCP mode the API key scopes decide (no local write/create env flags).
 Container-only Home Assistant has no Supervisor store — use HACS for the
 integration there.
+
+If install fails with **no host internet connection**, Supervisor’s
+`host_internet` job gate is blocking Docker pulls (the Store can still clone
+git). Work around with `ha jobs options --ignore-conditions internet_host`
+(or fix host DNS), then install again. MCP’s `ha_addon_install_vome` applies
+that ignore automatically when it hits the same error.
 
 ## Building locally
 
