@@ -18,6 +18,8 @@ from .const import (
 	CONF_RELAY_FORWARD_UI,
 	CONF_RELAY_LAN_ROUTES,
 	CONF_RELAY_SERVER_ID,
+	CONF_RELAY_WS_URL,
+	DEFAULT_RELAY_WS_URL,
 	DOMAIN,
 	LAN_TCP_TOKEN_DEFAULT_TTL,
 	LAN_TCP_TOKEN_MAX_TTL,
@@ -128,6 +130,22 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		await _save_relay(hass, entry, relay)
 		return remote_status_payload(hass, entry)
 
+	async def _set_relay_server(call: ServiceCall) -> ServiceResponse:
+		"""Point an existing link at a different relay WebSocket URL.
+
+		Scriptable counterpart to the options-flow ``relay_server`` step, for
+		aiming a linked Home Assistant at a dev/staging relay without redoing
+		the portal device-auth dance. Blank ``ws_url`` resets to the default.
+		"""
+		entry = _pick_entry(hass, call.data.get("entry_id"))
+		relay = dict((entry.options or {}).get(CONF_RELAY) or {})
+		ws_url = str(call.data.get("ws_url") or "").strip()
+		if ws_url and not (ws_url.startswith("ws://") or ws_url.startswith("wss://")):
+			raise ValueError("ws_url must start with ws:// or wss://")
+		relay[CONF_RELAY_WS_URL] = ws_url or DEFAULT_RELAY_WS_URL
+		await _save_relay(hass, entry, relay)
+		return remote_status_payload(hass, entry)
+
 	async def _add_lan_route(call: ServiceCall) -> ServiceResponse:
 		entry = _pick_entry(hass, call.data.get("entry_id"))
 		relay = dict((entry.options or {}).get(CONF_RELAY) or {})
@@ -180,6 +198,14 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required("routes"): list,
+		}),
+		supports_response=SupportsResponse.OPTIONAL,
+	)
+	hass.services.async_register(
+		DOMAIN, "set_relay_server", _set_relay_server,
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Optional("ws_url", default=""): cv.string,
 		}),
 		supports_response=SupportsResponse.OPTIONAL,
 	)

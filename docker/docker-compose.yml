@@ -54,6 +54,10 @@ services:
       - RELAY_INTERNAL_SECRET=${RELAY_INTERNAL_SECRET:-}
       - RELAY_PORTAL_VERIFY_URL=${RELAY_PORTAL_VERIFY_URL:-https://vome.io/api/internal/relay/verify}
       - RELAY_RPC_TIMEOUT_MS=${RELAY_RPC_TIMEOUT_MS:-20000}
+      # HS256 secret for forwarding + LAN-TCP tunnel tokens. Must match the value
+      # the portal uses to sign `ha-forward` cookies; also signs/verifies the
+      # `lan-tcp` tunnel tokens minted for mint_lan_tcp_token. Empty = disabled.
+      - RELAY_FORWARD_SECRET=${RELAY_FORWARD_SECRET:-}
     ports:
       - "${VOMESYNC_API_HOST_PORT:-3090}:3090"
       - "${VOMESYNC_WS_HOST_PORT:-3001}:3001"
@@ -139,6 +143,7 @@ services:
       - RELAY_INTERNAL_SECRET=${RELAY_INTERNAL_SECRET:-}
       - RELAY_PORTAL_VERIFY_URL=${RELAY_PORTAL_VERIFY_URL:-https://vome.io/api/internal/relay/verify}
       - RELAY_RPC_TIMEOUT_MS=${RELAY_RPC_TIMEOUT_MS:-20000}
+      - RELAY_FORWARD_SECRET=${RELAY_FORWARD_SECRET:-dev-forward-secret-change-in-production}
     ports:
       - "${VOMESYNC_API_DEV_HOST_PORT:-3091}:3091"
       - "${VOMESYNC_WS_DEV_HOST_PORT:-3002}:3002"

@@ -129,6 +129,26 @@ set_lan_routes:
       selector:
         object:
 
+set_relay_server:
+  name: Set relay server URL
+  description: >-
+    Point an existing link at a different relay WebSocket URL (dev/staging).
+    Leave blank to reset to the default relay. Scriptable counterpart to the
+    options-flow relay-server step.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    ws_url:
+      name: Relay WebSocket URL
+      description: e.g. ws://host:3002/ws/relay — blank resets to default
+      required: false
+      default: ""
+      selector:
+        text:
+
 add_lan_route:
   name: Add LAN route
   description: Add one /t/<slug>/ tunnel to a LAN host
