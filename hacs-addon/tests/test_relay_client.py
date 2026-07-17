@@ -11,6 +11,7 @@ Covers the bits that make the relay safe and correct without a live WebSocket:
 
 Mirrors the AsyncMock(session) style used in test_api_client.py.
 """
+import asyncio
 import base64
 import json
 from unittest.mock import AsyncMock, MagicMock
@@ -841,3 +842,202 @@ class TestForwardWebSocket:
 		client._handle_ws_open.assert_called_once()
 		client._handle_ws_data.assert_called_once()
 		client._handle_ws_close.assert_called_once()
+
+
+# ── LAN TCP tunnels (raw TCP to a LAN device, e.g. RDP) ──────────────────────
+
+class _FakeStreamReader:
+	"""Yields each chunk in ``chunks`` from read(), then b"" (EOF)."""
+
+	def __init__(self, chunks=None):
+		self._chunks = list(chunks or [])
+
+	async def read(self, _n):
+		if self._chunks:
+			return self._chunks.pop(0)
+		return b""
+
+
+class _FakeStreamWriter:
+	def __init__(self):
+		self.written: list[bytes] = []
+		self.closed = False
+
+	def write(self, data):
+		self.written.append(data)
+
+	async def drain(self):
+		pass
+
+	def close(self):
+		self.closed = True
+
+
+def _tcp_route(scheme="tcp", host="192.168.1.50", port=3389, enabled=True):
+	return {
+		"slug": "rdp", "name": "RDP", "host": host, "port": port,
+		"scheme": scheme, "enabled": enabled, "websocket": True,
+	}
+
+
+class TestLanTcpOpen:
+	@pytest.mark.asyncio
+	async def test_tcp_scheme_opens_raw_connection_not_websocket(self, monkeypatch):
+		reader, writer = _FakeStreamReader(), _FakeStreamWriter()
+		open_conn = AsyncMock(return_value=(reader, writer))
+		monkeypatch.setattr(rc.asyncio, "open_connection", open_conn)
+		session = _session_for_ws(_FakeLocalWS())  # ws_connect must not be used
+		client = _client(session, lan_routes=[_tcp_route()])
+		ws = AsyncMock()
+		await client._handle_lan_ws_open(ws, "s1", "rdp", "/")
+		open_conn.assert_called_once_with("192.168.1.50", 3389)
+		session.ws_connect.assert_not_called()
+		assert "s1" in client._tcp_local
+		payloads = _sent_payloads(ws)
+		assert payloads[0] == {"type": "ws_open_ack", "socketId": "s1"}
+
+	@pytest.mark.asyncio
+	async def test_missing_route_closes(self):
+		client = _client(AsyncMock(spec=aiohttp.ClientSession), lan_routes=[])
+		ws = AsyncMock()
+		await client._handle_lan_ws_open(ws, "s1", "rdp", "/")
+		closed = _sent_payloads(ws)[0]
+		assert closed["type"] == "ws_close" and closed["code"] == 1008
+		assert "No LAN route configured" in closed["reason"]
+
+	@pytest.mark.asyncio
+	async def test_connect_failure_closes_with_reason(self, monkeypatch):
+		monkeypatch.setattr(
+			rc.asyncio, "open_connection", AsyncMock(side_effect=OSError("refused"))
+		)
+		client = _client(AsyncMock(spec=aiohttp.ClientSession), lan_routes=[_tcp_route()])
+		ws = AsyncMock()
+		await client._handle_lan_ws_open(ws, "s1", "rdp", "/")
+		closed = _sent_payloads(ws)[0]
+		assert closed["type"] == "ws_close" and closed["code"] == 1011
+		assert "connect failed" in closed["reason"]
+		assert "s1" not in client._tcp_local
+
+	@pytest.mark.asyncio
+	async def test_invalid_port_closes_without_connecting(self, monkeypatch):
+		open_conn = AsyncMock()
+		monkeypatch.setattr(rc.asyncio, "open_connection", open_conn)
+		client = _client(
+			AsyncMock(spec=aiohttp.ClientSession),
+			lan_routes=[_tcp_route(port=0)],
+		)
+		ws = AsyncMock()
+		await client._handle_lan_ws_open(ws, "s1", "rdp", "/")
+		open_conn.assert_not_called()
+		assert _sent_payloads(ws)[0]["type"] == "ws_close"
+
+	@pytest.mark.asyncio
+	async def test_http_scheme_still_uses_websocket(self):
+		# Unaffected sibling behaviour: an http-scheme route still bridges via
+		# ws_connect, not raw TCP — the branch in _handle_lan_ws_open must not
+		# swallow the existing path.
+		local = _FakeLocalWS()
+		session = _session_for_ws(local)
+		client = _client(session, lan_routes=[{
+			"slug": "nas", "host": "192.168.1.5", "port": 80,
+			"scheme": "http", "enabled": True, "websocket": True,
+		}])
+		ws = AsyncMock()
+		await client._handle_lan_ws_open(ws, "s1", "nas", "/")
+		session.ws_connect.assert_called_once()
+		assert "s1" not in client._tcp_local
+
+
+class TestLanTcpPumpAndData:
+	@pytest.mark.asyncio
+	async def test_pump_forwards_bytes_then_closes(self, monkeypatch):
+		reader = _FakeStreamReader([b"\x01\x02", b"\x03"])
+		writer = _FakeStreamWriter()
+		monkeypatch.setattr(
+			rc.asyncio, "open_connection", AsyncMock(return_value=(reader, writer))
+		)
+		client = _client(AsyncMock(spec=aiohttp.ClientSession), lan_routes=[_tcp_route()])
+		ws = AsyncMock()
+		await client._handle_lan_ws_open(ws, "s1", "rdp", "/")
+		await client._tcp_pumps["s1"]  # drain the finite fake stream
+		payloads = _sent_payloads(ws)
+		data_frames = [p for p in payloads if p.get("type") == "ws_data"]
+		assert base64.b64decode(data_frames[0]["dataB64"]) == b"\x01\x02"
+		assert base64.b64decode(data_frames[1]["dataB64"]) == b"\x03"
+		assert payloads[-1]["type"] == "ws_close"
+		assert "s1" not in client._tcp_local and "s1" not in client._tcp_pumps
+		assert writer.closed is True
+
+	@pytest.mark.asyncio
+	async def test_ws_data_writes_to_tcp_socket(self):
+		writer = _FakeStreamWriter()
+		client = _client(AsyncMock(spec=aiohttp.ClientSession))
+		client._tcp_local["s1"] = (_FakeStreamReader(), writer)
+		await client._handle_ws_data({"socketId": "s1", "dataB64": base64.b64encode(b"hi").decode()})
+		assert writer.written == [b"hi"]
+
+	@pytest.mark.asyncio
+	async def test_teardown_closes_tcp_writer(self):
+		writer = _FakeStreamWriter()
+		client = _client(AsyncMock(spec=aiohttp.ClientSession))
+		client._tcp_local["s1"] = (_FakeStreamReader(), writer)
+		client._tcp_pumps["s1"] = asyncio.ensure_future(asyncio.sleep(60))
+		await client._teardown_tunnel("s1")
+		assert writer.closed is True
+		assert "s1" not in client._tcp_local and "s1" not in client._tcp_pumps
+
+
+class TestLanTcpHttpProxyRefused:
+	@pytest.mark.asyncio
+	async def test_tcp_route_refuses_http_proxy(self):
+		client = _client(
+			AsyncMock(spec=aiohttp.ClientSession), forward_ui=True, lan_routes=[_tcp_route()]
+		)
+		status, _h, _b, error = await client._execute_http_proxy({"method": "GET", "path": "/t/rdp/"})
+		assert status == 0 and "TCP-only" in error
+
+
+class TestRequestLanTcpToken:
+	@staticmethod
+	def _hass_with_loop():
+		hass = MagicMock()
+		hass.loop = asyncio.get_event_loop()
+		return hass
+
+	@pytest.mark.asyncio
+	async def test_returns_token_on_response(self):
+		hass = self._hass_with_loop()
+		client = RelayClient(hass, server_id="rly-1", secret="sek")
+		fake_ws = AsyncMock()
+		client._ws = fake_ws
+
+		async def _reply_soon():
+			await asyncio.sleep(0)
+			sent = json.loads(fake_ws.send_str.call_args[0][0])
+			await client._handle_text(fake_ws, json.dumps({
+				"type": "mint_lan_tcp_token_response",
+				"requestId": sent["requestId"],
+				"token": "jwt-abc",
+			}))
+
+		asyncio.ensure_future(_reply_soon())
+		token, error = await client.request_lan_tcp_token("rdp", 3600)
+		assert error is None and token == "jwt-abc"
+		sent = json.loads(fake_ws.send_str.call_args[0][0])
+		assert sent["type"] == "mint_lan_tcp_token" and sent["slug"] == "rdp"
+
+	@pytest.mark.asyncio
+	async def test_not_connected_returns_error(self):
+		hass = self._hass_with_loop()
+		client = RelayClient(hass, server_id="rly-1", secret="sek")
+		token, error = await client.request_lan_tcp_token("rdp")
+		assert token is None and "not connected" in error.lower()
+
+	@pytest.mark.asyncio
+	async def test_timeout_returns_error(self, monkeypatch):
+		monkeypatch.setattr(rc, "RELAY_MINT_TOKEN_TIMEOUT", 0.01)
+		hass = self._hass_with_loop()
+		client = RelayClient(hass, server_id="rly-1", secret="sek")
+		client._ws = AsyncMock()
+		token, error = await client.request_lan_tcp_token("rdp")
+		assert token is None and "Timed out" in error

@@ -6,8 +6,11 @@
  * connected, and time out cleanly.  We drive a fresh RelayManager with fake
  * sockets so no real WebSocket server / Redis is needed.
  */
+process.env.RELAY_FORWARD_SECRET = process.env.RELAY_FORWARD_SECRET || 'unit-test-forward-secret';
+
 const WebSocket = require('ws');
 const relaySingleton = require('../../../src/websocket/relayManager');
+const uiAccess = require('../../../src/proxy/uiAccess');
 
 const { RelayManager, _extractSecret } = relaySingleton;
 
@@ -256,6 +259,33 @@ describe('RelayManager.handleMessage', () => {
 		mgr.handleMessage('rly-1', JSON.stringify({ type: 'ping' }));
 		const replies = ws.sent.map((s) => JSON.parse(s));
 		expect(replies.some((r) => r.type === 'pong')).toBe(true);
+	});
+});
+
+describe('RelayManager.handleMessage mint_lan_tcp_token', () => {
+	let mgr;
+	beforeEach(() => { mgr = new RelayManager(); });
+
+	test('mints a lan-tcp token and replies on the same socket', () => {
+		const ws = connect(mgr, 'rly-1');
+		mgr.handleMessage('rly-1', JSON.stringify({
+			type: 'mint_lan_tcp_token', requestId: 'req-1', slug: 'rdp', ttlSeconds: 300
+		}));
+
+		expect(ws.sent).toHaveLength(1);
+		const reply = JSON.parse(ws.sent[0]);
+		expect(reply.type).toBe('mint_lan_tcp_token_response');
+		expect(reply.requestId).toBe('req-1');
+		expect(typeof reply.token).toBe('string');
+
+		const verified = uiAccess.verifyLanTcpToken(reply.token);
+		expect(verified).toEqual({ serverId: 'rly-1', slug: 'rdp' });
+	});
+
+	test('is a no-op when no component is connected for that server', () => {
+		expect(() => mgr.handleMessage('rly-missing', JSON.stringify({
+			type: 'mint_lan_tcp_token', requestId: 'req-1', slug: 'rdp'
+		}))).not.toThrow();
 	});
 });
 

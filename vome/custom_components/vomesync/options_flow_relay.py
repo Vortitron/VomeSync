@@ -29,6 +29,7 @@ from .const import (
 	CONF_RELAY_SERVER_ID,
 	CONF_RELAY_WS_URL,
 	DEFAULT_PORTAL_URL,
+	DEFAULT_RELAY_WS_URL,
 )
 from .relay_client import (
 	async_poll_device_token,
@@ -212,6 +213,42 @@ class VomeSyncOptionsFlowRelayMixin:
 				return finished
 		return await self._relay_show_link_form(
 			"link_vome_alt", errors, include_alt_fields=True
+		)
+
+	async def async_step_relay_server(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Advanced: override the relay WebSocket URL for an already-linked entry.
+
+		Normally set once by the portal at link time (``_relay_poll_and_finish``)
+		and never touched again. This step exists for pointing an existing link
+		at a dev/staging relay (e.g. testing against a non-production webserver)
+		without redoing the whole device-authorisation dance, which would need a
+		fresh portal approval. Leaving the field blank resets to the default
+		production URL.
+		"""
+		if not self._relay_is_linked():
+			return await self.async_step_init()
+		relay = dict((self._config_entry.options or {}).get(CONF_RELAY) or {})
+		errors: Dict[str, str] = {}
+		if user_input is not None:
+			ws_url = (user_input.get("ws_url") or "").strip()
+			if ws_url and not (ws_url.startswith("ws://") or ws_url.startswith("wss://")):
+				errors["base"] = "relay_server_url_invalid"
+			else:
+				relay[CONF_RELAY_WS_URL] = ws_url or DEFAULT_RELAY_WS_URL
+				await self._relay_save_and_restart(relay)
+				return await self.async_step_init()
+		return self.async_show_form(
+			step_id="relay_server",
+			data_schema=vol.Schema({
+				vol.Optional(
+					"ws_url",
+					default=relay.get(CONF_RELAY_WS_URL, "") or "",
+				): str,
+			}),
+			errors=errors,
+			description_placeholders={"default_url": DEFAULT_RELAY_WS_URL},
 		)
 
 	async def async_step_unlink_vome(

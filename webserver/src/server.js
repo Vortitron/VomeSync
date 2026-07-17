@@ -11,6 +11,7 @@ const redisClient = require('./utils/redis');
 const media = require('./utils/media');
 const webSocketManager = require('./websocket/manager');
 const relayManager = require('./websocket/relayManager');
+const tcpTunnelManager = require('./websocket/tcpTunnelManager');
 const { attachUpgradeRouter } = require('./websocket/upgradeRouter');
 const { createUiProxy } = require('./proxy/uiProxy');
 const apiRoutes = require('./routes/api');
@@ -56,11 +57,14 @@ class VomeSyncServer {
 			// own Home Assistant).  Shares the WS server but on its own path.
 			relayManager.initialize();
 
-			// One upgrade router dispatches `/ws` and `/ws/relay` — multiple
-			// path-attached WS servers 400 each other's handshakes (ws 8.x).
+			// One upgrade router dispatches `/ws`, `/ws/relay` and `/ws/tcp` —
+			// multiple path-attached WS servers 400 each other's handshakes (ws 8.x).
+			// `/ws/tcp` is the bearer-token raw-TCP LAN tunnel entry point (e.g.
+			// RDP) for the `home-assistant-mcp tunnel` CLI — see tcpTunnelManager.js.
 			attachUpgradeRouter(this.wsServer || this.server, {
 				'/ws': webSocketManager,
-				'/ws/relay': relayManager
+				'/ws/relay': relayManager,
+				'/ws/tcp': tcpTunnelManager
 			});
 
 			// Browser-facing reverse proxy for full-UI forwarding (paid friendly

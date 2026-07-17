@@ -26,6 +26,7 @@ const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger');
 const config = require('../config/config');
 const relayPortal = require('../utils/relayPortal');
+const uiAccess = require('../proxy/uiAccess');
 const { abortUpgrade } = require('./upgradeRouter');
 
 const HEARTBEAT_INTERVAL_MS = 30000;
@@ -163,6 +164,19 @@ class RelayManager {
 		// Full-UI WebSocket bridge: route component frames to the browser handler.
 		if (data.type === 'ws_open_ack' || data.type === 'ws_data' || data.type === 'ws_close') {
 			this._routeTunnel(data);
+			return;
+		}
+		// Component-initiated request for a LAN-TCP tunnel bearer token (see
+		// custom_components/vomesync/relay_client.py's request_lan_tcp_token).
+		// Unlike ha_rpc/http_proxy/ws_open (backend → component), this is the
+		// other direction: answer directly, no `pending` map needed.
+		if (data.type === 'mint_lan_tcp_token' && conn) {
+			const token = uiAccess.mintLanTcpToken({
+				serverId, slug: data.slug, ttlSeconds: data.ttlSeconds
+			});
+			this._safeSend(conn.ws, {
+				type: 'mint_lan_tcp_token_response', requestId: data.requestId, token
+			});
 			return;
 		}
 		if (data.type === 'ping' && conn) {

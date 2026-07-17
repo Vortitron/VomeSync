@@ -83,6 +83,17 @@ RELAY_WS_MSG_WS_OPEN = "ws_open"
 RELAY_WS_MSG_WS_OPEN_ACK = "ws_open_ack"
 RELAY_WS_MSG_WS_DATA = "ws_data"
 RELAY_WS_MSG_WS_CLOSE = "ws_close"
+
+# LAN TCP tunnels (raw TCP to a LAN device, e.g. RDP — see lan_routes.py's
+# "tcp" scheme).  ws_open/ws_data/ws_close above are reused unchanged for the
+# byte-pumping itself; these two are only for the component to request a
+# short-lived bearer token a local CLI tunnel client can present to the
+# backend's /ws/tcp endpoint (see services_remote.mint_lan_tcp_token).
+RELAY_WS_MSG_MINT_LAN_TCP_TOKEN = "mint_lan_tcp_token"
+RELAY_WS_MSG_MINT_LAN_TCP_TOKEN_RESPONSE = "mint_lan_tcp_token_response"
+RELAY_MINT_TOKEN_TIMEOUT = 10
+LAN_TCP_TOKEN_DEFAULT_TTL = 3600
+LAN_TCP_TOKEN_MAX_TTL = 86400
 # Forwarding limits/tuning.  Bodies larger than the cap are refused (502) rather
 # than buffered unbounded; the frontend WebSocket carries small JSON frames.
 RELAY_FORWARD_HTTP_TIMEOUT = 60

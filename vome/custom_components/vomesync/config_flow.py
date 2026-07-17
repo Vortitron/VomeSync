@@ -592,8 +592,10 @@ class VomeSyncOptionsFlow(
 			"reannounce_owned_switches",
 			"cleanup_orphaned_devices",
 			"edit_connection",
-			"back",
 		]
+		if self._relay_is_linked():
+			menu_options.append("relay_server")
+		menu_options.append("back")
 		return self.async_show_menu(step_id="more", menu_options=menu_options)
 
 	async def async_step_back(

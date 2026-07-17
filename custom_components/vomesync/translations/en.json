@@ -52,6 +52,7 @@
 					"reannounce_owned_switches": "📣 Re-announce owned switches",
 					"cleanup_orphaned_devices": "🧹 Clean up orphaned devices",
 					"edit_connection": "⚙️ Edit connection URLs",
+					"relay_server": "🛰️ Advanced: relay server URL",
 					"back": "← Back"
 				}
 			},
@@ -323,6 +324,13 @@
 				"title": "Disconnect from Vome Home",
 				"description": "This will stop the relay and remove this Home Assistant from your Vome account's relay access."
 			},
+			"relay_server": {
+				"title": "Advanced: relay server URL",
+				"description": "Overrides the WebSocket URL this Home Assistant dials out to (normally set once when you connect to Vome). Only change this if you know what you're doing — e.g. testing against a non-production relay. Leave blank to reset to the default (`{default_url}`).",
+				"data": {
+					"ws_url": "Relay WebSocket URL"
+				}
+			},
 			"remote_access": {
 				"title": "Remote access & LAN tunnels",
 				"description": "With an active friendly domain on vome.io, traffic reaches this home over the outbound relay (no router port-forward).\n\n**Allow full-UI forwarding** exposes this Home Assistant at your friendly domain. Keep it off unless you need browser access to HA itself.\n\n**LAN tunnels** map `https://your-domain/t/<slug>/` to a device on your network (NAS, router, printer UI, Guacamole, …). You currently have **{lan_enabled}** of **{lan_count}** route(s) enabled.",
@@ -402,6 +410,7 @@
 			"relay_expired": "That code expired. A new one is shown above — approve it on vome.io, then press Submit.",
 			"relay_code_failed": "Could not start the Vome connection. Check your internet connection and try again.",
 			"relay_poll_failed": "Could not check approval status. Check your internet connection and try again.",
+			"relay_server_url_invalid": "Enter a WebSocket URL starting with ws:// or wss://, or leave blank to reset to the default.",
 			"lan_slug_invalid": "Slug must be 1–32 characters: lowercase letters, digits, and hyphens (not starting/ending with a hyphen).",
 			"lan_slug_duplicate": "That slug is already used by another LAN route.",
 			"lan_host_invalid": "Enter a LAN IP or hostname (no http:// or path).",

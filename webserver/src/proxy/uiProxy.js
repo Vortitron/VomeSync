@@ -32,12 +32,12 @@
  * Policy misses fail closed to cookie-only.
  */
 const WebSocket = require('ws');
-const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger');
 const config = require('../config/config');
 const relayManagerSingleton = require('../websocket/relayManager');
 const relayPortal = require('../utils/relayPortal');
 const uiAccess = require('./uiAccess');
+const relayBridge = require('../websocket/relayBridge');
 const { abortUpgrade } = require('../websocket/upgradeRouter');
 
 // Friendly-host forwarding policy cache: a webhook burst or an app sync must
@@ -299,64 +299,13 @@ function createUiProxy(deps = {}) {
 	 *
 	 * Browser frames that arrive before the component acknowledges the open are
 	 * queued (the HA frontend sends its `auth` message immediately), then flushed
-	 * in order once `ws_open_ack` lands.
+	 * in order once `ws_open_ack` lands — see websocket/relayBridge.js, which
+	 * this and the bearer-token CLI tunnel entry point (tcpTunnelManager.js)
+	 * both use so that plumbing exists in one place.
 	 */
 	function bridge(browser, req, serverId) {
-		const socketId = uuidv4();
-		let acked = false;
-		const queue = [];
-
-		relay.registerTunnel(socketId, serverId, {
-			onAck: () => {
-				acked = true;
-				for (const frame of queue) {
-					relay.sendWs(serverId, frame);
-				}
-				queue.length = 0;
-			},
-			onData: (data) => {
-				if (browser.readyState !== WebSocket.OPEN) {
-					return;
-				}
-				if (data.dataB64 != null) {
-					browser.send(Buffer.from(data.dataB64, 'base64'));
-				} else if (data.text != null) {
-					browser.send(data.text);
-				}
-			},
-			onClose: (data) => {
-				try {
-					browser.close(data.code || 1000, data.reason || '');
-				} catch (_err) { /* already closing */ }
-			}
-		});
-
 		const headers = collectRequestHeaders(req, cookieName);
-		if (!relay.openWs(serverId, { socketId, path: req.url, headers })) {
-			relay.unregisterTunnel(socketId);
-			try {
-				browser.close(1011, 'Relay offline');
-			} catch (_err) { /* ignore */ }
-			return;
-		}
-
-		browser.on('message', (data, isBinary) => {
-			const frame = isBinary
-				? { socketId, dataB64: Buffer.from(data).toString('base64') }
-				: { socketId, text: data.toString() };
-			if (acked) {
-				relay.sendWs(serverId, frame);
-			} else {
-				queue.push(frame);
-			}
-		});
-		browser.on('close', (code, reason) => {
-			relay.unregisterTunnel(socketId);
-			relay.closeWs(serverId, { socketId, code, reason: reason ? reason.toString() : '' });
-		});
-		browser.on('error', (err) => {
-			logger.warn(`UI bridge socket error (${serverId}):`, err.message || err);
-		});
+		relayBridge.bridgeSocket(browser, relay, serverId, { path: req.url, headers });
 	}
 
 	return { httpHandler, handleUpgrade, bridge, _wss: wss, _policyCache: policyCache };

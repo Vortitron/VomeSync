@@ -19,6 +19,8 @@ from .const import (
 	CONF_RELAY_LAN_ROUTES,
 	CONF_RELAY_SERVER_ID,
 	DOMAIN,
+	LAN_TCP_TOKEN_DEFAULT_TTL,
+	LAN_TCP_TOKEN_MAX_TTL,
 )
 from .lan_routes import (
 	LAN_MAX_ROUTES,
@@ -30,10 +32,11 @@ from .lan_routes import (
 	ROUTE_SCHEME,
 	ROUTE_SLUG,
 	ROUTE_WEBSOCKET,
+	find_route,
 	normalise_routes,
 	validate_route,
 )
-from .relay_client import async_start_relay
+from .relay_client import async_start_relay, get_relay_client
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -201,5 +204,36 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			vol.Required(ROUTE_SLUG): cv.string,
 		}),
 		supports_response=SupportsResponse.OPTIONAL,
+	)
+
+	async def _mint_lan_tcp_token(call: ServiceCall) -> ServiceResponse:
+		entry = _pick_entry(hass, call.data.get("entry_id"))
+		relay = dict((entry.options or {}).get(CONF_RELAY) or {})
+		routes = normalise_routes(relay.get(CONF_RELAY_LAN_ROUTES))
+		slug = str(call.data.get(ROUTE_SLUG) or "").strip().lower()
+		route = find_route(routes, slug)
+		if route is None or route.get(ROUTE_SCHEME) != "tcp":
+			raise ValueError(
+				f"No enabled tcp-scheme LAN route named '{slug}'. "
+				"Add one first (scheme: tcp) via the options flow or the panel."
+			)
+		client = get_relay_client(hass, entry.entry_id)
+		if client is None:
+			raise ValueError("Vome relay is not connected for this Home Assistant")
+		ttl = int(call.data.get("ttl_seconds") or LAN_TCP_TOKEN_DEFAULT_TTL)
+		ttl = max(60, min(ttl, LAN_TCP_TOKEN_MAX_TTL))
+		token, error = await client.request_lan_tcp_token(slug, ttl)
+		if error:
+			raise ValueError(error)
+		return {"token": token, "slug": slug, "ttl_seconds": ttl}
+
+	hass.services.async_register(
+		DOMAIN, "mint_lan_tcp_token", _mint_lan_tcp_token,
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Required(ROUTE_SLUG): cv.string,
+			vol.Optional("ttl_seconds"): vol.Coerce(int),
+		}),
+		supports_response=SupportsResponse.ONLY,
 	)
 	_LOGGER.debug("Registered Vome remote-access services")

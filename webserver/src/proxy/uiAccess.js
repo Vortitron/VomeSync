@@ -80,4 +80,50 @@ function mintAccessToken({ serverId, userId, host, ttlSeconds = DEFAULT_TTL_SECO
 	);
 }
 
-module.exports = { verifyAccessToken, mintAccessToken, readCookie, SCOPE };
+const LAN_TCP_SCOPE = 'lan-tcp';
+const LAN_TCP_DEFAULT_TTL_SECONDS = 60 * 60;
+
+/**
+ * Mint a bearer token for a raw-TCP LAN tunnel (see websocket/tcpTunnelManager).
+ *
+ * Unlike `mintAccessToken` this is minted directly by the backend, not the
+ * portal: the request originates from the already-authenticated component
+ * over the relay control channel (RelayClient.request_lan_tcp_token →
+ * relayManager's `mint_lan_tcp_token` handling), so there is no separate
+ * portal round-trip to make. Claims are slug-bound, not host-bound — a CLI
+ * tunnel client has no browser host to pin to.
+ */
+function mintLanTcpToken({ serverId, slug, ttlSeconds = LAN_TCP_DEFAULT_TTL_SECONDS } = {}) {
+	if (!config.relay.forwardSecret) {
+		throw new Error('RELAY_FORWARD_SECRET is not configured.');
+	}
+	return jwt.sign(
+		{ sid: serverId, slug, scope: LAN_TCP_SCOPE },
+		config.relay.forwardSecret,
+		{ algorithm: 'HS256', expiresIn: ttlSeconds }
+	);
+}
+
+/**
+ * Verify a LAN-TCP tunnel bearer token. Returns `{ serverId, slug }` or null.
+ */
+function verifyLanTcpToken(token) {
+	if (!token || !config.relay.forwardSecret) {
+		return null;
+	}
+	let decoded;
+	try {
+		decoded = jwt.verify(token, config.relay.forwardSecret, { algorithms: ['HS256'] });
+	} catch (_err) {
+		return null;
+	}
+	if (!decoded || decoded.scope !== LAN_TCP_SCOPE || !decoded.sid || !decoded.slug) {
+		return null;
+	}
+	return { serverId: String(decoded.sid), slug: String(decoded.slug) };
+}
+
+module.exports = {
+	verifyAccessToken, mintAccessToken, readCookie, SCOPE,
+	mintLanTcpToken, verifyLanTcpToken, LAN_TCP_SCOPE
+};

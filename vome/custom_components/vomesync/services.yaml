@@ -170,6 +170,7 @@ add_lan_route:
           options:
             - http
             - https
+            - tcp
     enabled:
       name: Enabled
       required: false
@@ -197,3 +198,29 @@ remove_lan_route:
       required: true
       selector:
         text:
+
+mint_lan_tcp_token:
+  name: Get LAN tunnel token
+  description: >-
+    Mint a short-lived bearer token for a tcp-scheme LAN route, to use with
+    `npx @vortitron/home-assistant-mcp tunnel --token <token>` (e.g. for RDP).
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    slug:
+      name: Slug
+      required: true
+      selector:
+        text:
+    ttl_seconds:
+      name: Token lifetime (seconds)
+      required: false
+      default: 3600
+      selector:
+        number:
+          min: 60
+          max: 86400
+          mode: box

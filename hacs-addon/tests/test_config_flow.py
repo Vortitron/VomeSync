@@ -1982,3 +1982,106 @@ async def test_link_vome_confirm_without_pending_code_restarts(hass, config_entr
 
 	assert result["type"] == FlowResultType.MENU
 	assert result["step_id"] == "link_vome"
+
+
+# ============================================================================
+# Advanced: relay server URL override (dev/staging testing)
+# ============================================================================
+
+_LAN_FLOW_MOD = "custom_components.vomesync.options_flow_lan"
+
+
+@pytest.mark.asyncio
+async def test_relay_server_not_linked_redirects_to_init(hass, config_entry):
+	"""An unlinked entry has nothing to override — bounce back to the main menu."""
+	config_entry.options = {}
+	flow = _relay_flow(hass, config_entry)
+
+	result = await flow.async_step_relay_server(None)
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "init"
+
+
+@pytest.mark.asyncio
+async def test_relay_server_shows_current_value(hass, config_entry):
+	"""The form should default to whatever ws_url is currently stored."""
+	config_entry.options = {
+		"relay": {"server_id": "rly-1", "secret": "rly_rly-1.x", "ws_url": "wss://sync.vome.io/ws/relay"},
+	}
+	flow = _relay_flow(hass, config_entry)
+
+	result = await flow.async_step_relay_server(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "relay_server"
+	assert result["data_schema"]({})["ws_url"] == "wss://sync.vome.io/ws/relay"
+
+
+@pytest.mark.asyncio
+async def test_relay_server_saves_override_and_restarts(hass, config_entry):
+	"""A valid ws:// or wss:// URL is saved and the relay is restarted with it."""
+	config_entry.options = {
+		"relay": {"server_id": "rly-1", "secret": "rly_rly-1.x", "ws_url": "wss://sync.vome.io/ws/relay"},
+	}
+	flow = _relay_flow(hass, config_entry)
+
+	start = AsyncMock()
+	with patch(f"{_LAN_FLOW_MOD}.async_start_relay", new=start):
+		result = await flow.async_step_relay_server({"ws_url": "ws://95.216.77.237:3002/ws/relay"})
+
+	assert result["type"] == FlowResultType.MENU
+	assert result["step_id"] == "init"
+	start.assert_awaited_once()
+	# hass.config_entries is a bare MagicMock in tests, so it never mutates
+	# config_entry.options itself — assert on what was actually saved instead.
+	saved_options = hass.config_entries.async_update_entry.call_args.kwargs["options"]
+	saved = saved_options["relay"]
+	assert saved["ws_url"] == "ws://95.216.77.237:3002/ws/relay"
+	# Link credentials are untouched — this only overrides the URL.
+	assert saved["server_id"] == "rly-1"
+	assert saved["secret"] == "rly_rly-1.x"
+
+
+@pytest.mark.asyncio
+async def test_relay_server_blank_resets_to_default(hass, config_entry):
+	"""Submitting an empty field resets ws_url back to the production default."""
+	config_entry.options = {
+		"relay": {"server_id": "rly-1", "secret": "rly_rly-1.x", "ws_url": "ws://95.216.77.237:3002/ws/relay"},
+	}
+	flow = _relay_flow(hass, config_entry)
+
+	with patch(f"{_LAN_FLOW_MOD}.async_start_relay", new=AsyncMock()):
+		result = await flow.async_step_relay_server({"ws_url": ""})
+
+	saved_options = hass.config_entries.async_update_entry.call_args.kwargs["options"]
+	assert saved_options["relay"]["ws_url"] == "wss://sync.vome.io/ws/relay"
+
+
+@pytest.mark.asyncio
+async def test_relay_server_rejects_invalid_scheme(hass, config_entry):
+	"""A URL that isn't ws:// or wss:// re-shows the form with an error, unsaved."""
+	config_entry.options = {
+		"relay": {"server_id": "rly-1", "secret": "rly_rly-1.x", "ws_url": "wss://sync.vome.io/ws/relay"},
+	}
+	flow = _relay_flow(hass, config_entry)
+
+	with patch(f"{_LAN_FLOW_MOD}.async_start_relay", new=AsyncMock()) as start:
+		result = await flow.async_step_relay_server({"ws_url": "http://evil.example/relay"})
+
+	assert result["type"] == FlowResultType.FORM
+	assert result["errors"]["base"] == "relay_server_url_invalid"
+	start.assert_not_awaited()
+	assert flow._config_entry.options["relay"]["ws_url"] == "wss://sync.vome.io/ws/relay"
+
+
+@pytest.mark.asyncio
+async def test_more_menu_offers_relay_server_only_when_linked(hass, config_entry):
+	"""The advanced override is hidden until there's a link to override."""
+	config_entry.options = {}
+	flow = _relay_flow(hass, config_entry)
+	result = await flow.async_step_more(None)
+	assert "relay_server" not in result["menu_options"]
+
+	config_entry.options = {"relay": {"server_id": "rly-1", "secret": "rly_rly-1.x"}}
+	flow2 = _relay_flow(hass, config_entry)
+	result2 = await flow2.async_step_more(None)
+	assert "relay_server" in result2["menu_options"]

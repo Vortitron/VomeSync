@@ -116,6 +116,10 @@
 		};
 	}
 
+	// Last minted LAN-TCP tunnel token, shown inline after "Get tunnel token"
+	// (not persisted — re-minted on demand; tokens are short-lived anyway).
+	let lastTunnelToken = null;
+
 	function renderLan() {
 		const routes = (state && state.lan_routes) || [];
 		const rows = routes.map((r) => `
@@ -123,14 +127,24 @@
 				<td><strong>${escapeHtml(r.name || r.slug)}</strong><br><code>/t/${escapeHtml(r.slug)}/</code></td>
 				<td class="mono">${escapeHtml(r.scheme)}://${escapeHtml(r.host)}:${r.port}</td>
 				<td>${r.enabled === false ? pill(false, "", "off") : pill(true, "on", "")}</td>
-				<td><button type="button" class="danger" data-remove="${escapeHtml(r.slug)}">Remove</button></td>
+				<td>
+					${r.scheme === "tcp" ? `<button type="button" data-token="${escapeHtml(r.slug)}">Get tunnel token</button>` : ""}
+					<button type="button" class="danger" data-remove="${escapeHtml(r.slug)}">Remove</button>
+				</td>
 			</tr>`).join("");
+		const tokenCard = lastTunnelToken ? `
+			<div class="card">
+				<h2>Tunnel token for <code>${escapeHtml(lastTunnelToken.slug)}</code></h2>
+				<p class="muted">Valid for ${Math.round(lastTunnelToken.ttlSeconds / 60)} minutes. Run this on the machine you want to connect from (select the line and copy — it won't be shown again after you navigate away):</p>
+				<input class="mono" style="width:100%" readonly value="npx @vortitron/home-assistant-mcp tunnel --token ${escapeHtml(lastTunnelToken.token)} --local-port 3390" onclick="this.select()">
+			</div>` : "";
 		viewEl.innerHTML = `
 			<div class="card">
 				<h2>Configured tunnels</h2>
-				<p class="muted">Each route is reachable as <code>/t/&lt;slug&gt;/</code> on your friendly domain after Vome sign-in.</p>
+				<p class="muted">HTTP/WebSocket routes are reachable as <code>/t/&lt;slug&gt;/</code> on your friendly domain after Vome sign-in. <code>tcp</code> routes (e.g. RDP) need a tunnel token below instead — raw TCP isn't something a browser can reach directly.</p>
 				${routes.length ? `<table><thead><tr><th>Route</th><th>Target</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="muted">No LAN routes yet.</p>`}
 			</div>
+			${tokenCard}
 			<div class="card">
 				<h2>Add a tunnel</h2>
 				<div class="row">
@@ -139,12 +153,12 @@
 					<label class="field">Host<input id="host" placeholder="192.168.1.5"></label>
 					<label class="field">Port<input id="port" type="number" value="80" min="1" max="65535"></label>
 					<label class="field">Scheme
-						<select id="scheme"><option>http</option><option>https</option></select>
+						<select id="scheme"><option>http</option><option>https</option><option>tcp</option></select>
 					</label>
 				</div>
 				<div class="row">
 					<label class="toggle"><input type="checkbox" id="enabled" checked> Enabled</label>
-					<label class="toggle"><input type="checkbox" id="websocket" checked> WebSocket</label>
+					<label class="toggle" id="websocket-row"><input type="checkbox" id="websocket" checked> WebSocket</label>
 					<button type="button" class="primary" id="add-route">Add route</button>
 				</div>
 			</div>`;
@@ -155,6 +169,7 @@
 						method: "POST",
 						body: JSON.stringify({ slug: btn.dataset.remove }),
 					});
+					lastTunnelToken = null;
 					showBanner(`Removed /t/${btn.dataset.remove}/`);
 					render();
 				} catch (err) {
@@ -162,6 +177,29 @@
 				}
 			};
 		});
+		document.querySelectorAll("[data-token]").forEach((btn) => {
+			btn.onclick = async () => {
+				try {
+					const slug = btn.dataset.token;
+					const result = await api("/api/lan_routes/token", {
+						method: "POST",
+						body: JSON.stringify({ slug }),
+					});
+					lastTunnelToken = { slug, token: result.token, ttlSeconds: result.ttl_seconds || 3600 };
+					showBanner(`Minted a tunnel token for /t/${slug}/`);
+					render();
+				} catch (err) {
+					showBanner(String(err.message || err), true);
+				}
+			};
+		});
+		const schemeEl = document.getElementById("scheme");
+		const websocketRow = document.getElementById("websocket-row");
+		const updateSchemeUI = () => {
+			websocketRow.classList.toggle("hidden", schemeEl.value === "tcp");
+		};
+		schemeEl.onchange = updateSchemeUI;
+		updateSchemeUI();
 		document.getElementById("add-route").onclick = async () => {
 			try {
 				const payload = {

@@ -30,7 +30,7 @@ ROUTE_SCHEME = "scheme"
 ROUTE_ENABLED = "enabled"
 ROUTE_WEBSOCKET = "websocket"
 
-LAN_ROUTE_SCHEMES = ("http", "https")
+LAN_ROUTE_SCHEMES = ("http", "https", "tcp")
 LAN_MAX_ROUTES = 32
 LAN_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
 # Host: IPv4, IPv6 in brackets, or a simple DNS label sequence (no scheme/path).

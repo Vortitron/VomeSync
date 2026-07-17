@@ -29,6 +29,7 @@ import base64
 import json
 import logging
 import os
+import uuid
 from contextlib import suppress
 from datetime import timedelta
 from typing import Any, Optional
@@ -59,6 +60,7 @@ from .const import (
 	ESPHOME_DEFAULT_PORT,
 	ESPHOME_INGRESS_HOST,
 	ESPHOME_WEB_PORT_KEY,
+	LAN_TCP_TOKEN_DEFAULT_TTL,
 	RELAY_ALLOWED_METHODS,
 	RELAY_DEVICE_CODE_PATH,
 	RELAY_DEVICE_TOKEN_PATH,
@@ -66,6 +68,7 @@ from .const import (
 	RELAY_FORWARD_MAX_BODY,
 	RELAY_FORWARD_STRIP_HEADERS,
 	RELAY_FORWARD_WS_PATHS,
+	RELAY_MINT_TOKEN_TIMEOUT,
 	RELAY_RECONNECT_DELAY,
 	RELAY_RECONNECT_MAX_DELAY,
 	RELAY_RPC_TARGET_ESPHOME,
@@ -78,6 +81,8 @@ from .const import (
 	RELAY_WS_MSG_HELLO,
 	RELAY_WS_MSG_HTTP_PROXY,
 	RELAY_WS_MSG_HTTP_PROXY_RESPONSE,
+	RELAY_WS_MSG_MINT_LAN_TCP_TOKEN,
+	RELAY_WS_MSG_MINT_LAN_TCP_TOKEN_RESPONSE,
 	RELAY_WS_MSG_PING,
 	RELAY_WS_MSG_PONG,
 	RELAY_WS_MSG_WS_CLOSE,
@@ -89,6 +94,9 @@ from .const import (
 	SUPERVISOR_TOKEN_ENV,
 )
 from .lan_routes import (
+	ROUTE_HOST,
+	ROUTE_PORT,
+	ROUTE_SCHEME,
 	find_route,
 	normalise_routes,
 	parse_lan_path,
@@ -251,6 +259,15 @@ class RelayClient:
 		# local HA socket plus the task pumping its frames back up the tunnel.
 		self._ws_local: dict[str, aiohttp.ClientWebSocketResponse] = {}
 		self._ws_pumps: dict[str, asyncio.Task] = {}
+		# Same idea for raw-TCP LAN tunnels (e.g. RDP): a socketId maps to a
+		# local (reader, writer) pair instead of a WebSocket, but rides the
+		# same ws_open/ws_data/ws_close messages — see _handle_lan_ws_open.
+		self._tcp_local: dict[str, tuple[asyncio.StreamReader, asyncio.StreamWriter]] = {}
+		self._tcp_pumps: dict[str, asyncio.Task] = {}
+		# Component-initiated requests awaiting a backend reply on this same
+		# socket (the reverse direction of ha_rpc/http_proxy/ws_open, which are
+		# all backend-initiated) — currently only mint_lan_tcp_token.
+		self._pending_requests: dict[str, asyncio.Future] = {}
 		# Serialise writes to the single relay socket: HTTP responses and many
 		# concurrent WS frames share it, and aiohttp does not guard interleaving.
 		self._send_lock = asyncio.Lock()
@@ -343,6 +360,14 @@ class RelayClient:
 			await self._send(ws, {"type": RELAY_WS_MSG_PONG})
 		elif mtype == RELAY_WS_MSG_HELLO:
 			_LOGGER.debug("Relay (%s): hello acknowledged", self._server_id)
+		elif mtype == RELAY_WS_MSG_MINT_LAN_TCP_TOKEN_RESPONSE:
+			self._resolve_pending_request(data.get("requestId"), data.get("token"))
+
+	def _resolve_pending_request(self, request_id: Any, value: Any) -> None:
+		"""Resolve one of our own outgoing requests (see request_lan_tcp_token)."""
+		future = self._pending_requests.pop(request_id, None)
+		if future is not None and not future.done():
+			future.set_result(value)
 
 	async def _handle_rpc(self, ws: aiohttp.ClientWebSocketResponse, data: dict) -> None:
 		request_id = data.get("requestId")
@@ -425,6 +450,10 @@ class RelayClient:
 		route = find_route(self._lan_routes, slug)
 		if route is None:
 			return 0, None, None, f"No LAN route configured for '{slug}'."
+		if route.get(ROUTE_SCHEME) == "tcp":
+			return 0, None, None, (
+				f"LAN route '{slug}' is TCP-only; open it as a tunnel, not HTTP."
+			)
 		base = route_base_url(route)
 		if not base:
 			return 0, None, None, f"LAN route '{slug}' has an invalid host/port."
@@ -515,9 +544,19 @@ class RelayClient:
 		slug: str,
 		remainder: str,
 	) -> None:
-		"""Open a WebSocket to a configured LAN route under ``/t/<slug>/``."""
+		"""Open a WebSocket (or, for a ``tcp`` route, a raw TCP socket) to a
+		configured LAN route under ``/t/<slug>/``."""
 		route = find_route(self._lan_routes, slug)
-		if route is None or not route_allows_websocket(route):
+		if route is None:
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1008, "reason": f"No LAN route configured for '{slug}'.",
+			})
+			return
+		if route.get(ROUTE_SCHEME) == "tcp":
+			await self._open_bridged_tcp(ws, socket_id, route, slug)
+			return
+		if not route_allows_websocket(route):
 			await self._send(ws, {
 				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
 				"code": 1008, "reason": f"LAN WebSocket not permitted for '{slug}'.",
@@ -585,29 +624,138 @@ class RelayClient:
 					"code": close_code, "reason": close_reason,
 				})
 
-	async def _handle_ws_data(self, data: dict) -> None:
-		"""Forward one browser frame down to the local HA socket."""
-		socket_id = data.get("socketId")
-		local = self._ws_local.get(socket_id)
-		if local is None:
+	async def _open_bridged_tcp(
+		self,
+		ws: aiohttp.ClientWebSocketResponse,
+		socket_id: str,
+		route: dict,
+		slug: str,
+	) -> None:
+		"""Open a raw TCP connection to ``route`` and register the pump for it.
+
+		Reuses ws_open_ack/ws_data/ws_close unchanged: the other end (backend +
+		CLI tunnel client) doesn't know or care that this bridge's local side is
+		a TCP socket rather than a WebSocket.
+		"""
+		host = str(route.get(ROUTE_HOST) or "")
+		try:
+			port = int(route.get(ROUTE_PORT) or 0)
+		except (TypeError, ValueError):
+			port = 0
+		if not host or port < 1 or port > 65535:
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1011, "reason": f"LAN route '{slug}' has an invalid host/port.",
+			})
 			return
 		try:
-			if data.get("dataB64") is not None:
-				await local.send_bytes(base64.b64decode(data["dataB64"]))
-			elif data.get("text") is not None:
-				await local.send_str(str(data["text"]))
-		except (aiohttp.ClientError, ValueError, TypeError) as err:
-			_LOGGER.debug("Relay (%s) ws_data forward failed: %s", self._server_id, err)
+			reader, writer = await asyncio.open_connection(host, port)
+		except (OSError, asyncio.TimeoutError) as err:
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1011, "reason": f"LAN target '{slug}' connect failed: {err}",
+			})
+			return
+		self._tcp_local[socket_id] = (reader, writer)
+		await self._send(ws, {"type": RELAY_WS_MSG_WS_OPEN_ACK, "socketId": socket_id})
+		self._tcp_pumps[socket_id] = asyncio.ensure_future(
+			self._pump_local_tcp(ws, socket_id, reader)
+		)
+
+	async def _pump_local_tcp(
+		self,
+		ws: aiohttp.ClientWebSocketResponse,
+		socket_id: str,
+		reader: asyncio.StreamReader,
+	) -> None:
+		"""Forward bytes from the local TCP socket up to the tunnel, until closed."""
+		close_code, close_reason = 1000, ""
+		try:
+			while True:
+				chunk = await reader.read(65536)
+				if not chunk:
+					break
+				await self._send(ws, {
+					"type": RELAY_WS_MSG_WS_DATA, "socketId": socket_id,
+					"dataB64": base64.b64encode(chunk).decode("ascii"),
+				})
+		except (OSError, asyncio.CancelledError):
+			pass
+		finally:
+			tcp = self._tcp_local.pop(socket_id, None)
+			self._tcp_pumps.pop(socket_id, None)
+			if tcp is not None:
+				with suppress(Exception):
+					tcp[1].close()
+			with suppress(Exception):
+				await self._send(ws, {
+					"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+					"code": close_code, "reason": close_reason,
+				})
+
+	async def request_lan_tcp_token(
+		self, slug: str, ttl_seconds: int = LAN_TCP_TOKEN_DEFAULT_TTL
+	) -> tuple[Optional[str], Optional[str]]:
+		"""Ask the backend to mint a short-lived bearer token for a ``tcp`` LAN
+		route, over the already-authenticated relay socket.
+
+		Returns ``(token, None)`` or ``(None, error)``.  Called from the
+		``mint_lan_tcp_token`` service (see services_remote.py) so a CLI tunnel
+		client (e.g. ``npx home-assistant-mcp tunnel``) never needs its own
+		credential — the token is scoped server-side to this server_id + slug.
+		"""
+		ws = self._ws
+		if ws is None:
+			return None, "Relay is not connected."
+		request_id = str(uuid.uuid4())
+		future: asyncio.Future = self._hass.loop.create_future()
+		self._pending_requests[request_id] = future
+		await self._send(ws, {
+			"type": RELAY_WS_MSG_MINT_LAN_TCP_TOKEN,
+			"requestId": request_id,
+			"slug": slug,
+			"ttlSeconds": ttl_seconds,
+		})
+		try:
+			token = await asyncio.wait_for(future, timeout=RELAY_MINT_TOKEN_TIMEOUT)
+		except asyncio.TimeoutError:
+			self._pending_requests.pop(request_id, None)
+			return None, "Timed out waiting for a tunnel token from Vome."
+		if not token:
+			return None, "Vome did not return a tunnel token."
+		return str(token), None
+
+	async def _handle_ws_data(self, data: dict) -> None:
+		"""Forward one frame down to the local HA socket or TCP connection."""
+		socket_id = data.get("socketId")
+		local = self._ws_local.get(socket_id)
+		if local is not None:
+			try:
+				if data.get("dataB64") is not None:
+					await local.send_bytes(base64.b64decode(data["dataB64"]))
+				elif data.get("text") is not None:
+					await local.send_str(str(data["text"]))
+			except (aiohttp.ClientError, ValueError, TypeError) as err:
+				_LOGGER.debug("Relay (%s) ws_data forward failed: %s", self._server_id, err)
+			return
+		tcp = self._tcp_local.get(socket_id)
+		if tcp is not None and data.get("dataB64") is not None:
+			_, writer = tcp
+			try:
+				writer.write(base64.b64decode(data["dataB64"]))
+				await writer.drain()
+			except (OSError, ValueError, TypeError) as err:
+				_LOGGER.debug("Relay (%s) tcp_data forward failed: %s", self._server_id, err)
 
 	async def _handle_ws_close(self, data: dict) -> None:
 		"""Close a bridged socket because the browser side went away."""
 		await self._teardown_tunnel(data.get("socketId"))
 
 	async def _teardown_tunnel(self, socket_id: Optional[str]) -> None:
-		"""Cancel the pump and close the local socket for one bridge."""
+		"""Cancel the pump and close the local socket (WebSocket or TCP) for one bridge."""
 		if not socket_id:
 			return
-		pump = self._ws_pumps.pop(socket_id, None)
+		pump = self._ws_pumps.pop(socket_id, None) or self._tcp_pumps.pop(socket_id, None)
 		if pump is not None:
 			pump.cancel()
 			with suppress(asyncio.CancelledError):
@@ -616,10 +764,15 @@ class RelayClient:
 		if local is not None:
 			with suppress(Exception):
 				await local.close()
+		tcp = self._tcp_local.pop(socket_id, None)
+		if tcp is not None:
+			with suppress(Exception):
+				tcp[1].close()
 
 	async def _close_all_tunnels(self) -> None:
 		"""Tear down every bridged socket (called when the relay drops)."""
-		for socket_id in list(self._ws_local) + list(self._ws_pumps):
+		socket_ids = set(self._ws_local) | set(self._ws_pumps) | set(self._tcp_local) | set(self._tcp_pumps)
+		for socket_id in socket_ids:
 			await self._teardown_tunnel(socket_id)
 
 	# ── Local Home Assistant execution ──────────────────────────────────────
@@ -978,3 +1131,12 @@ async def async_stop_relay(hass: HomeAssistant, entry) -> None:
 	client = relays.pop(entry.entry_id, None)
 	if client is not None:
 		await client.stop()
+
+
+def get_relay_client(hass: HomeAssistant, entry_id: str) -> Optional[RelayClient]:
+	"""Return the live ``RelayClient`` for a linked entry, or ``None``.
+
+	Public accessor so other modules (e.g. services_remote.mint_lan_tcp_token)
+	don't reach into the private ``_RELAYS_KEY`` registry directly.
+	"""
+	return hass.data.get(DOMAIN, {}).get(_RELAYS_KEY, {}).get(entry_id)

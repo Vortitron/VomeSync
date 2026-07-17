@@ -74,6 +74,19 @@ class TestValidateRoute:
 		])
 		assert len(out) == 1 and out[0]["host"] == "192.168.0.1"
 
+	def test_accepts_tcp_scheme(self):
+		route, err = validate_route({
+			"slug": "rdp", "host": "192.168.1.10", "port": 3389, "scheme": "tcp",
+		})
+		assert err is None
+		assert route["scheme"] == "tcp"
+		assert route_base_url(route) == "tcp://192.168.1.10:3389"
+
+	def test_rejects_unknown_scheme(self):
+		assert validate_route({
+			"slug": "x", "host": "1.2.3.4", "port": 80, "scheme": "ftp",
+		})[1] == "lan_scheme_invalid"
+
 
 class TestHeaderRewrite:
 	def test_location_absolute_path(self):
