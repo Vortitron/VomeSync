@@ -6,6 +6,21 @@ from unittest.mock import AsyncMock, MagicMock
 from custom_components.vomesync.const import DOMAIN
 from custom_components.vomesync import _register_services
 
+# Switch services (_register_services) + remote-access services
+# (async_register_remote_services). Keep in sync with services.yaml.
+EXPECTED_SERVICES = frozenset({
+	"create_switch",
+	"subscribe_switch",
+	"delete_switch",
+	"get_remote_status",
+	"set_forward_ui",
+	"set_lan_routes",
+	"set_relay_server",
+	"add_lan_route",
+	"remove_lan_route",
+	"mint_lan_tcp_token",
+})
+
 
 @pytest.mark.asyncio
 async def test_services_call_coordinator_methods(hass, config_entry):
@@ -22,9 +37,11 @@ async def test_services_call_coordinator_methods(hass, config_entry):
 
 	_register_services(hass)
 
-	assert hass.services.async_register.call_count == 3
 	calls = hass.services.async_register.call_args_list
-	
+	registered = {c[0][1] for c in calls}
+	assert registered == EXPECTED_SERVICES
+	assert hass.services.async_register.call_count == len(EXPECTED_SERVICES)
+
 	# Ensure the subscribe service schema only requires uid (no name)
 	subscribe = [c for c in calls if c[0][1] == "subscribe_switch"][0]
 	schema = subscribe[1]["schema"]
@@ -38,4 +55,8 @@ async def test_services_call_coordinator_methods(hass, config_entry):
 	assert "icon_url" in create_schema.schema
 	assert "banner_url" in create_schema.schema
 	assert "captcha_token" in create_schema.schema
+
+	# set_relay_server accepts optional ws_url (blank resets to default)
+	relay_server = [c for c in calls if c[0][1] == "set_relay_server"][0]
+	assert "ws_url" in relay_server[1]["schema"].schema
 

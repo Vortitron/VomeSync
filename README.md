@@ -380,7 +380,7 @@ WS upstream via the existing `/ws` location. Tests:
 ### Test Suite Status
 
 - ✅ **Webserver Tests**: 100% passing (Jest unit + integration tests)
-- ✅ **HA Integration Tests**: 39/39 passing (pytest with mocked HA core)
+- ✅ **HA Integration Tests**: 254 passing, 1 skipped (pytest with mocked HA core)
 - ✅ **Backend API**: Fully functional (create, toggle, status, WebSocket)
 - ⚠ **HA UI**: Requires manual testing through options flow
 

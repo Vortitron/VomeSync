@@ -198,13 +198,10 @@ pipeline {
                     post {
                         always {
                             junit allowEmptyResults: true, testResults: 'junit-hacs.xml'
-                            script {
-                                try {
-                                    cobertura coberturaReportFile: 'coverage-hacs.xml', onlyStable: false
-                                } catch (Throwable err) {
-                                    echo "Cobertura publisher unavailable: ${err}"
-                                }
-                            }
+                            // Cobertura plugin is incompatible with current Jenkins
+                            // (NoClassDefFoundError: hudson/util/IOException2). Archive the
+                            // XML instead so coverage is still available from the build.
+                            archiveArtifacts artifacts: 'coverage-hacs.xml', allowEmptyArchive: true
                         }
                     }
                 }
