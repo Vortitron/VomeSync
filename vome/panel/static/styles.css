@@ -167,3 +167,13 @@ input, select {
 	.tree { border-right: 0; border-bottom: 1px solid var(--line); }
 	.tree nav { flex-direction: row; flex-wrap: wrap; }
 }
+
+/* LAN-tunnel / RDP helper UI */
+ol.steps { margin: 0.5rem 0 0; padding-left: 1.2rem; }
+ol.steps > li { margin-bottom: 0.8rem; }
+ol.steps ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
+.cmd-row { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
+.cmd-row .cmd { flex: 1; min-width: 0; }
+.field.small { margin-top: 0.4rem; }
+.field.small input { width: 6rem; }
+.muted.small, p.small { font-size: 0.85rem; }

@@ -49,6 +49,8 @@ def _ha_request(method: str, path: str, body: Optional[dict] = None) -> tuple[in
 		status = err.code
 	except urllib.error.URLError as err:
 		return 502, {"error": f"Home Assistant unreachable: {err}"}
+	except Exception as err:  # noqa: BLE001 - never let a transport error 500 the panel
+		return 502, {"error": f"Panel could not reach Home Assistant: {err}"}
 	if not raw:
 		return status, {}
 	try:
@@ -61,6 +63,29 @@ def call_service(service: str, data: Optional[dict] = None) -> tuple[int, Any]:
 	"""Invoke a vomesync service with ``return_response``."""
 	path = f"/services/vomesync/{service}?return_response"
 	return _ha_request("POST", path, data or {})
+
+
+def _unwrap(payload: Any) -> Any:
+	"""Normalise a Core response into the flat dict the panel UI expects.
+
+	Modern cores wrap service results as ``{"service_response": {...}}``; unwrap
+	that.  When Core returns an error instead (``{"message": ...}``) or a
+	non-JSON body (``{"raw": ...}``), surface it as ``{"error": ...}`` so the UI
+	shows the actual reason rather than a generic "invalid response".
+	"""
+	if not isinstance(payload, dict):
+		return payload
+	if "service_response" in payload:
+		return payload["service_response"]
+	if "error" in payload:
+		return payload
+	if "message" in payload:
+		return {"error": payload["message"]}
+	if "raw" in payload:
+		text = str(payload["raw"]).strip()
+		first = text.splitlines()[0] if text else "empty response from Home Assistant"
+		return {"error": first}
+	return payload
 
 
 class PanelHandler(BaseHTTPRequestHandler):
@@ -93,6 +118,20 @@ class PanelHandler(BaseHTTPRequestHandler):
 		return data if isinstance(data, dict) else {}
 
 	def do_GET(self) -> None:  # noqa: N802
+		try:
+			self._route_get()
+		except Exception as err:  # noqa: BLE001 - a handler crash must still return JSON
+			LOG.exception("panel GET %s failed", self.path)
+			self._send_json(500, {"error": f"Panel error: {err}"})
+
+	def do_POST(self) -> None:  # noqa: N802
+		try:
+			self._route_post()
+		except Exception as err:  # noqa: BLE001 - a handler crash must still return JSON
+			LOG.exception("panel POST %s failed", self.path)
+			self._send_json(500, {"error": f"Panel error: {err}"})
+
+	def _route_get(self) -> None:
 		parsed = urlparse(self.path)
 		path = parsed.path or "/"
 		if path in ("/", "/index.html"):
@@ -107,14 +146,11 @@ class PanelHandler(BaseHTTPRequestHandler):
 			return
 		if path == "/api/status":
 			status, payload = call_service("get_remote_status", {})
-			# HA wraps service responses as {"service_response": {...}} on modern cores.
-			if isinstance(payload, dict) and "service_response" in payload:
-				payload = payload["service_response"]
-			self._send_json(status if status < 500 else status, payload)
+			self._send_json(status, _unwrap(payload))
 			return
 		self._send_json(404, {"error": "not found"})
 
-	def do_POST(self) -> None:  # noqa: N802
+	def _route_post(self) -> None:
 		parsed = urlparse(self.path)
 		path = parsed.path or "/"
 		body = self._read_json()
@@ -130,9 +166,7 @@ class PanelHandler(BaseHTTPRequestHandler):
 			return
 		service, data = mapping[path]
 		status, payload = call_service(service, data)
-		if isinstance(payload, dict) and "service_response" in payload:
-			payload = payload["service_response"]
-		self._send_json(status, payload)
+		self._send_json(status, _unwrap(payload))
 
 	def _serve_static(self, name: str, content_type: str) -> None:
 		# Prevent path escape.

@@ -132,25 +132,44 @@
 					<button type="button" class="danger" data-remove="${escapeHtml(r.slug)}">Remove</button>
 				</td>
 			</tr>`).join("");
+		const localPort = (lastTunnelToken && lastTunnelToken.localPort) || 3390;
+		const cmd = lastTunnelToken
+			? `npx @vortitron/home-assistant-mcp tunnel --token ${lastTunnelToken.token} --local-port ${localPort}`
+			: "";
 		const tokenCard = lastTunnelToken ? `
 			<div class="card">
-				<h2>Tunnel token for <code>${escapeHtml(lastTunnelToken.slug)}</code></h2>
-				<p class="muted">Valid for ${Math.round(lastTunnelToken.ttlSeconds / 60)} minutes. Run this on the machine you want to connect from (select the line and copy — it won't be shown again after you navigate away):</p>
-				<input class="mono" style="width:100%" readonly value="npx @vortitron/home-assistant-mcp tunnel --token ${escapeHtml(lastTunnelToken.token)} --local-port 3390" onclick="this.select()">
+				<h2>Connect to <code>${escapeHtml(lastTunnelToken.slug)}</code> (${escapeHtml(lastTunnelToken.scheme || "tcp")})</h2>
+				<p class="muted">A tunnel opens <code>127.0.0.1:${localPort}</code> on the machine you run the command below on, and forwards it to this route over your existing Vome link — no port-forwarding. The token is valid for ${Math.round(lastTunnelToken.ttlSeconds / 60)} minutes.</p>
+				<ol class="steps">
+					<li>On the machine you want to connect <em>from</em>, install <a href="https://nodejs.org" target="_blank" rel="noreferrer">Node.js</a> (one-time), then run:
+						<div class="cmd-row"><input class="mono cmd" readonly value="${escapeHtml(cmd)}" onclick="this.select()"><button type="button" id="copy-cmd">Copy</button></div>
+						<label class="field small">Local port<input id="tok-port" type="number" min="1" max="65535" value="${localPort}"></label>
+					</li>
+					<li>Leave it running. Point your client at <code>127.0.0.1:${localPort}</code>:
+						<ul class="muted">
+							<li><strong>RDP</strong> — Remote Desktop / <code>mstsc</code> / Remmina → <code>127.0.0.1:${localPort}</code></li>
+							<li>Anything else (SSH, VNC, a database) → same address, that port.</li>
+						</ul>
+					</li>
+				</ol>
 			</div>` : "";
 		viewEl.innerHTML = `
 			<div class="card">
 				<h2>Configured tunnels</h2>
-				<p class="muted">HTTP/WebSocket routes are reachable as <code>/t/&lt;slug&gt;/</code> on your friendly domain after Vome sign-in. <code>tcp</code> routes (e.g. RDP) need a tunnel token below instead — raw TCP isn't something a browser can reach directly.</p>
-				${routes.length ? `<table><thead><tr><th>Route</th><th>Target</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="muted">No LAN routes yet.</p>`}
+				<p class="muted"><strong>http/https</strong> routes open in a browser at <code>/t/&lt;slug&gt;/</code> on your friendly domain after Vome sign-in. <strong>tcp</strong> routes (Remote Desktop, SSH, VNC…) aren't browser-reachable — click <em>Get tunnel token</em> on the route for a one-line command that bridges them to your local machine.</p>
+				${routes.length ? `<table><thead><tr><th>Route</th><th>Target</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="muted">No LAN routes yet — add one below. For Remote Desktop, use the <strong>RDP</strong> preset.</p>`}
 			</div>
 			${tokenCard}
 			<div class="card">
 				<h2>Add a tunnel</h2>
 				<div class="row">
-					<label class="field">Slug<input id="slug" placeholder="nas"></label>
-					<label class="field">Name<input id="name" placeholder="NAS"></label>
-					<label class="field">Host<input id="host" placeholder="192.168.1.5"></label>
+					<button type="button" id="preset-rdp">Remote Desktop (RDP) preset</button>
+					<span class="muted">fills in a raw-tcp route to port 3389 — just set the host.</span>
+				</div>
+				<div class="row">
+					<label class="field">Slug<input id="slug" placeholder="rdp"></label>
+					<label class="field">Name<input id="name" placeholder="Office PC"></label>
+					<label class="field">Host<input id="host" placeholder="192.168.1.50"></label>
 					<label class="field">Port<input id="port" type="number" value="80" min="1" max="65535"></label>
 					<label class="field">Scheme
 						<select id="scheme"><option>http</option><option>https</option><option>tcp</option></select>
@@ -161,6 +180,7 @@
 					<label class="toggle" id="websocket-row"><input type="checkbox" id="websocket" checked> WebSocket</label>
 					<button type="button" class="primary" id="add-route">Add route</button>
 				</div>
+				<p class="muted small" id="scheme-hint"></p>
 			</div>`;
 		document.querySelectorAll("[data-remove]").forEach((btn) => {
 			btn.onclick = async () => {
@@ -181,25 +201,65 @@
 			btn.onclick = async () => {
 				try {
 					const slug = btn.dataset.token;
+					const route = routes.find((r) => r.slug === slug) || {};
 					const result = await api("/api/lan_routes/token", {
 						method: "POST",
 						body: JSON.stringify({ slug }),
 					});
-					lastTunnelToken = { slug, token: result.token, ttlSeconds: result.ttl_seconds || 3600 };
-					showBanner(`Minted a tunnel token for /t/${slug}/`);
+					lastTunnelToken = {
+						slug,
+						scheme: route.scheme,
+						token: result.token,
+						ttlSeconds: result.ttl_seconds || 3600,
+						localPort: route.port === 3389 ? 3390 : (route.port || 3390),
+					};
+					showBanner(`Tunnel token ready for ${slug} — see the command below.`);
 					render();
 				} catch (err) {
 					showBanner(String(err.message || err), true);
 				}
 			};
 		});
+		const copyBtn = document.getElementById("copy-cmd");
+		if (copyBtn) {
+			copyBtn.onclick = () => {
+				const input = document.querySelector(".cmd");
+				input.select();
+				navigator.clipboard?.writeText(input.value).catch(() => document.execCommand("copy"));
+				showBanner("Command copied to clipboard.");
+			};
+		}
+		const tokPort = document.getElementById("tok-port");
+		if (tokPort) {
+			tokPort.onchange = () => {
+				const p = Number(tokPort.value);
+				if (lastTunnelToken && p >= 1 && p <= 65535) {
+					lastTunnelToken.localPort = p;
+					render();
+				}
+			};
+		}
 		const schemeEl = document.getElementById("scheme");
+		const portEl = document.getElementById("port");
 		const websocketRow = document.getElementById("websocket-row");
+		const schemeHint = document.getElementById("scheme-hint");
 		const updateSchemeUI = () => {
-			websocketRow.classList.toggle("hidden", schemeEl.value === "tcp");
+			const isTcp = schemeEl.value === "tcp";
+			websocketRow.classList.toggle("hidden", isTcp);
+			schemeHint.textContent = isTcp
+				? "Raw TCP: not browser-reachable. After adding, use “Get tunnel token” to connect (RDP = 3389, SSH = 22, VNC = 5900)."
+				: "";
 		};
 		schemeEl.onchange = updateSchemeUI;
 		updateSchemeUI();
+		document.getElementById("preset-rdp").onclick = () => {
+			document.getElementById("slug").value = document.getElementById("slug").value || "rdp";
+			document.getElementById("name").value = document.getElementById("name").value || "Remote Desktop";
+			schemeEl.value = "tcp";
+			portEl.value = 3389;
+			updateSchemeUI();
+			document.getElementById("host").focus();
+		};
 		document.getElementById("add-route").onclick = async () => {
 			try {
 				const payload = {
