@@ -41,3 +41,41 @@ def test_unwrap_empty_raw_has_a_reason():
 def test_unwrap_passes_through_existing_error_and_plain_dicts():
 	assert server._unwrap({"error": "boom"}) == {"error": "boom"}
 	assert server._unwrap({"linked": False}) == {"linked": False}
+
+
+def test_read_body_chunked_transfer_encoding():
+	"""HA's ingress forwards add-on POST bodies chunked with no Content-Length.
+
+	Regression for the write-400 bug: reading only Content-Length dropped the
+	whole payload, so every mutation reached Core with {} and was rejected.
+	"""
+	import io
+	import types
+
+	body = b'{"slug":"rdp","host":"192.168.1.5","port":3389}'
+	framed = b"%x\r\n%s\r\n0\r\n\r\n" % (len(body), body)
+	fake = types.SimpleNamespace(
+		headers={"Transfer-Encoding": "chunked"},
+		rfile=io.BytesIO(framed),
+	)
+	assert server.PanelHandler._read_body(fake) == body
+
+
+def test_read_body_content_length_still_works():
+	import io
+	import types
+
+	body = b'{"forward_ui":true}'
+	fake = types.SimpleNamespace(
+		headers={"Content-Length": str(len(body))},
+		rfile=io.BytesIO(body),
+	)
+	assert server.PanelHandler._read_body(fake) == body
+
+
+def test_read_body_no_body_is_empty():
+	import io
+	import types
+
+	fake = types.SimpleNamespace(headers={}, rfile=io.BytesIO(b""))
+	assert server.PanelHandler._read_body(fake) == b""

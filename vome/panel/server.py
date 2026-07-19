@@ -239,8 +239,6 @@ class PanelHandler(BaseHTTPRequestHandler):
 
 	def _read_json(self) -> dict:
 		raw = self._read_body()
-		LOG.info("VOME_DBG panel body: te=%r cl=%r read=%d",
-			self.headers.get("Transfer-Encoding"), self.headers.get("Content-Length"), len(raw))
 		if not raw:
 			return {}
 		try:
