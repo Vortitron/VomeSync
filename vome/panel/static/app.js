@@ -42,19 +42,44 @@
 		}
 		if (!res.ok) {
 			const msg = data.error || data.message || `HTTP ${res.status}`;
-			throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+			const error = new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+			error.data = data;
+			throw error;
 		}
 		return data;
+	}
+
+	// "400: Bad Request" with no detail is Home Assistant's answer when the
+	// vomesync services don't exist at all — the integration isn't running.
+	function friendlyStatusError(err) {
+		const msg = String(err.message || err);
+		if (/^400\b|Bad Request/i.test(msg)) {
+			return "The Vome integration isn't running inside Home Assistant. " +
+				"Restart Home Assistant (Settings → System → ⋮ → Restart) to load it. " +
+				"If this comes back after a restart, open Settings → System → Logs and search for “vomesync” — the error there is the real cause.";
+		}
+		return msg;
+	}
+
+	function restartNeeded() {
+		return !!(state && state.integration_version && state.installed_version
+			&& state.integration_version !== state.installed_version);
 	}
 
 	async function refresh() {
 		showBanner("");
 		try {
 			state = await api("/api/status");
+			if (restartNeeded()) {
+				showBanner(`Vome ${state.installed_version} is installed but Home Assistant is still running ${state.integration_version}. Restart Home Assistant (Settings → System → ⋮ → Restart) to finish the update.`, true);
+			}
 			render();
 		} catch (err) {
-			showBanner(String(err.message || err), true);
+			showBanner(friendlyStatusError(err), true);
 			state = state || { linked: false, lan_routes: [], forward_ui: false };
+			if (err.data && typeof err.data === "object") {
+				state.installed_version = err.data.installed_version || state.installed_version;
+			}
 			render();
 		}
 	}
@@ -75,7 +100,13 @@
 	function renderOverview() {
 		const routes = (state && state.lan_routes) || [];
 		const enabled = routes.filter((r) => r.enabled !== false).length;
-		viewEl.innerHTML = `
+		const restartCard = restartNeeded() ? `
+			<div class="card warn-card">
+				<h2>Restart needed to finish updating</h2>
+				<p class="muted">The app installed Vome integration <strong>${escapeHtml(state.installed_version)}</strong>, but Home Assistant is still running <strong>${escapeHtml(state.integration_version)}</strong>. Home Assistant only loads integration code at startup.</p>
+				<p class="muted">Go to <strong>Settings → System → ⋮ (top right) → Restart Home Assistant</strong>, then come back here.</p>
+			</div>` : "";
+		viewEl.innerHTML = `${restartCard}
 			<div class="card">
 				<h2>Status</h2>
 				<p class="muted">Same settings as the HACS options menu, laid out as a tree so remote access and LAN tunnels are easier to find.</p>
@@ -392,10 +423,18 @@
 	}
 
 	function renderAbout() {
+		const running = (state && state.integration_version) || "unknown";
+		const installed = (state && state.installed_version) || "unknown";
 		viewEl.innerHTML = `
 			<div class="card">
-				<h2>One codebase</h2>
-				<p class="muted">This add-on installs the same <code>custom_components/vomesync</code> tree HACS uses. Switches and the relay work either way; the add-on adds this control panel and is where heavier companions (browser RDP, …) will live.</p>
+				<h2>Versions</h2>
+				<p class="muted">Integration running in Home Assistant: <code>${escapeHtml(running)}</code><br>
+				Integration installed on disk: <code>${escapeHtml(installed)}</code></p>
+				${running !== installed ? `<p class="muted"><strong>They differ — restart Home Assistant to load the installed version.</strong></p>` : ""}
+			</div>
+			<div class="card">
+				<h2>How the app and HACS relate</h2>
+				<p class="muted">This app bundles the Vome integration and installs it into Home Assistant on every app start — HACS is <em>not</em> required. If you previously installed it via HACS, the app's copy replaces it (same code, app-managed). Home Assistant only loads integration code at startup, so integration updates always need one HA restart — the panel tells you when.</p>
 			</div>`;
 	}
 

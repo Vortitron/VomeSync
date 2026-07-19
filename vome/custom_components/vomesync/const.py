@@ -4,6 +4,13 @@ import re
 # Integration domain
 DOMAIN = "vomesync"
 
+# The version of THIS loaded code — must match manifest.json (a test pins the
+# two together). Deliberately a constant rather than a manifest read: after the
+# add-on copies a newer build into /config, the file on disk is new but the
+# module Home Assistant is running is still old. Comparing this constant with
+# the on-disk manifest is how the panel knows a restart is required.
+INTEGRATION_VERSION = "0.9.1"
+
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
 CONF_SERVER_URL = "server_url"

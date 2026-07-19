@@ -21,6 +21,7 @@ from .const import (
 	CONF_RELAY_WS_URL,
 	DEFAULT_RELAY_WS_URL,
 	DOMAIN,
+	INTEGRATION_VERSION,
 	LAN_TCP_TOKEN_DEFAULT_TTL,
 	LAN_TCP_TOKEN_MAX_TTL,
 )
@@ -78,6 +79,7 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 	routes = normalise_routes(relay.get(CONF_RELAY_LAN_ROUTES))
 	return {
 		"entry_id": entry.entry_id,
+		"integration_version": INTEGRATION_VERSION,
 		"linked": bool(relay.get(CONF_RELAY_SERVER_ID)),
 		"server_id": relay.get(CONF_RELAY_SERVER_ID) or "",
 		"forward_ui": bool(relay.get(CONF_RELAY_FORWARD_UI)),

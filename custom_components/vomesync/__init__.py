@@ -43,6 +43,11 @@ def _redacted_options(options):
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 	"""Set up VomeSync integration from configuration.yaml."""
 	hass.data.setdefault(DOMAIN, {})
+	# Services are hass-scoped, not entry-scoped: register them here so they
+	# exist even when an entry fails to set up. Otherwise every vomesync.*
+	# call surfaces as a bare "400: Bad Request" (ServiceNotFound) in the
+	# add-on panel, with no hint of the real problem.
+	_register_services(hass)
 	return True
 
 
@@ -68,17 +73,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	
 	# Create coordinator
 	coordinator = VomeSyncCoordinator(hass, entry)
-	
+
 	# Store coordinator
 	hass.data.setdefault(DOMAIN, {})
 	hass.data[DOMAIN][entry.entry_id] = coordinator
-	
-	# Start coordinator and fetch data from API before setting up platforms
-	await coordinator.async_config_entry_first_refresh()
-	
-	# Set up entity linking (including bidirectional tracking for owned switches)
-	await coordinator.async_setup_entity_links()
-	
+
+	_register_services(hass)
+
+	# Start the outbound relay FIRST: remote access (the panel, LAN tunnels,
+	# UI forwarding) must never be hostage to the switch-sync API. It only
+	# needs the entry options, and async_start_relay is idempotent.
+	await async_start_relay(hass, entry)
+
+	# Switch sync is best-effort at startup: the coordinator refreshes on its
+	# regular interval, so a failed first fetch degrades switch entities
+	# until the API recovers instead of killing the whole entry (which would
+	# also take down the relay and every service the panel depends on).
+	try:
+		await coordinator.async_config_entry_first_refresh()
+		await coordinator.async_setup_entity_links()
+	except Exception as err:  # noqa: BLE001
+		_LOGGER.warning(
+			"Initial switch sync failed; switch entities may be empty until "
+			"the next poll succeeds. Remote access is unaffected. Error: %s",
+			err,
+		)
+
 	# Setup platforms (entities will be created from coordinator data)
 	await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -87,7 +107,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 		uid = str(pending_uid).strip()
 		if uid:
 			initial_access_key = str((entry.data or {}).get("initial_access_key", "") or "").strip()
-			ok = await coordinator.subscribe_to_switch(uid, access_key=initial_access_key or None)
+			try:
+				ok = await coordinator.subscribe_to_switch(uid, access_key=initial_access_key or None)
+			except Exception as err:  # noqa: BLE001
+				ok = False
+				_LOGGER.warning("Initial switch subscribe raised (uid=%s): %s", uid, err)
 			if ok:
 				_LOGGER.info("Initial switch subscribed from setup (uid=%s)", uid)
 			else:
@@ -99,11 +123,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 		new_data.pop(CONF_SWITCH_UID, None)
 		new_data.pop("initial_access_key", None)
 		hass.config_entries.async_update_entry(entry, data=new_data)
-	
-	_register_services(hass)
-
-	# Start the outbound relay if this entry is linked to a Vome account.
-	await async_start_relay(hass, entry)
 
 	return True
 

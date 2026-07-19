@@ -65,6 +65,33 @@ def call_service(service: str, data: Optional[dict] = None) -> tuple[int, Any]:
 	return _ha_request("POST", path, data or {})
 
 
+def _manifest_version(path: str) -> str:
+	"""Read a vomesync manifest.json version, '' if unreadable."""
+	try:
+		with open(path, encoding="utf-8") as fh:
+			return str(json.load(fh).get("version", ""))
+	except (OSError, ValueError):
+		return ""
+
+
+def installed_versions() -> dict:
+	"""Versions the panel can see on disk.
+
+	``installed_version`` is what sits in /config (what Core WILL run after a
+	restart); the integration reports what it IS running via
+	``integration_version`` in get_remote_status.  A mismatch means "restart
+	Home Assistant to finish the update" — the UI turns that into a banner.
+	"""
+	return {
+		"installed_version": _manifest_version(
+			"/config/custom_components/vomesync/manifest.json"
+		),
+		"bundled_version": _manifest_version(
+			"/usr/share/vome/custom_components/vomesync/manifest.json"
+		),
+	}
+
+
 def _unwrap(payload: Any) -> Any:
 	"""Normalise a Core response into the flat dict the panel UI expects.
 
@@ -146,7 +173,10 @@ class PanelHandler(BaseHTTPRequestHandler):
 			return
 		if path == "/api/status":
 			status, payload = call_service("get_remote_status", {})
-			self._send_json(status, _unwrap(payload))
+			body = _unwrap(payload)
+			if isinstance(body, dict):
+				body = {**body, **installed_versions()}
+			self._send_json(status, body)
 			return
 		self._send_json(404, {"error": "not found"})
 
