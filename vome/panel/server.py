@@ -74,22 +74,69 @@ def _manifest_version(path: str) -> str:
 		return ""
 
 
+def _config_root() -> str:
+	"""HA config mount inside this container ('' if not mounted).
+
+	``homeassistant_config`` mounts at /homeassistant; the legacy ``config``
+	mapping mounts at /config.  If neither exists the add-on cannot install
+	the integration at all — the diagnostics surface that loudly.
+	"""
+	for root in ("/homeassistant", "/config"):
+		if os.path.isdir(root):
+			return root
+	return ""
+
+
 def installed_versions() -> dict:
 	"""Versions the panel can see on disk.
 
-	``installed_version`` is what sits in /config (what Core WILL run after a
-	restart); the integration reports what it IS running via
+	``installed_version`` is what sits in HA config (what Core WILL run after
+	a restart); the integration reports what it IS running via
 	``integration_version`` in get_remote_status.  A mismatch means "restart
 	Home Assistant to finish the update" — the UI turns that into a banner.
 	"""
+	root = _config_root()
 	return {
 		"installed_version": _manifest_version(
-			"/config/custom_components/vomesync/manifest.json"
-		),
+			f"{root}/custom_components/vomesync/manifest.json"
+		) if root else "",
 		"bundled_version": _manifest_version(
 			"/usr/share/vome/custom_components/vomesync/manifest.json"
 		),
 	}
+
+
+def run_diagnostics() -> dict:
+	"""Self-diagnosis for the panel's About view / error state.
+
+	Answers, in order of likelihood: is HA config even mounted, did the
+	integration copy land, what can Core see, and which vomesync services
+	are actually registered (distinguishes "integration not loaded" from
+	"old integration loaded" from "schema rejected the data").
+	"""
+	root = _config_root()
+	diag: dict = {
+		"config_mounted": bool(root),
+		"config_root": root or "none — the app cannot reach Home Assistant's config",
+		"supervisor_token": bool(SUPERVISOR_TOKEN),
+	}
+	diag.update(installed_versions())
+	if root:
+		diag["integration_on_disk"] = os.path.isfile(
+			f"{root}/custom_components/vomesync/manifest.json"
+		)
+		diag["addon_marker"] = os.path.isfile(f"{root}/vome/addon.marker")
+	status, _ = _ha_request("GET", "/config")
+	diag["core_api"] = "ok" if status == 200 else f"unreachable (HTTP {status})"
+	status, services = _ha_request("GET", "/services")
+	names: list = []
+	if status == 200 and isinstance(services, list):
+		for domain in services:
+			if isinstance(domain, dict) and domain.get("domain") == "vomesync":
+				svc = domain.get("services") or {}
+				names = sorted(svc) if isinstance(svc, dict) else list(svc)
+	diag["vomesync_services"] = names
+	return diag
 
 
 def _unwrap(payload: Any) -> Any:
@@ -177,6 +224,9 @@ class PanelHandler(BaseHTTPRequestHandler):
 			if isinstance(body, dict):
 				body = {**body, **installed_versions()}
 			self._send_json(status, body)
+			return
+		if path == "/api/diag":
+			self._send_json(200, run_diagnostics())
 			return
 		self._send_json(404, {"error": "not found"})
 

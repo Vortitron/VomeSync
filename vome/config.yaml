@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome
-version: "0.3.0"
+version: "0.3.1"
 slug: vome
 description: >
   Installs the shared Vome integration (same code as HACS) and serves a tree-view
@@ -13,8 +13,12 @@ arch:
 init: false
 homeassistant_api: true
 hassio_api: true
+# homeassistant_config = HA's /config (mounted at /homeassistant in here).
+# The legacy `config` mapping is deprecated and on newer Supervisors no
+# longer grants HA-config access — which silently breaks the integration
+# install. Keep the modern mapping only.
 map:
-  - config:rw
+  - homeassistant_config:rw
 startup: application
 boot: auto
 ingress: true

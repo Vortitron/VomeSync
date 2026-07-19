@@ -66,10 +66,51 @@
 			&& state.integration_version !== state.installed_version);
 	}
 
+	// Filled by /api/diag whenever the status call fails (or on demand from
+	// About) — turns raw failures into a plain-language verdict.
+	let lastDiag = null;
+
+	function diagVerdict(d) {
+		if (!d.config_mounted) {
+			return "The app cannot see Home Assistant's config folder, so the integration can never be installed from here. Update the Vome app (0.3.1 fixed the folder mapping), then restart Home Assistant.";
+		}
+		if (!d.integration_on_disk) {
+			return "The integration isn't installed on disk. Restart the Vome app (it installs on every start), then check the app's Log tab for install errors.";
+		}
+		if (!d.vomesync_services || d.vomesync_services.length === 0) {
+			return `Integration ${d.installed_version || "?"} is on disk but Home Assistant hasn't loaded it. Restart Home Assistant; if this persists, open Settings → System → Logs and search “vomesync”.`;
+		}
+		if (!d.vomesync_services.includes("mint_lan_tcp_token")) {
+			return `Home Assistant is running an OLD Vome integration (it lacks the tunnel services). Version ${d.installed_version || "?"} is installed on disk — restart Home Assistant to load it.`;
+		}
+		return "Services look healthy — if something still fails, the error is about the specific input, not the installation.";
+	}
+
+	function diagCard() {
+		if (!lastDiag) return "";
+		const d = lastDiag;
+		const svc = (d.vomesync_services || []).join(", ") || "none";
+		return `
+			<div class="card warn-card">
+				<h2>Diagnostics</h2>
+				<p class="muted"><strong>${escapeHtml(diagVerdict(d))}</strong></p>
+				<p class="muted small mono">config mount: ${escapeHtml(String(d.config_root))} · integration on disk: ${d.integration_on_disk ? (d.installed_version || "yes") : "NO"} · app bundles: ${escapeHtml(d.bundled_version || "?")} · Core API: ${escapeHtml(String(d.core_api))}<br>vomesync services loaded: ${escapeHtml(svc)}</p>
+			</div>`;
+	}
+
+	async function runDiagnostics() {
+		try {
+			lastDiag = await api("api/diag");
+		} catch (_err) {
+			lastDiag = null;
+		}
+	}
+
 	async function refresh() {
 		showBanner("");
 		try {
 			state = await api("/api/status");
+			lastDiag = null;
 			if (restartNeeded()) {
 				showBanner(`Vome ${state.installed_version} is installed but Home Assistant is still running ${state.integration_version}. Restart Home Assistant (Settings → System → ⋮ → Restart) to finish the update.`, true);
 			}
@@ -80,6 +121,7 @@
 			if (err.data && typeof err.data === "object") {
 				state.installed_version = err.data.installed_version || state.installed_version;
 			}
+			await runDiagnostics();
 			render();
 		}
 	}
@@ -435,7 +477,13 @@
 			<div class="card">
 				<h2>How the app and HACS relate</h2>
 				<p class="muted">This app bundles the Vome integration and installs it into Home Assistant on every app start — HACS is <em>not</em> required. If you previously installed it via HACS, the app's copy replaces it (same code, app-managed). Home Assistant only loads integration code at startup, so integration updates always need one HA restart — the panel tells you when.</p>
+				<div class="row"><button type="button" id="run-diag">Run diagnostics</button></div>
 			</div>`;
+		document.getElementById("run-diag").onclick = async () => {
+			await runDiagnostics();
+			render();
+			showBanner(lastDiag ? "Diagnostics complete — see the card above." : "Diagnostics endpoint unreachable (update the app to 0.3.1+).", !lastDiag);
+		};
 	}
 
 	function render() {
@@ -444,6 +492,9 @@
 		else if (current === "lan") renderLan();
 		else if (current === "link") renderLink();
 		else renderAbout();
+		if (lastDiag) {
+			viewEl.insertAdjacentHTML("afterbegin", diagCard());
+		}
 	}
 
 	function escapeHtml(value) {
