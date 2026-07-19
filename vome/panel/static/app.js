@@ -87,13 +87,21 @@
 				</div>
 			</div>
 			<div class="card">
-				<h2>Quick paths</h2>
-				<p class="muted">After a friendly domain is active on vome.io:</p>
-				<ul class="muted">
-					<li>Home Assistant → open the domain root (requires HA UI forwarding)</li>
-					<li>LAN device → <code>/t/&lt;slug&gt;/</code> on that domain</li>
-				</ul>
+				<h2>Quick actions</h2>
+				<div class="row">
+					<button type="button" class="primary" id="qa-rdp">Set up Remote Desktop</button>
+					<button type="button" id="qa-lan">LAN tunnels</button>
+					<button type="button" id="qa-forward">Home Assistant UI</button>
+				</div>
+				<p class="muted" style="margin-top:0.8rem">After a friendly domain is active on vome.io: Home Assistant opens at the domain root (needs UI forwarding on), LAN web devices at <code>/t/&lt;slug&gt;/</code>, and Remote Desktop through a tunnel token.</p>
 			</div>`;
+		document.getElementById("qa-lan").onclick = () => setView("lan");
+		document.getElementById("qa-forward").onclick = () => setView("forward");
+		document.getElementById("qa-rdp").onclick = () => {
+			setView("lan");
+			const preset = document.getElementById("preset-rdp");
+			if (preset) preset.click();
+		};
 	}
 
 	function renderForward() {
@@ -267,6 +275,8 @@
 		document.querySelectorAll("[data-token]").forEach((btn) => {
 			btn.onclick = async () => {
 				try {
+					btn.disabled = true;
+					btn.textContent = "Minting…";
 					const slug = btn.dataset.token;
 					const route = routes.find((r) => r.slug === slug) || {};
 					const result = await api("/api/lan_routes/token", {
@@ -283,6 +293,8 @@
 					showBanner(`Tunnel token ready for ${slug} — see the command below.`);
 					render();
 				} catch (err) {
+					btn.disabled = false;
+					btn.textContent = "Get tunnel token";
 					showBanner(String(err.message || err), true);
 				}
 			};
@@ -334,6 +346,7 @@
 			document.getElementById("host").focus();
 		};
 		document.getElementById("add-route").onclick = async () => {
+			const btn = document.getElementById("add-route");
 			try {
 				const payload = {
 					slug: document.getElementById("slug").value.trim(),
@@ -344,13 +357,23 @@
 					enabled: document.getElementById("enabled").checked,
 					websocket: document.getElementById("websocket").checked,
 				};
+				if (!payload.slug || !payload.host) {
+					showBanner("Slug and host are required.", true);
+					return;
+				}
+				btn.disabled = true;
+				btn.textContent = "Adding…";
 				state = await api("/api/lan_routes/add", {
 					method: "POST",
 					body: JSON.stringify(payload),
 				});
-				showBanner(`Added /t/${payload.slug}/`);
+				showBanner(payload.scheme === "tcp"
+					? `Added ${payload.slug} — now click “Get tunnel token” on it to connect.`
+					: `Added /t/${payload.slug}/`);
 				render();
 			} catch (err) {
+				btn.disabled = false;
+				btn.textContent = "Add route";
 				showBanner(String(err.message || err), true);
 			}
 		};
