@@ -220,13 +220,19 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
 		supports_response=SupportsResponse.ONLY,
 	)
+	# NB: the panel calls every service below over REST with ?return_response,
+	# and always consumes the returned status dict. They MUST therefore be
+	# SupportsResponse.ONLY, not OPTIONAL — an OPTIONAL service invoked with
+	# return_response over the REST API is rejected as a bare "400: Bad
+	# Request" (no message), which is exactly what the panel was hitting on
+	# every write while the ONLY-typed get_remote_status worked fine.
 	hass.services.async_register(
 		DOMAIN, "set_forward_ui", _guard(_set_forward_ui),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required(CONF_RELAY_FORWARD_UI): cv.boolean,
 		}),
-		supports_response=SupportsResponse.OPTIONAL,
+		supports_response=SupportsResponse.ONLY,
 	)
 	hass.services.async_register(
 		DOMAIN, "set_lan_routes", _guard(_set_lan_routes),
@@ -234,7 +240,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			vol.Optional("entry_id"): cv.string,
 			vol.Required("routes"): list,
 		}),
-		supports_response=SupportsResponse.OPTIONAL,
+		supports_response=SupportsResponse.ONLY,
 	)
 	hass.services.async_register(
 		DOMAIN, "set_relay_server", _set_relay_server,
@@ -256,7 +262,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			vol.Optional(ROUTE_ENABLED, default=True): cv.boolean,
 			vol.Optional(ROUTE_WEBSOCKET, default=True): cv.boolean,
 		}),
-		supports_response=SupportsResponse.OPTIONAL,
+		supports_response=SupportsResponse.ONLY,
 	)
 	hass.services.async_register(
 		DOMAIN, "remove_lan_route", _guard(_remove_lan_route),
@@ -264,7 +270,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			vol.Optional("entry_id"): cv.string,
 			vol.Required(ROUTE_SLUG): cv.string,
 		}),
-		supports_response=SupportsResponse.OPTIONAL,
+		supports_response=SupportsResponse.ONLY,
 	)
 
 	async def _mint_lan_tcp_token(call: ServiceCall) -> ServiceResponse:
