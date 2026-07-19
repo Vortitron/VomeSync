@@ -5,6 +5,7 @@ Keeps the HA options flow and the add-on UI on the same code path: both mutate
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -54,11 +55,17 @@ def _guard(handler):
 	way to the panel (which renders it), so failures are diagnosable.
 	"""
 	async def _wrapped(call: ServiceCall) -> ServiceResponse:
+		name = getattr(handler, "__name__", "service")
 		try:
 			return await handler(call)
-		except Exception as err:  # noqa: BLE001 - deliberately surface everything
-			_LOGGER.warning("vomesync.%s failed: %s", getattr(handler, "__name__", "service"), err)
-			return {"error": str(err) or err.__class__.__name__}
+		except asyncio.CancelledError as err:
+			# VOME_DEBUG: a cancelled handler is the prime suspect for the
+			# panel's opaque 400 — log it loudly (then re-raise, as one must).
+			_LOGGER.error("VOME_DBG vomesync.%s CANCELLED: %r", name, err)
+			raise
+		except BaseException as err:  # noqa: BLE001 - surface everything, incl. non-Exception
+			_LOGGER.error("VOME_DBG vomesync.%s raised %s: %s", name, type(err).__name__, err)
+			return {"error": str(err) or type(err).__name__}
 	return _wrapped
 
 
@@ -87,8 +94,11 @@ def _pick_entry(hass: HomeAssistant, entry_id: Optional[str]) -> ConfigEntry:
 async def _save_relay(hass: HomeAssistant, entry: ConfigEntry, relay: dict) -> None:
 	options = dict(entry.options or {})
 	options[CONF_RELAY] = relay
+	_LOGGER.error("VOME_DBG _save_relay: calling async_update_entry")
 	hass.config_entries.async_update_entry(entry, options=options)
+	_LOGGER.error("VOME_DBG _save_relay: update OK, calling async_start_relay")
 	await async_start_relay(hass, entry)
+	_LOGGER.error("VOME_DBG _save_relay: async_start_relay OK, returning")
 
 
 def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
