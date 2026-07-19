@@ -137,7 +137,12 @@ pipeline {
                         echo "Building LIVE services..."
                         docker compose build ${cacheFlag} vomesync-webserver
                         echo "Starting LIVE services..."
-                        docker compose up -d --force-recreate vomesync-redis vomesync-webserver vomesync-website vomesync-proxy
+                        # NB: vomesync-proxy is intentionally NOT started on LIVE — this
+                        # host terminates TLS with the system nginx/envoy, which already
+                        # owns :8443. Recreating the container's 8443:443 binding collides
+                        # with envoy and fails the whole `up`. Prod traffic goes
+                        # host-nginx -> vomesync-webserver:3090/3001 directly.
+                        docker compose up -d --force-recreate vomesync-redis vomesync-webserver vomesync-website
                     """
                 }
             }

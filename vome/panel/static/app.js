@@ -20,8 +20,17 @@
 		bannerEl.classList.toggle("err", !!isErr);
 	}
 
+	// API calls must be RELATIVE to the current document. The panel is served
+	// under Home Assistant's ingress prefix (/api/hassio_ingress/<token>/), so a
+	// leading-slash path would escape that prefix and never reach this panel
+	// (which surfaces as "Invalid JSON from panel API"). `apiBase` is the
+	// document's directory, so "api/status" resolves under the ingress path just
+	// like the relative <script>/<link> tags in index.html already do.
+	const apiBase = window.location.pathname.replace(/[^/]*$/, "");
+
 	async function api(path, opts) {
-		const res = await fetch(path, {
+		const url = path.replace(/^\//, "");
+		const res = await fetch(apiBase + url, {
 			headers: { "Content-Type": "application/json", Accept: "application/json" },
 			...opts,
 		});
