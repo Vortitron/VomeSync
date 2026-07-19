@@ -66,6 +66,14 @@
 			&& state.integration_version !== state.installed_version);
 	}
 
+	// Echo the shown entry's id back on writes so they target the same Home
+	// Assistant even when several Vome integrations are linked (which would
+	// otherwise make the write ambiguous and fail).
+	function withEntry(obj) {
+		const id = state && state.entry_id;
+		return id ? { ...obj, entry_id: id } : obj;
+	}
+
 	// Filled by /api/diag whenever the status call fails (or on demand from
 	// About) — turns raw failures into a plain-language verdict.
 	let lastDiag = null;
@@ -113,6 +121,8 @@
 			lastDiag = null;
 			if (restartNeeded()) {
 				showBanner(`Vome ${state.installed_version} is installed but Home Assistant is still running ${state.integration_version}. Restart Home Assistant (Settings → System → ⋮ → Restart) to finish the update.`, true);
+			} else if (state.warning) {
+				showBanner(state.warning, true);
 			}
 			render();
 		} catch (err) {
@@ -196,7 +206,7 @@
 				const enabled = document.getElementById("fwd").checked;
 				state = await api("/api/forward_ui", {
 					method: "POST",
-					body: JSON.stringify({ forward_ui: enabled }),
+					body: JSON.stringify(withEntry({ forward_ui: enabled })),
 				});
 				showBanner(enabled ? "Full-UI forwarding enabled." : "Full-UI forwarding disabled.");
 				render();
@@ -335,7 +345,7 @@
 				try {
 					state = await api("/api/lan_routes/remove", {
 						method: "POST",
-						body: JSON.stringify({ slug: btn.dataset.remove }),
+						body: JSON.stringify(withEntry({ slug: btn.dataset.remove })),
 					});
 					lastTunnelToken = null;
 					showBanner(`Removed /t/${btn.dataset.remove}/`);
@@ -354,7 +364,7 @@
 					const route = routes.find((r) => r.slug === slug) || {};
 					const result = await api("/api/lan_routes/token", {
 						method: "POST",
-						body: JSON.stringify({ slug }),
+						body: JSON.stringify(withEntry({ slug })),
 					});
 					lastTunnelToken = {
 						slug,
@@ -438,7 +448,7 @@
 				btn.textContent = "Adding…";
 				state = await api("/api/lan_routes/add", {
 					method: "POST",
-					body: JSON.stringify(payload),
+					body: JSON.stringify(withEntry(payload)),
 				});
 				showBanner(payload.scheme === "tcp"
 					? `Added ${payload.slug} — now click “Get tunnel token” on it to connect.`

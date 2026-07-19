@@ -223,6 +223,11 @@ class PanelHandler(BaseHTTPRequestHandler):
 			body = _unwrap(payload)
 			if isinstance(body, dict):
 				body = {**body, **installed_versions()}
+				# A service that returned {"error": ...} succeeded at the HTTP
+				# layer (200) but failed logically — flag it so the panel shows
+				# the message instead of silently rendering an error object.
+				if body.get("error") and status < 400:
+					status = 400
 			self._send_json(status, body)
 			return
 		if path == "/api/diag":
@@ -246,7 +251,10 @@ class PanelHandler(BaseHTTPRequestHandler):
 			return
 		service, data = mapping[path]
 		status, payload = call_service(service, data)
-		self._send_json(status, _unwrap(payload))
+		body = _unwrap(payload)
+		if isinstance(body, dict) and body.get("error") and status < 400:
+			status = 400
+		self._send_json(status, body)
 
 	def _serve_static(self, name: str, content_type: str) -> None:
 		# Prevent path escape.

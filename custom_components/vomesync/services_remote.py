@@ -44,6 +44,24 @@ from .relay_client import async_start_relay, get_relay_client
 _LOGGER = logging.getLogger(__name__)
 
 
+def _guard(handler):
+	"""Wrap a panel-facing service so its real error reaches the UI.
+
+	Home Assistant collapses an exception from a service handler into an
+	opaque ``400: Bad Request`` over the REST API, stripping the message —
+	which is exactly why the add-on panel showed a bare 400 with no clue.
+	Returning ``{"error": ...}`` instead keeps the message intact all the
+	way to the panel (which renders it), so failures are diagnosable.
+	"""
+	async def _wrapped(call: ServiceCall) -> ServiceResponse:
+		try:
+			return await handler(call)
+		except Exception as err:  # noqa: BLE001 - deliberately surface everything
+			_LOGGER.warning("vomesync.%s failed: %s", getattr(handler, "__name__", "service"), err)
+			return {"error": str(err) or err.__class__.__name__}
+	return _wrapped
+
+
 def _relay_entries(hass: HomeAssistant) -> list[ConfigEntry]:
 	return [
 		e for e in hass.config_entries.async_entries(DOMAIN)
@@ -105,9 +123,11 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 
 	async def _get_status(call: ServiceCall) -> ServiceResponse:
 		entries = _relay_entries(hass)
-		if not entries and not call.data.get("entry_id"):
+		entry_id = call.data.get("entry_id")
+		if not entries and not entry_id:
 			return {
 				"entry_id": "",
+				"integration_version": INTEGRATION_VERSION,
 				"linked": False,
 				"server_id": "",
 				"forward_ui": False,
@@ -115,8 +135,21 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 				"lan_max": LAN_MAX_ROUTES,
 				"addon_marker": _addon_marker_present(),
 			}
-		entry = _pick_entry(hass, call.data.get("entry_id"))
-		return remote_status_payload(hass, entry)
+		# Read-only status must never hard-fail on multiple linked entries:
+		# pick the first so the panel loads, and warn. Writes still target a
+		# specific entry via entry_id (the panel echoes back the one shown).
+		if entry_id:
+			entry = _pick_entry(hass, entry_id)
+		else:
+			entry = entries[0]
+		payload = remote_status_payload(hass, entry)
+		if len(entries) > 1 and not entry_id:
+			payload["warning"] = (
+				f"{len(entries)} Vome integrations are linked to this Home "
+				"Assistant. Showing the first; remove the extras in Settings "
+				"→ Devices & Services to avoid confusion."
+			)
+		return payload
 
 	async def _set_forward_ui(call: ServiceCall) -> ServiceResponse:
 		entry = _pick_entry(hass, call.data.get("entry_id"))
@@ -183,12 +216,12 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		return remote_status_payload(hass, entry)
 
 	hass.services.async_register(
-		DOMAIN, "get_remote_status", _get_status,
+		DOMAIN, "get_remote_status", _guard(_get_status),
 		schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
 		supports_response=SupportsResponse.ONLY,
 	)
 	hass.services.async_register(
-		DOMAIN, "set_forward_ui", _set_forward_ui,
+		DOMAIN, "set_forward_ui", _guard(_set_forward_ui),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required(CONF_RELAY_FORWARD_UI): cv.boolean,
@@ -196,7 +229,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		supports_response=SupportsResponse.OPTIONAL,
 	)
 	hass.services.async_register(
-		DOMAIN, "set_lan_routes", _set_lan_routes,
+		DOMAIN, "set_lan_routes", _guard(_set_lan_routes),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required("routes"): list,
@@ -212,7 +245,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		supports_response=SupportsResponse.OPTIONAL,
 	)
 	hass.services.async_register(
-		DOMAIN, "add_lan_route", _add_lan_route,
+		DOMAIN, "add_lan_route", _guard(_add_lan_route),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required(ROUTE_SLUG): cv.string,
@@ -226,7 +259,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		supports_response=SupportsResponse.OPTIONAL,
 	)
 	hass.services.async_register(
-		DOMAIN, "remove_lan_route", _remove_lan_route,
+		DOMAIN, "remove_lan_route", _guard(_remove_lan_route),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required(ROUTE_SLUG): cv.string,
@@ -256,7 +289,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		return {"token": token, "slug": slug, "ttl_seconds": ttl}
 
 	hass.services.async_register(
-		DOMAIN, "mint_lan_tcp_token", _mint_lan_tcp_token,
+		DOMAIN, "mint_lan_tcp_token", _guard(_mint_lan_tcp_token),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required(ROUTE_SLUG): cv.string,
