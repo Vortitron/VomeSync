@@ -207,11 +207,42 @@ class PanelHandler(BaseHTTPRequestHandler):
 		raw = json.dumps(payload).encode("utf-8")
 		self._send(status, raw, "application/json; charset=utf-8")
 
-	def _read_json(self) -> dict:
+	def _read_body(self) -> bytes:
+		"""Read the request body, honouring chunked transfer-encoding.
+
+		Home Assistant's ingress proxy forwards POST bodies with
+		``Transfer-Encoding: chunked`` and no ``Content-Length``. A naive
+		Content-Length read then sees length 0 and drops the whole payload —
+		which silently emptied every write (add route, forward UI, …) and
+		surfaced as an opaque "400: Bad Request" from Core's schema check.
+		Parse the chunks when that header is present.
+		"""
+		te = (self.headers.get("Transfer-Encoding") or "").lower()
+		if "chunked" in te:
+			chunks = []
+			while True:
+				size_line = self.rfile.readline()
+				if not size_line:
+					break
+				try:
+					size = int(size_line.split(b";", 1)[0].strip(), 16)
+				except ValueError:
+					break
+				if size == 0:
+					self.rfile.readline()  # consume trailing CRLF
+					break
+				chunks.append(self.rfile.read(size))
+				self.rfile.readline()  # consume CRLF after chunk data
+			return b"".join(chunks)
 		length = int(self.headers.get("Content-Length") or 0)
-		if length <= 0:
+		return self.rfile.read(length) if length > 0 else b""
+
+	def _read_json(self) -> dict:
+		raw = self._read_body()
+		LOG.info("VOME_DBG panel body: te=%r cl=%r read=%d",
+			self.headers.get("Transfer-Encoding"), self.headers.get("Content-Length"), len(raw))
+		if not raw:
 			return {}
-		raw = self.rfile.read(length)
 		try:
 			data = json.loads(raw.decode("utf-8"))
 		except (ValueError, UnicodeDecodeError):

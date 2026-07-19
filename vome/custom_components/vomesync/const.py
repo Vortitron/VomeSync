@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.4"
+INTEGRATION_VERSION = "0.9.5"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"

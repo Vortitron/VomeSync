@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome
-version: "0.3.6"
+version: "0.3.7"
 slug: vome
 description: >
   Installs the shared Vome integration (same code as HACS) and serves a tree-view
