@@ -100,9 +100,9 @@
 			return `Home Assistant is running Vome ${d.running_version || "an older, version-less build"}, but ${d.installed_version} is installed on disk — that mismatch is exactly why writes fail. Restart Home Assistant (Settings → System → ⋮ → Restart) to load ${d.installed_version}.`;
 		}
 		if (typeof d.write_probe_status === "number" && d.write_probe_status >= 400) {
-			return `A test write was rejected with HTTP ${d.write_probe_status} even though the running and installed versions match (${d.installed_version}). This isn't a version problem — open Settings → System → Logs, search “vomesync”, and send the error line.`;
+			return `A test write was rejected by Home Assistant with a bare HTTP ${d.write_probe_status} (“${d.write_probe_body}”) even though running and installed match (${d.installed_version}) on HA ${d.ha_version || "?"}. That's Home Assistant rejecting the call before our code runs — send this whole card and I'll pin it.`;
 		}
-		return `Everything checks out (running ${d.running_version || "?"}, on disk ${d.installed_version || "?"}). A write failure now is about the specific input (e.g. duplicate slug), not the installation.`;
+		return `Writes work — the test write reached our code and was correctly rejected for bad input (“${d.write_probe_body}”). Adding a real route with a valid slug + host should succeed. If a specific add fails, it's about that input (e.g. a duplicate slug).`;
 	}
 
 	function diagCard() {
@@ -113,7 +113,7 @@
 			<div class="card warn-card">
 				<h2>Diagnostics</h2>
 				<p class="muted"><strong>${escapeHtml(diagVerdict(d))}</strong></p>
-				<p class="muted small mono">running in HA: ${escapeHtml(d.running_version || "unknown (old build)")} · on disk: ${d.integration_on_disk ? (d.installed_version || "yes") : "NO"} · app bundles: ${escapeHtml(d.bundled_version || "?")}<br>config mount: ${escapeHtml(String(d.config_root))} · Core API: ${escapeHtml(String(d.core_api))} · write probe: HTTP ${escapeHtml(String(d.write_probe_status))}<br>vomesync services loaded: ${escapeHtml(svc)}</p>
+				<p class="muted small mono">running in HA: ${escapeHtml(d.running_version || "unknown (old build)")} · on disk: ${d.integration_on_disk ? (d.installed_version || "yes") : "NO"} · app bundles: ${escapeHtml(d.bundled_version || "?")} · HA ${escapeHtml(d.ha_version || "?")}<br>config mount: ${escapeHtml(String(d.config_root))} · Core API: ${escapeHtml(String(d.core_api))}<br>write probe: HTTP ${escapeHtml(String(d.write_probe_status))} — ${escapeHtml(String(d.write_probe_body || ""))}<br>vomesync services loaded: ${escapeHtml(svc)}</p>
 			</div>`;
 	}
 

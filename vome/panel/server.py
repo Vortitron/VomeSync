@@ -126,8 +126,9 @@ def run_diagnostics() -> dict:
 			f"{root}/custom_components/vomesync/manifest.json"
 		)
 		diag["addon_marker"] = os.path.isfile(f"{root}/vome/addon.marker")
-	status, _ = _ha_request("GET", "/config")
+	status, cfg = _ha_request("GET", "/config")
 	diag["core_api"] = "ok" if status == 200 else f"unreachable (HTTP {status})"
+	diag["ha_version"] = cfg.get("version", "") if isinstance(cfg, dict) else ""
 	status, services = _ha_request("GET", "/services")
 	names: list = []
 	if status == 200 and isinstance(services, list):
@@ -146,12 +147,22 @@ def run_diagnostics() -> dict:
 	)
 	# Live probe of the actual failing call path, so the verdict reflects what
 	# Home Assistant does right now rather than a guess. A bad slug is used so
-	# nothing is created even on the (mis-)chance it validates.
-	probe_status, _ = call_service(
+	# nothing is created even on the (mis-)chance it validates. Capture the raw
+	# body too: a bare "400: Bad Request" means HA rejected it pre-handler
+	# (schema/return_response), whereas a JSON {"error": ...} means our handler
+	# ran and rejected the bad input — i.e. real writes work.
+	probe_status, probe_raw = call_service(
 		"add_lan_route",
 		{"slug": "", "host": "", "port": 3389, "scheme": "tcp"},
 	)
+	probe_body = _unwrap(probe_raw)
 	diag["write_probe_status"] = probe_status
+	if isinstance(probe_body, dict):
+		diag["write_probe_body"] = (
+			probe_body.get("error") or probe_body.get("message") or "(ok / no error)"
+		)
+	else:
+		diag["write_probe_body"] = str(probe_body)[:200]
 	return diag
 
 
