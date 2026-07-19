@@ -129,6 +129,27 @@
 	// (not persisted — re-minted on demand; tokens are short-lived anyway).
 	let lastTunnelToken = null;
 
+	// Which OS tab the connect instructions show. Defaults to the visitor's OS.
+	const ua = navigator.platform || navigator.userAgent || "";
+	let tunnelOs = /win/i.test(ua) ? "windows" : /mac/i.test(ua) ? "mac" : "linux";
+
+	function tunnelDiagram(route, localPort) {
+		const target = route ? `${escapeHtml(route.host)}:${route.port}` : "device";
+		return `
+			<div class="tunnel-diagram">
+				<svg viewBox="0 0 850 96" role="img" aria-label="Tunnel path: your computer, over TLS to the Vome relay, over the existing outbound link to Home Assistant, then over your LAN to the device.">
+					<g class="node"><rect x="8" y="22" width="140" height="50" rx="10"/><text x="78" y="43">Your computer</text><text x="78" y="59" class="sub">client → 127.0.0.1:${localPort}</text></g>
+					<line class="flow" x1="148" y1="47" x2="238" y2="47"/><text x="193" y="38" class="lbl">wss · TLS</text>
+					<g class="node"><rect x="238" y="22" width="140" height="50" rx="10"/><text x="308" y="43">Vome relay</text><text x="308" y="59" class="sub">sync.vome.io</text></g>
+					<line class="flow" x1="378" y1="47" x2="468" y2="47"/><text x="423" y="38" class="lbl">existing link</text>
+					<g class="node"><rect x="468" y="22" width="140" height="50" rx="10"/><text x="538" y="43">Home Assistant</text><text x="538" y="59" class="sub">Vome App</text></g>
+					<line class="flow" x1="608" y1="47" x2="698" y2="47"/><text x="653" y="38" class="lbl">LAN</text>
+					<g class="node target"><rect x="698" y="22" width="144" height="50" rx="10"/><text x="770" y="43">${escapeHtml((route && route.name) || "Device")}</text><text x="770" y="59" class="sub">${target}</text></g>
+				</svg>
+				<p class="muted small">Every hop is outbound and encrypted — nothing on your home network is opened to the internet. Home Assistant already holds the middle link; the token only unlocks this one route, for a limited time.</p>
+			</div>`;
+	}
+
 	function renderLan() {
 		const routes = (state && state.lan_routes) || [];
 		const rows = routes.map((r) => `
@@ -143,24 +164,61 @@
 			</tr>`).join("");
 		const localPort = (lastTunnelToken && lastTunnelToken.localPort) || 3390;
 		const cmd = lastTunnelToken
-			? `npx @vortitron/home-assistant-mcp tunnel --token ${lastTunnelToken.token} --local-port ${localPort}`
+			? `npx @vortitron/home-assistant-mcp@latest tunnel --token ${lastTunnelToken.token} --local-port ${localPort}`
 			: "";
+		const tokRoute = lastTunnelToken ? routes.find((r) => r.slug === lastTunnelToken.slug) : null;
+		const isRdp = !!(tokRoute && Number(tokRoute.port) === 3389);
+		const osMeta = {
+			windows: {
+				label: "Windows",
+				install: "winget install OpenJS.NodeJS.LTS",
+				installNote: `one-time, in PowerShell — or the installer from <a href="https://nodejs.org" target="_blank" rel="noreferrer">nodejs.org</a>`,
+				shell: "PowerShell",
+				client: isRdp
+					? `<strong>Remote Desktop Connection</strong> is built in: press Start, type <code>mstsc</code>, and connect to <code>127.0.0.1:${localPort}</code>.`
+					: `Point your client at <code>127.0.0.1:${localPort}</code>.`,
+			},
+			mac: {
+				label: "macOS",
+				install: "brew install node",
+				installNote: `one-time, in Terminal — or the installer from <a href="https://nodejs.org" target="_blank" rel="noreferrer">nodejs.org</a>`,
+				shell: "Terminal",
+				client: isRdp
+					? `Install <strong>Windows App</strong> from the App Store (Microsoft's RDP client) → Add PC → <code>127.0.0.1:${localPort}</code>.`
+					: `Point your client at <code>127.0.0.1:${localPort}</code>.`,
+			},
+			linux: {
+				label: "Linux",
+				install: "sudo apt install nodejs npm",
+				installNote: "one-time, Debian/Ubuntu — use your distro's package manager otherwise",
+				shell: "a terminal",
+				client: isRdp
+					? `<strong>Remmina</strong> (with the RDP plugin) → <code>rdp://127.0.0.1:${localPort}</code>.`
+					: `Point your client at <code>127.0.0.1:${localPort}</code>.`,
+			},
+		};
+		const os = osMeta[tunnelOs] || osMeta.linux;
+		const osTabs = Object.entries(osMeta).map(([key, meta]) =>
+			`<button type="button" data-os="${key}" class="${key === tunnelOs ? "active" : ""}">${meta.label}</button>`).join("");
 		const tokenCard = lastTunnelToken ? `
 			<div class="card">
 				<h2>Connect to <code>${escapeHtml(lastTunnelToken.slug)}</code> (${escapeHtml(lastTunnelToken.scheme || "tcp")})</h2>
-				<p class="muted">A tunnel opens <code>127.0.0.1:${localPort}</code> on the machine you run the command below on, and forwards it to this route over your existing Vome link — no port-forwarding. The token is valid for ${Math.round(lastTunnelToken.ttlSeconds / 60)} minutes.</p>
+				${tunnelDiagram(tokRoute, localPort)}
+				<div class="os-tabs" role="tablist" aria-label="Operating system">${osTabs}</div>
 				<ol class="steps">
-					<li>On the machine you want to connect <em>from</em>, install <a href="https://nodejs.org" target="_blank" rel="noreferrer">Node.js</a> (one-time), then run:
-						<div class="cmd-row"><input class="mono cmd" readonly value="${escapeHtml(cmd)}" onclick="this.select()"><button type="button" id="copy-cmd">Copy</button></div>
+					<li>On the ${os.label} machine you want to connect <em>from</em>, install Node.js:
+						<div class="cmd-row"><input class="mono cmd" readonly value="${escapeHtml(os.install)}" onclick="this.select()"></div>
+						<p class="muted small">${os.installNote}.</p>
+					</li>
+					<li>Run the tunnel (in ${os.shell}) and leave it running:
+						<div class="cmd-row"><input class="mono cmd" id="tunnel-cmd" readonly value="${escapeHtml(cmd)}" onclick="this.select()"><button type="button" id="copy-cmd">Copy</button></div>
 						<label class="field small">Local port<input id="tok-port" type="number" min="1" max="65535" value="${localPort}"></label>
 					</li>
-					<li>Leave it running. Point your client at <code>127.0.0.1:${localPort}</code>:
-						<ul class="muted">
-							<li><strong>RDP</strong> — Remote Desktop / <code>mstsc</code> / Remmina → <code>127.0.0.1:${localPort}</code></li>
-							<li>Anything else (SSH, VNC, a database) → same address, that port.</li>
-						</ul>
+					<li>${os.client}
+						${isRdp ? "" : `<p class="muted small">SSH: <code>ssh -p ${localPort} user@127.0.0.1</code> · VNC: <code>127.0.0.1:${localPort}</code> · databases: same address.</p>`}
 					</li>
 				</ol>
+				<p class="muted small">The token inside the command is valid for ${Math.round(lastTunnelToken.ttlSeconds / 60)} minutes — after that, just mint a new one here. It only reaches this one route.</p>
 			</div>` : "";
 		viewEl.innerHTML = `
 			<div class="card">
@@ -232,12 +290,18 @@
 		const copyBtn = document.getElementById("copy-cmd");
 		if (copyBtn) {
 			copyBtn.onclick = () => {
-				const input = document.querySelector(".cmd");
+				const input = document.getElementById("tunnel-cmd");
 				input.select();
 				navigator.clipboard?.writeText(input.value).catch(() => document.execCommand("copy"));
 				showBanner("Command copied to clipboard.");
 			};
 		}
+		document.querySelectorAll(".os-tabs [data-os]").forEach((btn) => {
+			btn.onclick = () => {
+				tunnelOs = btn.dataset.os;
+				render();
+			};
+		});
 		const tokPort = document.getElementById("tok-port");
 		if (tokPort) {
 			tokPort.onchange = () => {

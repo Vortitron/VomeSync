@@ -177,3 +177,38 @@ ol.steps ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
 .field.small { margin-top: 0.4rem; }
 .field.small input { width: 6rem; }
 .muted.small, p.small { font-size: 0.85rem; }
+
+/* Tunnel-path diagram (animated) */
+.tunnel-diagram svg { width: 100%; height: auto; display: block; margin: 0.5rem 0 0.15rem; }
+.tunnel-diagram .node rect { fill: #0c1015; stroke: var(--line); stroke-width: 1.25; }
+.tunnel-diagram .node.target rect { stroke: var(--accent); }
+.tunnel-diagram .node text { fill: var(--text); font-size: 13px; text-anchor: middle; font-family: var(--font); }
+.tunnel-diagram .node text.sub { fill: var(--muted); font-size: 10.5px; font-family: var(--mono); }
+.tunnel-diagram line.flow {
+	stroke: var(--accent);
+	stroke-width: 2;
+	stroke-dasharray: 6 6;
+	animation: flowdash 1.1s linear infinite;
+}
+.tunnel-diagram text.lbl { fill: var(--muted); font-size: 10.5px; text-anchor: middle; font-family: var(--mono); }
+@keyframes flowdash { to { stroke-dashoffset: -12; } }
+@media (prefers-reduced-motion: reduce) {
+	.tunnel-diagram line.flow { animation: none; }
+}
+
+/* OS picker tabs on the connect card */
+.os-tabs { display: flex; gap: 0.4rem; margin: 0.8rem 0 0.4rem; }
+.os-tabs button {
+	border: 1px solid var(--line);
+	background: var(--panel);
+	color: var(--muted);
+	border-radius: 8px;
+	padding: 0.35rem 0.8rem;
+	font: inherit;
+	cursor: pointer;
+}
+.os-tabs button.active {
+	background: var(--accent-dim);
+	border-color: var(--accent);
+	color: #fff;
+}
