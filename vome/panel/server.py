@@ -136,6 +136,22 @@ def run_diagnostics() -> dict:
 				svc = domain.get("services") or {}
 				names = sorted(svc) if isinstance(svc, dict) else list(svc)
 	diag["vomesync_services"] = names
+	# The version the integration ACTUALLY running reports (vs what's on disk).
+	# Old code predates this field and reports nothing — which is itself the
+	# tell that Home Assistant is still running a stale copy and needs a restart.
+	st_status, st_payload = call_service("get_remote_status", {})
+	st_body = _unwrap(st_payload)
+	diag["running_version"] = (
+		st_body.get("integration_version", "") if isinstance(st_body, dict) else ""
+	)
+	# Live probe of the actual failing call path, so the verdict reflects what
+	# Home Assistant does right now rather than a guess. A bad slug is used so
+	# nothing is created even on the (mis-)chance it validates.
+	probe_status, _ = call_service(
+		"add_lan_route",
+		{"slug": "", "host": "", "port": 3389, "scheme": "tcp"},
+	)
+	diag["write_probe_status"] = probe_status
 	return diag
 
 

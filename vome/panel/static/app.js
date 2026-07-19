@@ -62,8 +62,11 @@
 	}
 
 	function restartNeeded() {
-		return !!(state && state.integration_version && state.installed_version
-			&& state.integration_version !== state.installed_version);
+		if (!state || !state.installed_version) return false;
+		// Old running code predates the version field entirely — if the disk
+		// has a version but the running integration reports none, it's stale.
+		if (!state.integration_version) return true;
+		return state.integration_version !== state.installed_version;
 	}
 
 	// Echo the shown entry's id back on writes so they target the same Home
@@ -91,7 +94,15 @@
 		if (!d.vomesync_services.includes("mint_lan_tcp_token")) {
 			return `Home Assistant is running an OLD Vome integration (it lacks the tunnel services). Version ${d.installed_version || "?"} is installed on disk — restart Home Assistant to load it.`;
 		}
-		return "Services look healthy — if something still fails, the error is about the specific input, not the installation.";
+		// Disk vs running mismatch is the decisive tell: writes fail because HA
+		// is executing stale code even though the new files are on disk.
+		if (d.installed_version && d.running_version !== d.installed_version) {
+			return `Home Assistant is running Vome ${d.running_version || "an older, version-less build"}, but ${d.installed_version} is installed on disk — that mismatch is exactly why writes fail. Restart Home Assistant (Settings → System → ⋮ → Restart) to load ${d.installed_version}.`;
+		}
+		if (typeof d.write_probe_status === "number" && d.write_probe_status >= 400) {
+			return `A test write was rejected with HTTP ${d.write_probe_status} even though the running and installed versions match (${d.installed_version}). This isn't a version problem — open Settings → System → Logs, search “vomesync”, and send the error line.`;
+		}
+		return `Everything checks out (running ${d.running_version || "?"}, on disk ${d.installed_version || "?"}). A write failure now is about the specific input (e.g. duplicate slug), not the installation.`;
 	}
 
 	function diagCard() {
@@ -102,7 +113,7 @@
 			<div class="card warn-card">
 				<h2>Diagnostics</h2>
 				<p class="muted"><strong>${escapeHtml(diagVerdict(d))}</strong></p>
-				<p class="muted small mono">config mount: ${escapeHtml(String(d.config_root))} · integration on disk: ${d.integration_on_disk ? (d.installed_version || "yes") : "NO"} · app bundles: ${escapeHtml(d.bundled_version || "?")} · Core API: ${escapeHtml(String(d.core_api))}<br>vomesync services loaded: ${escapeHtml(svc)}</p>
+				<p class="muted small mono">running in HA: ${escapeHtml(d.running_version || "unknown (old build)")} · on disk: ${d.integration_on_disk ? (d.installed_version || "yes") : "NO"} · app bundles: ${escapeHtml(d.bundled_version || "?")}<br>config mount: ${escapeHtml(String(d.config_root))} · Core API: ${escapeHtml(String(d.core_api))} · write probe: HTTP ${escapeHtml(String(d.write_probe_status))}<br>vomesync services loaded: ${escapeHtml(svc)}</p>
 			</div>`;
 	}
 
@@ -458,6 +469,11 @@
 				btn.disabled = false;
 				btn.textContent = "Add route";
 				showBanner(String(err.message || err), true);
+				// A bare 400 here means HA rejected the write pre-handler — run
+				// diagnostics so the panel shows WHY (usually a stale running
+				// version) instead of the opaque error.
+				await runDiagnostics();
+				render();
 			}
 		};
 	}
