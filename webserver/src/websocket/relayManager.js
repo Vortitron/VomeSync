@@ -171,11 +171,22 @@ class RelayManager {
 		// Unlike ha_rpc/http_proxy/ws_open (backend → component), this is the
 		// other direction: answer directly, no `pending` map needed.
 		if (data.type === 'mint_lan_tcp_token' && conn) {
-			const token = uiAccess.mintLanTcpToken({
-				serverId, slug: data.slug, ttlSeconds: data.ttlSeconds
-			});
+			// Never let a malformed mint request throw out of the message
+			// handler (that would take down the relay connection): validate and
+			// answer with an error field the component can surface instead.
+			let token = null;
+			let error = null;
+			try {
+				const slug = typeof data.slug === 'string' ? data.slug.trim() : '';
+				if (!slug) {
+					throw new Error('A LAN route slug is required.');
+				}
+				token = uiAccess.mintLanTcpToken({ serverId, slug, ttlSeconds: data.ttlSeconds });
+			} catch (err) {
+				error = (err && err.message) || 'Could not mint tunnel token.';
+			}
 			this._safeSend(conn.ws, {
-				type: 'mint_lan_tcp_token_response', requestId: data.requestId, token
+				type: 'mint_lan_tcp_token_response', requestId: data.requestId, token, error
 			});
 			return;
 		}

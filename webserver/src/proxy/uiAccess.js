@@ -82,6 +82,8 @@ function mintAccessToken({ serverId, userId, host, ttlSeconds = DEFAULT_TTL_SECO
 
 const LAN_TCP_SCOPE = 'lan-tcp';
 const LAN_TCP_DEFAULT_TTL_SECONDS = 60 * 60;
+const LAN_TCP_MIN_TTL_SECONDS = 60;
+const LAN_TCP_MAX_TTL_SECONDS = 24 * 60 * 60;
 
 /**
  * Mint a bearer token for a raw-TCP LAN tunnel (see websocket/tcpTunnelManager).
@@ -97,10 +99,18 @@ function mintLanTcpToken({ serverId, slug, ttlSeconds = LAN_TCP_DEFAULT_TTL_SECO
 	if (!config.relay.forwardSecret) {
 		throw new Error('RELAY_FORWARD_SECRET is not configured.');
 	}
+	// Clamp the TTL server-side: the component caps it too, but the backend must
+	// not trust a relay-supplied value unbounded (defence in depth) — a token is
+	// a bearer credential, so its lifetime is capped here regardless of caller.
+	let ttl = Number(ttlSeconds);
+	if (!Number.isFinite(ttl) || ttl <= 0) {
+		ttl = LAN_TCP_DEFAULT_TTL_SECONDS;
+	}
+	ttl = Math.max(LAN_TCP_MIN_TTL_SECONDS, Math.min(ttl, LAN_TCP_MAX_TTL_SECONDS));
 	return jwt.sign(
-		{ sid: serverId, slug, scope: LAN_TCP_SCOPE },
+		{ sid: serverId, slug: String(slug || ''), scope: LAN_TCP_SCOPE },
 		config.relay.forwardSecret,
-		{ algorithm: 'HS256', expiresIn: ttlSeconds }
+		{ algorithm: 'HS256', expiresIn: ttl }
 	);
 }
 

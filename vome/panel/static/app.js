@@ -397,9 +397,27 @@
 		if (copyBtn) {
 			copyBtn.onclick = () => {
 				const input = document.getElementById("tunnel-cmd");
+				input.focus();
 				input.select();
-				navigator.clipboard?.writeText(input.value).catch(() => document.execCommand("copy"));
-				showBanner("Command copied to clipboard.");
+				input.setSelectionRange(0, input.value.length);
+				// The panel is served over http via ingress, where
+				// navigator.clipboard is unavailable — try execCommand first
+				// (works in an insecure context), fall back to the async API.
+				let copied = false;
+				try {
+					copied = document.execCommand("copy");
+				} catch (_err) {
+					copied = false;
+				}
+				if (copied) {
+					showBanner("Command copied to clipboard.");
+				} else if (navigator.clipboard) {
+					navigator.clipboard.writeText(input.value)
+						.then(() => showBanner("Command copied to clipboard."))
+						.catch(() => showBanner("Couldn't copy automatically — select the text and press Ctrl/Cmd+C.", true));
+				} else {
+					showBanner("Select the highlighted text and press Ctrl/Cmd+C to copy.", true);
+				}
 			};
 		}
 		document.querySelectorAll(".os-tabs [data-os]").forEach((btn) => {

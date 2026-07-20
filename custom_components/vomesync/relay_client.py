@@ -361,7 +361,9 @@ class RelayClient:
 		elif mtype == RELAY_WS_MSG_HELLO:
 			_LOGGER.debug("Relay (%s): hello acknowledged", self._server_id)
 		elif mtype == RELAY_WS_MSG_MINT_LAN_TCP_TOKEN_RESPONSE:
-			self._resolve_pending_request(data.get("requestId"), data.get("token"))
+			# Resolve with the whole payload so request_lan_tcp_token can surface
+			# a backend-side error (bad slug, misconfig) instead of a blank token.
+			self._resolve_pending_request(data.get("requestId"), data)
 
 	def _resolve_pending_request(self, request_id: Any, value: Any) -> None:
 		"""Resolve one of our own outgoing requests (see request_lan_tcp_token)."""
@@ -717,10 +719,16 @@ class RelayClient:
 			"ttlSeconds": ttl_seconds,
 		})
 		try:
-			token = await asyncio.wait_for(future, timeout=RELAY_MINT_TOKEN_TIMEOUT)
+			result = await asyncio.wait_for(future, timeout=RELAY_MINT_TOKEN_TIMEOUT)
 		except asyncio.TimeoutError:
 			self._pending_requests.pop(request_id, None)
 			return None, "Timed out waiting for a tunnel token from Vome."
+		if isinstance(result, dict):
+			if result.get("error"):
+				return None, str(result["error"])
+			token = result.get("token")
+		else:
+			token = result  # legacy backends resolved with the bare token
 		if not token:
 			return None, "Vome did not return a tunnel token."
 		return str(token), None

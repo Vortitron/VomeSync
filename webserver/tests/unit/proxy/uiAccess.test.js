@@ -70,8 +70,24 @@ describe('uiAccess.verifyLanTcpToken', () => {
 	});
 
 	test('rejects an expired token', () => {
-		const token = mintLanTcpToken({ serverId: 'rly-1', slug: 'rdp', ttlSeconds: -10 });
+		// Sign an already-expired token directly: mintLanTcpToken now clamps a
+		// non-positive TTL up to the default, so it can no longer mint one.
+		const token = jwt.sign(
+			{ sid: 'rly-1', slug: 'rdp', scope: LAN_TCP_SCOPE },
+			process.env.RELAY_FORWARD_SECRET, { algorithm: 'HS256', expiresIn: -10 }
+		);
 		expect(verifyLanTcpToken(token)).toBeNull();
+	});
+
+	test('clamps an absurd TTL to the 24h maximum', () => {
+		const token = mintLanTcpToken({ serverId: 'rly-1', slug: 'rdp', ttlSeconds: 999999999 });
+		const decoded = jwt.decode(token);
+		expect(decoded.exp - decoded.iat).toBeLessThanOrEqual(24 * 60 * 60);
+	});
+
+	test('clamps a non-positive TTL up to a valid lifetime', () => {
+		const token = mintLanTcpToken({ serverId: 'rly-1', slug: 'rdp', ttlSeconds: -10 });
+		expect(verifyLanTcpToken(token)).toEqual({ serverId: 'rly-1', slug: 'rdp' });
 	});
 
 	test('rejects a token with the wrong scope', () => {
