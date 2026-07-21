@@ -923,37 +923,67 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			_LOGGER.error("Failed to subscribe to switch %s: %s", uid, ex)
 			return False
 
+	async def _forget_switch_locally(self, uid: str) -> None:
+		"""Drop all local tracking of a switch (no server call).
+
+		Shared by the owner-only server-side :meth:`delete_switch` (after the
+		API call succeeds) and :meth:`forget_switch` (a subscriber simply
+		removing their own copy) — the local cleanup is identical either way.
+		Also removes the switch's HA device (and with it every entity on it,
+		switch or sensor) so it disappears immediately instead of lingering
+		"unavailable" until the next integration reload.
+		"""
+		self.switches.pop(uid, None)
+		self.subscriptions.pop(uid, None)
+		self.entity_names.pop(uid, None)
+
+		options = dict(self.config_entry.options or {})
+		imported_switches = options.get("imported_switches", {})
+		if uid in imported_switches:
+			del imported_switches[uid]
+			options["imported_switches"] = imported_switches
+			await self._async_update_entry_options(options)
+			_LOGGER.info("Removed switch %s from imported cache", uid)
+
+		await self.websocket_client.unsubscribe(uid)
+		self._websocket_connections.pop(uid, None)
+
+		try:
+			from homeassistant.helpers import device_registry as dr
+			device_registry = dr.async_get(self.hass)
+			device = device_registry.async_get_device(identifiers={(DOMAIN, uid)})
+			if device:
+				device_registry.async_remove_device(device.id)
+		except Exception as ex:  # noqa: BLE001 - registry cleanup must not block the forget
+			_LOGGER.debug("Could not remove device registry entry for switch %s: %s", uid, ex)
+
+	async def forget_switch(self, uid: str) -> bool:
+		"""Remove a switch from this Home Assistant only (no server call).
+
+		This is what "delete the entity" should normally do for a switch you
+		don't own — HA's standard device-delete flow calls this. It never
+		touches the switch on the server, so anyone else subscribed (or the
+		owner, elsewhere) is unaffected. Returns False if the uid wasn't
+		known locally.
+		"""
+		if uid not in self.switches and uid not in self.subscriptions:
+			return False
+		_LOGGER.info("Forgetting switch locally (no server call): uid=%s", uid)
+		await self._forget_switch_locally(uid)
+		self.async_update_listeners()
+		return True
+
 	async def delete_switch(self, uid: str) -> bool:
-		"""Delete a switch."""
+		"""Delete a switch (owner-only, destructive — removes it for everyone)."""
 		try:
 			success = await self.api_client.delete_switch(uid)
-			
+
 			if success:
 				_LOGGER.info("Switch deleted via API: uid=%s", uid)
-				
-				# Remove from local data
-				self.switches.pop(uid, None)
-				self.subscriptions.pop(uid, None)
-				self.entity_names.pop(uid, None)
-				
-				# Remove from imported switches cache
-				options = dict(self.config_entry.options or {})
-				imported_switches = options.get("imported_switches", {})
-				if uid in imported_switches:
-					del imported_switches[uid]
-					options["imported_switches"] = imported_switches
-					await self._async_update_entry_options(options)
-					_LOGGER.info("Removed switch %s from imported cache", uid)
-				
-				# Close WebSocket connection
-				await self.websocket_client.unsubscribe(uid)
-				self._websocket_connections.pop(uid, None)
-				
-				# Note: Entity will become unavailable and should be removed on integration reload
-				_LOGGER.info("Switch %s removed - entity will be unavailable until integration reload", uid)
-			
+				await self._forget_switch_locally(uid)
+
 			return success
-			
+
 		except VomeSyncAPIError as ex:
 			_LOGGER.error("Failed to delete switch %s: %s", uid, ex)
 			return False

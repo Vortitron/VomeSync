@@ -194,11 +194,23 @@ def _register_services(hass: HomeAssistant) -> None:
 	async def _svc_list_switches(call) -> ServiceResponse:
 		entry_id = call.data.get("entry_id")
 		coordinator = _get_coordinator_for_service(hass, entry_id)
+		# Owned + subscribed are kept in separate dicts on the coordinator
+		# (never overlapping uids); merge for a single panel-friendly list.
+		combined = {**(coordinator.switches or {}), **(coordinator.subscriptions or {})}
 		# Round-trip through JSON so anything non-serialisable (there shouldn't
 		# be, but the dict is built up over time from API responses) can't
 		# make the service response itself fail to encode.
-		switches = json.loads(json.dumps(coordinator.switches or {}, default=str))
+		switches = json.loads(json.dumps(combined, default=str))
 		return {"switches": switches}
+
+	async def _svc_forget_switch(call) -> ServiceResponse:
+		entry_id = call.data.get("entry_id")
+		coordinator = _get_coordinator_for_service(hass, entry_id)
+		uid = call.data["uid"]
+		ok = await coordinator.forget_switch(uid)
+		if not ok:
+			raise ValueError("Unknown switch (already removed?)")
+		return {"uid": uid}
 
 	hass.services.async_register(
 		DOMAIN,
@@ -254,6 +266,17 @@ def _register_services(hass: HomeAssistant) -> None:
 		supports_response=SupportsResponse.ONLY,
 	)
 
+	hass.services.async_register(
+		DOMAIN,
+		"forget_switch",
+		_guard(_svc_forget_switch),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Required("uid"): cv.string,
+		}),
+		supports_response=SupportsResponse.ONLY,
+	)
+
 	from .services_remote import async_register_remote_services
 	async_register_remote_services(hass)
 
@@ -280,3 +303,28 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 	"""Reload config entry."""
 	await async_unload_entry(hass, entry)
 	await async_setup_entry(hass, entry)
+
+
+async def async_remove_config_entry_device(hass: HomeAssistant, entry: ConfigEntry, device_entry) -> bool:
+	"""Let a user delete one switch's device from Settings -> Devices & Services.
+
+	Each switch (owned or subscribed) gets its own HA device, keyed by
+	``(DOMAIN, uid)``. Deleting it here is always a *local* forget — the
+	ordinary, safe action most integrations offer, matching what a user
+	expects "delete the entity" to do. It never calls the server, so it
+	never affects the switch for anyone else subscribed, or the switch
+	itself if you're the owner (owners use the explicit "Delete switch"
+	action in the app/service to actually remove it for everyone).
+	"""
+	uid = None
+	for domain, value in device_entry.identifiers:
+		if domain == DOMAIN and isinstance(value, str):
+			uid = value
+			break
+	if uid is None:
+		return True  # not one of our switch devices; nothing to guard
+
+	coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+	if coordinator is not None:
+		await coordinator.forget_switch(uid)
+	return True

@@ -646,13 +646,15 @@
 					<td>${escapeHtml(sw.category || "Other")}</td>
 					<td>${pill(!!sw.state, "on", "off")}</td>
 					<td>${owner ? pill(true, "Owner", "") : pill(false, "", "Subscribed")}${sw.publicize ? ` ${pill(true, "Public", "")}` : ""}</td>
-					<td>${owner ? `<button type="button" class="danger" data-delete-switch="${escapeHtml(uid)}">Delete</button>` : ""}</td>
+					<td>${owner
+						? `<button type="button" class="danger" data-delete-switch="${escapeHtml(uid)}">Delete</button>`
+						: `<button type="button" data-forget-switch="${escapeHtml(uid)}">Remove</button>`}</td>
 				</tr>`;
 		}).join("");
 		viewEl.innerHTML = `
 			<div class="card">
 				<h2>Your switches</h2>
-				<p class="muted">Shareable, subscribable toggles synced through Vome — create one others can subscribe to, or subscribe to one shared with you. Separate from the remote-access tunnels above; toggling a switch once it's here works the same as any other Home Assistant switch entity.</p>
+				<p class="muted">Shareable, subscribable toggles synced through Vome — create one others can subscribe to, or subscribe to one shared with you. Separate from the remote-access tunnels above; toggling a switch once it's here works the same as any other Home Assistant switch entity. <strong>Delete</strong> removes an owned switch for everyone subscribed to it; <strong>Remove</strong> just stops tracking a switch here (nothing changes for anyone else) — the same thing as deleting its device from Settings → Devices & Services.</p>
 				${entries.length ? `<table><thead><tr><th>Switch</th><th>Category</th><th>State</th><th>Role</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="muted">No switches yet — create one or subscribe to an existing UID below.</p>`}
 			</div>
 			<div class="card">
@@ -703,6 +705,21 @@
 						method: "POST", body: JSON.stringify(withEntry({ uid: btn.dataset.deleteSwitch })),
 					});
 					showBanner("Switch deleted.");
+					switchesData = null;
+					await loadSwitches();
+				} catch (err) {
+					showBanner(String(err.message || err), true);
+				}
+			};
+		});
+
+		document.querySelectorAll("[data-forget-switch]").forEach((btn) => {
+			btn.onclick = async () => {
+				try {
+					await api("/api/switches/forget", {
+						method: "POST", body: JSON.stringify(withEntry({ uid: btn.dataset.forgetSwitch })),
+					});
+					showBanner("Removed.");
 					switchesData = null;
 					await loadSwitches();
 				} catch (err) {

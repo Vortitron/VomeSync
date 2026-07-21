@@ -13,6 +13,7 @@ EXPECTED_SERVICES = frozenset({
 	"subscribe_switch",
 	"delete_switch",
 	"list_switches",
+	"forget_switch",
 	"get_remote_status",
 	"set_forward_ui",
 	"set_lan_routes",
@@ -68,7 +69,7 @@ async def test_services_call_coordinator_methods(hass, config_entry):
 	# so (like get_remote_status/set_forward_ui) they must be ONLY, not
 	# OPTIONAL or NONE, or the REST call is rejected with a bare 400.
 	from homeassistant.core import SupportsResponse
-	for name in ("create_switch", "subscribe_switch", "delete_switch", "list_switches"):
+	for name in ("create_switch", "subscribe_switch", "delete_switch", "list_switches", "forget_switch"):
 		reg = [c for c in calls if c[0][1] == name][0]
 		assert reg[1]["supports_response"] == SupportsResponse.ONLY
 
@@ -83,7 +84,9 @@ async def test_switch_services_return_payload_and_guard_errors(hass, config_entr
 	mock_coordinator.subscribe_to_switch = AsyncMock(return_value=True)
 	mock_coordinator.is_switch_owner = MagicMock(return_value=True)
 	mock_coordinator.delete_switch = AsyncMock(return_value=True)
+	mock_coordinator.forget_switch = AsyncMock(return_value=True)
 	mock_coordinator.switches = {"uid-1": {"name": "Test", "state": True, "is_owner": True}}
+	mock_coordinator.subscriptions = {"uid-2": {"name": "Their switch", "state": False, "is_owner": False}}
 
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
 	hass.services = MagicMock()
@@ -102,7 +105,23 @@ async def test_switch_services_return_payload_and_guard_errors(hass, config_entr
 
 	call = MagicMock(data={"uid": "uid-1", "entry_id": eid})
 	result = await handlers["list_switches"](call)
-	assert result == {"switches": {"uid-1": {"name": "Test", "state": True, "is_owner": True}}}
+	# Merges owned (coordinator.switches) + subscribed (coordinator.subscriptions).
+	assert result == {"switches": {
+		"uid-1": {"name": "Test", "state": True, "is_owner": True},
+		"uid-2": {"name": "Their switch", "state": False, "is_owner": False},
+	}}
+
+	# forget_switch never checks ownership — that's the point (it's the safe,
+	# always-available "stop tracking this" action for a subscribed switch).
+	call = MagicMock(data={"uid": "uid-2", "entry_id": eid})
+	result = await handlers["forget_switch"](call)
+	assert result == {"uid": "uid-2"}
+	mock_coordinator.forget_switch.assert_awaited_with("uid-2")
+
+	mock_coordinator.forget_switch = AsyncMock(return_value=False)
+	call = MagicMock(data={"uid": "unknown-uid", "entry_id": eid})
+	result = await handlers["forget_switch"](call)
+	assert "error" in result and "Unknown switch" in result["error"]
 
 	# Failure path: create_switch returning falsy uid raises, _guard converts
 	# it to {"error": ...} instead of an unhandled exception.
@@ -116,4 +135,41 @@ async def test_switch_services_return_payload_and_guard_errors(hass, config_entr
 	call = MagicMock(data={"uid": "uid-1", "entry_id": eid})
 	result = await handlers["delete_switch"](call)
 	assert "error" in result and "owners" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_remove_config_entry_device_forgets_switch_locally(hass, config_entry):
+	"""HA's standard device-delete UI forgets the switch (never the server-side delete)."""
+	from custom_components.vomesync import async_remove_config_entry_device
+	from custom_components.vomesync.const import DOMAIN as VS_DOMAIN
+
+	mock_coordinator = MagicMock()
+	mock_coordinator.forget_switch = AsyncMock(return_value=True)
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	device_entry = MagicMock()
+	device_entry.identifiers = {(VS_DOMAIN, "uid-sub")}
+
+	result = await async_remove_config_entry_device(hass, config_entry, device_entry)
+
+	assert result is True
+	mock_coordinator.forget_switch.assert_awaited_with("uid-sub")
+
+
+@pytest.mark.asyncio
+async def test_remove_config_entry_device_ignores_foreign_devices(hass, config_entry):
+	"""A device from another integration's identifiers never reaches forget_switch."""
+	from custom_components.vomesync import async_remove_config_entry_device
+
+	mock_coordinator = MagicMock()
+	mock_coordinator.forget_switch = AsyncMock(return_value=True)
+	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
+
+	device_entry = MagicMock()
+	device_entry.identifiers = {("other_domain", "some-id")}
+
+	result = await async_remove_config_entry_device(hass, config_entry, device_entry)
+
+	assert result is True
+	mock_coordinator.forget_switch.assert_not_called()
 

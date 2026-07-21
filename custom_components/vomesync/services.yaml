@@ -80,11 +80,22 @@ subscribe_switch:
 
 delete_switch:
   name: Delete Switch
-  description: Delete a VomeSync switch
+  description: Delete a VomeSync switch (owner only — removes it for everyone subscribed)
   fields:
     uid:
       name: Switch UID
       description: UID of the switch to delete
+      required: true
+      selector:
+        text:
+
+forget_switch:
+  name: Forget switch
+  description: Remove a switch from this Home Assistant only. Never contacts the server, so it never affects the switch for anyone else (or the switch itself if you're the owner) — the normal, safe way to stop tracking a switch you subscribed to.
+  fields:
+    uid:
+      name: Switch UID
+      description: UID of the switch to forget
       required: true
       selector:
         text:

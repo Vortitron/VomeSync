@@ -314,6 +314,7 @@ class PanelHandler(BaseHTTPRequestHandler):
 			"/api/switches/create": ("create_switch", body),
 			"/api/switches/subscribe": ("subscribe_switch", body),
 			"/api/switches/delete": ("delete_switch", body),
+			"/api/switches/forget": ("forget_switch", body),
 		}
 		if path not in mapping:
 			self._send_json(404, {"error": "not found"})

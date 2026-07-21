@@ -177,6 +177,46 @@ async def test_coordinator_removes_from_cache_on_delete(hass, config_entry):
 
 
 @pytest.mark.asyncio
+async def test_coordinator_forget_switch_is_local_only(hass, config_entry):
+	"""forget_switch drops local tracking without ever calling the delete API."""
+	config_entry.options = {
+		"imported_switches": {
+			"uid-sub": {"name": "Their switch", "is_owner": False, "cached_data": {}},
+		}
+	}
+
+	mock_api = AsyncMock()
+
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.websocket_client = MagicMock()
+		coordinator.websocket_client.unsubscribe = AsyncMock()
+		coordinator.subscriptions = {"uid-sub": {"name": "Their switch", "is_owner": False}}
+
+		ok = await coordinator.forget_switch("uid-sub")
+
+	assert ok is True
+	assert "uid-sub" not in coordinator.subscriptions
+	mock_api.delete_switch.assert_not_called()
+	coordinator.websocket_client.unsubscribe.assert_awaited_with("uid-sub")
+
+	hass.config_entries.async_update_entry.assert_called()
+	updated_options = hass.config_entries.async_update_entry.call_args[1]["options"]
+	assert "uid-sub" not in updated_options["imported_switches"]
+
+
+@pytest.mark.asyncio
+async def test_coordinator_forget_switch_unknown_uid(hass, config_entry):
+	"""forget_switch on a uid we don't track returns False and touches nothing."""
+	mock_api = AsyncMock()
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		ok = await coordinator.forget_switch("never-heard-of-it")
+	assert ok is False
+	mock_api.delete_switch.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_coordinator_rate_limits_toggle(hass, config_entry):
 	"""Test coordinator rate limits rapid toggle requests."""
 	mock_api = AsyncMock()
