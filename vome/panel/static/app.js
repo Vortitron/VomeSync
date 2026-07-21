@@ -11,6 +11,7 @@
 		forward: "Home Assistant UI",
 		lan: "LAN tunnels",
 		link: "Vome account",
+		switches: "Switches",
 		about: "About",
 	};
 
@@ -158,6 +159,7 @@
 		document.querySelectorAll(".tree-item").forEach((btn) => {
 			btn.classList.toggle("active", btn.dataset.view === name);
 		});
+		if (name === "switches" && switchesData === null) loadSwitches();
 		render();
 	}
 
@@ -614,6 +616,148 @@
 		}
 	}
 
+	// Switches (Vome's shareable/subscribable toggles) — separate from the
+	// remote-access status payload, so fetched on demand rather than folded
+	// into `state`. `null` means "not loaded yet"; `{}` means loaded + empty.
+	let switchesData = null;
+
+	async function loadSwitches() {
+		try {
+			const result = await api("/api/switches");
+			switchesData = result.switches || {};
+		} catch (err) {
+			showBanner(String(err.message || err), true);
+			switchesData = switchesData || {};
+		}
+		if (current === "switches") render();
+	}
+
+	function renderSwitches() {
+		if (switchesData === null) {
+			viewEl.innerHTML = `<div class="card"><p class="muted">Loading switches…</p></div>`;
+			return;
+		}
+		const entries = Object.entries(switchesData);
+		const rows = entries.map(([uid, sw]) => {
+			const owner = !!sw.is_owner;
+			return `
+				<tr>
+					<td><strong>${escapeHtml(sw.name || uid)}</strong><br><code class="mono small">${escapeHtml(uid)}</code></td>
+					<td>${escapeHtml(sw.category || "Other")}</td>
+					<td>${pill(!!sw.state, "on", "off")}</td>
+					<td>${owner ? pill(true, "Owner", "") : pill(false, "", "Subscribed")}${sw.publicize ? ` ${pill(true, "Public", "")}` : ""}</td>
+					<td>${owner ? `<button type="button" class="danger" data-delete-switch="${escapeHtml(uid)}">Delete</button>` : ""}</td>
+				</tr>`;
+		}).join("");
+		viewEl.innerHTML = `
+			<div class="card">
+				<h2>Your switches</h2>
+				<p class="muted">Shareable, subscribable toggles synced through Vome — create one others can subscribe to, or subscribe to one shared with you. Separate from the remote-access tunnels above; toggling a switch once it's here works the same as any other Home Assistant switch entity.</p>
+				${entries.length ? `<table><thead><tr><th>Switch</th><th>Category</th><th>State</th><th>Role</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="muted">No switches yet — create one or subscribe to an existing UID below.</p>`}
+			</div>
+			<div class="card">
+				<h2>Create a switch</h2>
+				<div class="row">
+					<label class="field">Name<input id="sw-name" placeholder="Porch light status"></label>
+					<label class="field">Category
+						<select id="sw-category">
+							<option>Other</option><option>Community</option><option>Personal</option><option>Event</option><option>Test</option>
+						</select>
+					</label>
+				</div>
+				<div class="row">
+					<label class="toggle"><input type="checkbox" id="sw-publicize"> List publicly on sync.vome.io</label>
+				</div>
+				<details>
+					<summary class="muted small">More options (description, location, link, images)</summary>
+					<div class="row">
+						<label class="field">Description<input id="sw-description" placeholder="optional"></label>
+						<label class="field">Location<input id="sw-location" placeholder="city, optional"></label>
+					</div>
+					<div class="row">
+						<label class="field">Link<input id="sw-link" placeholder="https://…"></label>
+					</div>
+					<div class="row">
+						<label class="field">Icon URL<input id="sw-icon" placeholder="https://…"></label>
+						<label class="field">Banner URL<input id="sw-banner" placeholder="https://…"></label>
+					</div>
+				</details>
+				<div class="row">
+					<button type="button" class="primary" id="sw-create">Create switch</button>
+				</div>
+			</div>
+			<div class="card">
+				<h2>Subscribe to a switch</h2>
+				<p class="muted">Enter a UID someone shared with you to add it here.</p>
+				<div class="row">
+					<label class="field">Switch UID<input id="sw-sub-uid" placeholder="uid-…"></label>
+					<button type="button" id="sw-subscribe">Subscribe</button>
+				</div>
+			</div>`;
+
+		document.querySelectorAll("[data-delete-switch]").forEach((btn) => {
+			btn.onclick = async () => {
+				if (!confirm("Delete this switch? This can't be undone for anyone subscribed to it.")) return;
+				try {
+					await api("/api/switches/delete", {
+						method: "POST", body: JSON.stringify(withEntry({ uid: btn.dataset.deleteSwitch })),
+					});
+					showBanner("Switch deleted.");
+					switchesData = null;
+					await loadSwitches();
+				} catch (err) {
+					showBanner(String(err.message || err), true);
+				}
+			};
+		});
+
+		document.getElementById("sw-create").onclick = async () => {
+			const name = document.getElementById("sw-name").value.trim();
+			if (!name) {
+				showBanner("Name is required.", true);
+				return;
+			}
+			const payload = {
+				name,
+				category: document.getElementById("sw-category").value,
+				publicize: document.getElementById("sw-publicize").checked,
+				description: document.getElementById("sw-description").value.trim(),
+				location: document.getElementById("sw-location").value.trim(),
+				link: document.getElementById("sw-link").value.trim(),
+				icon_url: document.getElementById("sw-icon").value.trim(),
+				banner_url: document.getElementById("sw-banner").value.trim(),
+			};
+			try {
+				const result = await api("/api/switches/create", {
+					method: "POST", body: JSON.stringify(withEntry(payload)),
+				});
+				showBanner(`Switch created (${result.uid}).`);
+				switchesData = null;
+				await loadSwitches();
+			} catch (err) {
+				showBanner(String(err.message || err), true);
+			}
+		};
+
+		document.getElementById("sw-subscribe").onclick = async () => {
+			const uid = document.getElementById("sw-sub-uid").value.trim();
+			if (!uid) {
+				showBanner("Enter a switch UID.", true);
+				return;
+			}
+			try {
+				await api("/api/switches/subscribe", {
+					method: "POST", body: JSON.stringify(withEntry({ uid })),
+				});
+				showBanner("Subscribed.");
+				switchesData = null;
+				await loadSwitches();
+			} catch (err) {
+				showBanner(String(err.message || err), true);
+			}
+		};
+	}
+
 	function renderLink() {
 		if (state && state.linked) {
 			viewEl.innerHTML = `
@@ -697,6 +841,7 @@
 		else if (current === "forward") renderForward();
 		else if (current === "lan") renderLan();
 		else if (current === "link") renderLink();
+		else if (current === "switches") renderSwitches();
 		else renderAbout();
 		if (lastDiag) {
 			viewEl.insertAdjacentHTML("afterbegin", diagCard());

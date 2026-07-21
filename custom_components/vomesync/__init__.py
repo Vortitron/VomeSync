@@ -1,10 +1,11 @@
 """VomeSync Home Assistant Integration."""
 import inspect
+import json
 import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceResponse, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 import voluptuous as vol
@@ -150,7 +151,9 @@ def _register_services(hass: HomeAssistant) -> None:
 		return
 	hass.data[DOMAIN]["_services_registered"] = True
 	
-	async def _svc_create_switch(call) -> None:
+	from .services_remote import _guard
+
+	async def _svc_create_switch(call) -> ServiceResponse:
 		entry_id = call.data.get("entry_id")
 		coordinator = _get_coordinator_for_service(hass, entry_id)
 		uid = await coordinator.create_switch(
@@ -166,15 +169,18 @@ def _register_services(hass: HomeAssistant) -> None:
 		)
 		if not uid:
 			raise ValueError("Failed to create switch")
-	
-	async def _svc_subscribe_switch(call) -> None:
+		return {"uid": uid}
+
+	async def _svc_subscribe_switch(call) -> ServiceResponse:
 		entry_id = call.data.get("entry_id")
 		coordinator = _get_coordinator_for_service(hass, entry_id)
-		ok = await coordinator.subscribe_to_switch(call.data["uid"])
+		uid = call.data["uid"]
+		ok = await coordinator.subscribe_to_switch(uid)
 		if not ok:
 			raise ValueError("Failed to subscribe to switch (UID not found or API error)")
-	
-	async def _svc_delete_switch(call) -> None:
+		return {"uid": uid}
+
+	async def _svc_delete_switch(call) -> ServiceResponse:
 		entry_id = call.data.get("entry_id")
 		coordinator = _get_coordinator_for_service(hass, entry_id)
 		uid = call.data["uid"]
@@ -183,11 +189,21 @@ def _register_services(hass: HomeAssistant) -> None:
 		ok = await coordinator.delete_switch(uid)
 		if not ok:
 			raise ValueError("Failed to delete switch")
-	
+		return {"uid": uid}
+
+	async def _svc_list_switches(call) -> ServiceResponse:
+		entry_id = call.data.get("entry_id")
+		coordinator = _get_coordinator_for_service(hass, entry_id)
+		# Round-trip through JSON so anything non-serialisable (there shouldn't
+		# be, but the dict is built up over time from API responses) can't
+		# make the service response itself fail to encode.
+		switches = json.loads(json.dumps(coordinator.switches or {}, default=str))
+		return {"switches": switches}
+
 	hass.services.async_register(
 		DOMAIN,
 		"create_switch",
-		_svc_create_switch,
+		_guard(_svc_create_switch),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required("name"): cv.string,
@@ -200,26 +216,42 @@ def _register_services(hass: HomeAssistant) -> None:
 			vol.Optional("banner_url", default=""): cv.string,
 			vol.Optional("captcha_token", default=""): cv.string,
 		}),
+		# ONLY (not OPTIONAL): the panel calls these over REST with
+		# ?return_response and always consumes the returned dict — an
+		# OPTIONAL service invoked that way is rejected as a bare "400: Bad
+		# Request" with the message stripped. See services_remote.py's
+		# get_remote_status/set_forward_ui for the same precedent.
+		supports_response=SupportsResponse.ONLY,
 	)
-	
+
 	hass.services.async_register(
 		DOMAIN,
 		"subscribe_switch",
-		_svc_subscribe_switch,
+		_guard(_svc_subscribe_switch),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required("uid"): cv.string,
 		}),
+		supports_response=SupportsResponse.ONLY,
 	)
-	
+
 	hass.services.async_register(
 		DOMAIN,
 		"delete_switch",
-		_svc_delete_switch,
+		_guard(_svc_delete_switch),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required("uid"): cv.string,
 		}),
+		supports_response=SupportsResponse.ONLY,
+	)
+
+	hass.services.async_register(
+		DOMAIN,
+		"list_switches",
+		_guard(_svc_list_switches),
+		schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
+		supports_response=SupportsResponse.ONLY,
 	)
 
 	from .services_remote import async_register_remote_services

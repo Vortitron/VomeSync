@@ -89,6 +89,16 @@ delete_switch:
       selector:
         text:
 
+list_switches:
+  name: List switches
+  description: Return this entry's known switches (owned + subscribed), used by the Vome add-on panel
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+
 get_remote_status:
   name: Get remote access status
   description: Return link / full-UI / LAN tunnel status (used by the Vome add-on panel)

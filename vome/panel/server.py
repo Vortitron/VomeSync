@@ -289,6 +289,13 @@ class PanelHandler(BaseHTTPRequestHandler):
 		if path == "/api/diag":
 			self._send_json(200, run_diagnostics())
 			return
+		if path == "/api/switches":
+			status, payload = call_service("list_switches", {})
+			body = _unwrap(payload)
+			if isinstance(body, dict) and body.get("error") and status < 400:
+				status = 400
+			self._send_json(status, body)
+			return
 		self._send_json(404, {"error": "not found"})
 
 	def _route_post(self) -> None:
@@ -304,6 +311,9 @@ class PanelHandler(BaseHTTPRequestHandler):
 			"/api/link/start": ("link_start", body),
 			"/api/link/poll": ("link_poll", body),
 			"/api/link/unlink": ("unlink", body),
+			"/api/switches/create": ("create_switch", body),
+			"/api/switches/subscribe": ("subscribe_switch", body),
+			"/api/switches/delete": ("delete_switch", body),
 		}
 		if path not in mapping:
 			self._send_json(404, {"error": "not found"})
