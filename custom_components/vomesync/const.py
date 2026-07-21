@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.7"
+INTEGRATION_VERSION = "0.9.8"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -112,6 +112,11 @@ RELAY_FORWARD_WS_PATHS = ("/api/websocket",)
 RELAY_FORWARD_STRIP_HEADERS = frozenset({
 	"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
 	"te", "trailer", "transfer-encoding", "upgrade", "host", "content-length",
+	# aiohttp transparently gunzips the response body on `resp.read()` but
+	# leaves the original `Content-Encoding` header on `resp.headers` — if we
+	# forwarded it verbatim the browser would try to gunzip already-plain
+	# bytes and fail with ERR_CONTENT_DECODING_FAILED.
+	"content-encoding",
 })
 
 # An RPC targets either the local HA core REST API ("core", the default) or the

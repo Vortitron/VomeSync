@@ -636,6 +636,17 @@ class TestForwardHelpers:
 		lowered = {k.lower() for k, _ in out}
 		assert not (lowered & {"transfer-encoding", "content-length", "connection", "host"})
 
+	def test_filter_strips_content_encoding(self):
+		# aiohttp's resp.read() transparently gunzips the body but leaves the
+		# original Content-Encoding header on resp.headers; forwarding it
+		# verbatim makes the browser try to gunzip already-plain bytes
+		# (net::ERR_CONTENT_DECODING_FAILED).
+		pairs = [("Content-Type", "text/html"), ("Content-Encoding", "gzip")]
+		out = _filter_forward_headers(pairs)
+		lowered = {k.lower() for k, _ in out}
+		assert "content-encoding" not in lowered
+		assert "Content-Type: text/html" in [f"{k}: {v}" for k, v in out]
+
 	def test_filter_accepts_dict_input(self):
 		out = _filter_forward_headers({"X-Test": "1", "Connection": "close"})
 		assert out == [["X-Test", "1"]]
