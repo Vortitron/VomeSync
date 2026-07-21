@@ -58,9 +58,16 @@ services:
       # the portal uses to sign `ha-forward` cookies; also signs/verifies the
       # `lan-tcp` tunnel tokens minted for mint_lan_tcp_token. Empty = disabled.
       - RELAY_FORWARD_SECRET=${RELAY_FORWARD_SECRET:-}
+      # Full-UI forwarding proxy (friendly-domain remote login). When set (and
+      # RELAY_FORWARD_SECRET is present) the backend runs a browser-forward
+      # proxy on this port; the host nginx *.home.vome.io map routes friendly
+      # domains to it. Published on loopback only — reached via nginx, never
+      # the public internet.
+      - FORWARD_PORT=${FORWARD_PORT:-8099}
     ports:
       - "${VOMESYNC_API_HOST_PORT:-3090}:3090"
       - "${VOMESYNC_WS_HOST_PORT:-3001}:3001"
+      - "127.0.0.1:${VOMESYNC_FORWARD_HOST_PORT:-8099}:8099"
     volumes:
       - webserver_logs:/usr/src/app/logs
       - webserver_media:/usr/src/app/media
