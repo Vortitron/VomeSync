@@ -19,6 +19,9 @@ EXPECTED_SERVICES = frozenset({
 	"add_lan_route",
 	"remove_lan_route",
 	"mint_lan_tcp_token",
+	"link_start",
+	"link_poll",
+	"unlink",
 })
 
 

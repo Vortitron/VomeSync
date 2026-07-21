@@ -244,3 +244,38 @@ mint_lan_tcp_token:
           min: 60
           max: 86400
           mode: box
+
+link_start:
+  name: Connect to Vome (start)
+  description: >
+    Begin linking this Home Assistant to a Vome account. Returns a short code
+    and the URL to approve it at. Used by the add-on panel's Connect flow.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+
+link_poll:
+  name: Connect to Vome (check approval)
+  description: >
+    Check whether the code from link_start has been approved yet. Once approved,
+    stores the relay credentials and starts the outbound relay.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+
+unlink:
+  name: Disconnect from Vome
+  description: >
+    Remove the Vome link from this Home Assistant and stop the outbound relay.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:

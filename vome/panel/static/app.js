@@ -10,7 +10,7 @@
 		overview: "Overview",
 		forward: "Home Assistant UI",
 		lan: "LAN tunnels",
-		link: "Link status",
+		link: "Vome account",
 		about: "About",
 	};
 
@@ -148,6 +148,11 @@
 	}
 
 	function setView(name) {
+		// Leaving the link view abandons an in-flight approval wait.
+		if (current === "link" && name !== "link") {
+			linkFlow = null;
+			stopLinkPolling();
+		}
 		current = name;
 		titleEl.textContent = titles[name] || name;
 		document.querySelectorAll(".tree-item").forEach((btn) => {
@@ -169,7 +174,13 @@
 				<p class="muted">The app installed Vome integration <strong>${escapeHtml(state.installed_version)}</strong>, but Home Assistant is still running <strong>${escapeHtml(state.integration_version)}</strong>. Home Assistant only loads integration code at startup.</p>
 				<p class="muted">Go to <strong>Settings → System → ⋮ (top right) → Restart Home Assistant</strong>, then come back here.</p>
 			</div>` : "";
-		viewEl.innerHTML = `${restartCard}
+		const linkCard = (state && !state.linked && !restartNeeded()) ? `
+			<div class="card warn-card">
+				<h2>Connect to Vome to get started</h2>
+				<p class="muted">This Home Assistant isn't linked to a Vome account yet, so remote access and LAN tunnels aren't available. Linking takes about a minute and opens no ports.</p>
+				<div class="row"><button type="button" class="primary" id="ov-connect">Connect to Vome</button></div>
+			</div>` : "";
+		viewEl.innerHTML = `${restartCard}${linkCard}
 			<div class="card">
 				<h2>Status</h2>
 				<p class="muted">Same settings as the HACS options menu, laid out as a tree so remote access and LAN tunnels are easier to find.</p>
@@ -196,6 +207,8 @@
 			const preset = document.getElementById("preset-rdp");
 			if (preset) preset.click();
 		};
+		const connectBtn = document.getElementById("ov-connect");
+		if (connectBtn) connectBtn.onclick = () => setView("link");
 	}
 
 	function renderForward() {
@@ -496,16 +509,165 @@
 		};
 	}
 
+	// In-app "Connect to Vome" device-authorisation flow (null when idle).
+	let linkFlow = null;
+	let linkTimer = null;
+
+	function stopLinkPolling() {
+		if (linkTimer) {
+			clearTimeout(linkTimer);
+			linkTimer = null;
+		}
+	}
+
+	function linkDiagram() {
+		return `
+			<div class="tunnel-diagram">
+				<svg viewBox="0 0 640 92" role="img" aria-label="This Home Assistant dials outward to Vome; nothing is opened on your router.">
+					<g class="node"><rect x="8" y="24" width="150" height="48" rx="10"/><text x="83" y="45">You · vome.io</text><text x="83" y="61" class="sub">sign in here</text></g>
+					<line class="flow" x1="158" y1="48" x2="238" y2="48"/><text x="198" y="39" class="lbl">https</text>
+					<g class="node"><rect x="238" y="24" width="150" height="48" rx="10"/><text x="313" y="45">Vome relay</text><text x="313" y="61" class="sub">vome.io</text></g>
+					<line class="flow" x1="388" y1="48" x2="468" y2="48"/><text x="428" y="39" class="lbl">dials out</text>
+					<g class="node target"><rect x="468" y="24" width="164" height="48" rx="10"/><text x="550" y="45">Home Assistant</text><text x="550" y="61" class="sub">this box</text></g>
+				</svg>
+				<p class="muted small">Your Home Assistant makes the connection <em>outward</em> to Vome — no ports are opened on your router, and Vome never reaches in uninvited.</p>
+			</div>`;
+	}
+
+	async function startLink() {
+		try {
+			const res = await api("/api/link/start", {
+				method: "POST", body: JSON.stringify(withEntry({})),
+			});
+			if (res.status === "already_linked") {
+				await refresh();
+				return;
+			}
+			linkFlow = {
+				userCode: res.user_code || "",
+				uri: res.verification_uri || "https://vome.io/account/link-ha",
+				interval: Math.max(3, Number(res.interval) || 5),
+				message: "",
+			};
+			render();
+			scheduleLinkPoll();
+		} catch (err) {
+			showBanner(String(err.message || err), true);
+		}
+	}
+
+	function scheduleLinkPoll() {
+		stopLinkPolling();
+		if (linkFlow) {
+			linkTimer = setTimeout(pollLink, linkFlow.interval * 1000);
+		}
+	}
+
+	async function pollLink() {
+		if (!linkFlow) return;
+		try {
+			const res = await api("/api/link/poll", {
+				method: "POST", body: JSON.stringify(withEntry({})),
+			});
+			if (res.status === "linked") {
+				linkFlow = null;
+				stopLinkPolling();
+				showBanner("Connected to Vome — this Home Assistant is now linked.");
+				await refresh();
+				return;
+			}
+			if (res.status === "expired" || res.status === "no_pending") {
+				linkFlow = null;
+				stopLinkPolling();
+				showBanner("The code expired before it was approved — please start again.", true);
+				render();
+				return;
+			}
+			linkFlow.message = "";
+			scheduleLinkPoll();
+		} catch (err) {
+			// Transient network hiccup: keep waiting, but note the reason.
+			if (linkFlow) linkFlow.message = String(err.message || err);
+			if (current === "link") render();
+			scheduleLinkPoll();
+		}
+	}
+
+	function cancelLink() {
+		linkFlow = null;
+		stopLinkPolling();
+		render();
+	}
+
+	async function unlinkVome() {
+		if (!window.confirm("Disconnect this Home Assistant from Vome? Remote access and LAN tunnels stop until you reconnect.")) {
+			return;
+		}
+		try {
+			await api("/api/link/unlink", {
+				method: "POST", body: JSON.stringify(withEntry({})),
+			});
+			showBanner("Disconnected from Vome.");
+			await refresh();
+		} catch (err) {
+			showBanner(String(err.message || err), true);
+		}
+	}
+
 	function renderLink() {
+		if (state && state.linked) {
+			viewEl.innerHTML = `
+				<div class="card">
+					<h2>Connected to Vome</h2>
+					<div class="row">
+						${pill(true, "Linked", "")}
+						${state.server_id ? `<span class="mono">${escapeHtml(state.server_id)}</span>` : ""}
+					</div>
+					<p class="muted" style="margin-top:0.8rem">This Home Assistant is connected to your Vome account. Remote access and LAN tunnels are set up from the other tabs.</p>
+					<div class="row"><button type="button" class="danger" id="unlink">Disconnect from Vome</button></div>
+				</div>`;
+			document.getElementById("unlink").onclick = unlinkVome;
+			return;
+		}
+		if (!linkFlow) {
+			viewEl.innerHTML = `
+				<div class="card">
+					<h2>Connect this Home Assistant to Vome</h2>
+					<p class="muted">Linking lets you reach this home from vome.io — the Home Assistant UI, LAN devices and Remote Desktop — over one outbound, encrypted connection. It takes about a minute and opens no ports on your router.</p>
+					${linkDiagram()}
+					<div class="row"><button type="button" class="primary" id="link-start">Connect to Vome</button></div>
+					<p class="muted small">You'll sign in to Vome in a new tab and approve a short code shown here.</p>
+				</div>`;
+			document.getElementById("link-start").onclick = startLink;
+			return;
+		}
+		let host = linkFlow.uri;
+		try { host = new URL(linkFlow.uri).host; } catch (_err) { /* keep full uri */ }
 		viewEl.innerHTML = `
 			<div class="card">
-				<h2>Vome Home link</h2>
-				<p class="muted">Linking is done once in Home Assistant (Devices &amp; services → Vome → Connect to Vome Home). This panel manages remote access after that.</p>
-				<div class="row">
-					${pill(!!(state && state.linked), "Linked", "Not linked")}
-					${state && state.server_id ? `<span class="mono">server_id=${escapeHtml(state.server_id)}</span>` : ""}
-				</div>
+				<h2>Approve this Home Assistant</h2>
+				<ol class="steps">
+					<li>Open <a href="${escapeHtml(linkFlow.uri)}" target="_blank" rel="noreferrer">${escapeHtml(host)}</a> and sign in to Vome.</li>
+					<li>Enter this code when asked:
+						<div class="cmd-row"><input class="mono cmd" id="link-code" readonly value="${escapeHtml(linkFlow.userCode)}" onclick="this.select()"><button type="button" id="copy-code">Copy</button></div>
+					</li>
+					<li><span class="pill warn">Waiting for approval…</span> This page updates itself the moment you approve — leave it open.</li>
+				</ol>
+				${linkFlow.message ? `<p class="muted small">Still trying… (${escapeHtml(linkFlow.message)})</p>` : ""}
+				<div class="row"><button type="button" id="link-cancel">Cancel</button></div>
 			</div>`;
+		document.getElementById("link-cancel").onclick = cancelLink;
+		const cc = document.getElementById("copy-code");
+		if (cc) {
+			cc.onclick = () => {
+				const i = document.getElementById("link-code");
+				i.focus();
+				i.select();
+				try {
+					if (document.execCommand("copy")) showBanner("Code copied to clipboard.");
+				} catch (_err) { /* selection is enough */ }
+			};
+		}
 	}
 
 	function renderAbout() {

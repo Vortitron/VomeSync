@@ -1,7 +1,7 @@
 {
 	"domain": "vomesync",
 	"name": "Vome",
-	"version": "0.9.6",
+	"version": "0.9.7",
 	"documentation": "https://github.com/Vortitron/VomeSync",
 	"issue_tracker": "https://github.com/Vortitron/VomeSync/issues",
 	"dependencies": [],

@@ -301,6 +301,9 @@ class PanelHandler(BaseHTTPRequestHandler):
 			"/api/lan_routes/add": ("add_lan_route", body),
 			"/api/lan_routes/remove": ("remove_lan_route", body),
 			"/api/lan_routes/token": ("mint_lan_tcp_token", body),
+			"/api/link/start": ("link_start", body),
+			"/api/link/poll": ("link_poll", body),
+			"/api/link/unlink": ("unlink", body),
 		}
 		if path not in mapping:
 			self._send_json(404, {"error": "not found"})

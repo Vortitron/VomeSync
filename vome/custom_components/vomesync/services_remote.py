@@ -12,13 +12,16 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
 	CONF_RELAY,
 	CONF_RELAY_FORWARD_UI,
 	CONF_RELAY_LAN_ROUTES,
+	CONF_RELAY_SECRET,
 	CONF_RELAY_SERVER_ID,
 	CONF_RELAY_WS_URL,
+	DEFAULT_PORTAL_URL,
 	DEFAULT_RELAY_WS_URL,
 	DOMAIN,
 	INTEGRATION_VERSION,
@@ -39,9 +42,20 @@ from .lan_routes import (
 	normalise_routes,
 	validate_route,
 )
-from .relay_client import async_start_relay, get_relay_client
+from .relay_client import (
+	async_poll_device_token,
+	async_request_device_code,
+	async_start_relay,
+	async_stop_relay,
+	get_relay_client,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+# In-flight device-authorisation codes, keyed by entry_id, kept between the
+# panel's link_start and link_poll calls (the options flow keeps the equivalent
+# in its own step data).
+_PENDING_LINK_KEY = "_pending_link"
 
 
 def _guard(handler):
@@ -82,6 +96,33 @@ def _pick_entry(hass: HomeAssistant, entry_id: Optional[str]) -> ConfigEntry:
 	if not entries:
 		raise ValueError("No Home Assistant is linked to Vome yet")
 	raise ValueError("Multiple linked entries; pass entry_id")
+
+
+def _pick_vome_entry(hass: HomeAssistant, entry_id: Optional[str]) -> ConfigEntry:
+	"""Pick any Vome config entry — linked or not (used for linking/unlinking).
+
+	Unlike ``_pick_entry`` this does not require a relay to be configured yet,
+	because the whole point of the link services is to set one up.
+	"""
+	entries = list(hass.config_entries.async_entries(DOMAIN))
+	if entry_id:
+		for e in entries:
+			if e.entry_id == entry_id:
+				return e
+		raise ValueError(f"No Vome entry with id {entry_id}")
+	if len(entries) == 1:
+		return entries[0]
+	if not entries:
+		raise ValueError("The Vome integration isn't set up in Home Assistant yet")
+	raise ValueError("Multiple Vome entries; pass entry_id")
+
+
+def _link_display_name(hass: HomeAssistant) -> str:
+	"""Name shown for this HA in the user's Vome account (the HA instance name)."""
+	location = getattr(hass.config, "location_name", "") if hass else ""
+	if isinstance(location, str) and location.strip():
+		return location.strip()
+	return "My Home Assistant"
 
 
 async def _save_relay(hass: HomeAssistant, entry: ConfigEntry, relay: dict) -> None:
@@ -125,8 +166,11 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		entries = _relay_entries(hass)
 		entry_id = call.data.get("entry_id")
 		if not entries and not entry_id:
+			# Not linked yet — still surface the (single) Vome entry's id so the
+			# panel can drive the in-app linking services against it.
+			vome_entries = list(hass.config_entries.async_entries(DOMAIN))
 			return {
-				"entry_id": "",
+				"entry_id": vome_entries[0].entry_id if len(vome_entries) == 1 else "",
 				"integration_version": INTEGRATION_VERSION,
 				"linked": False,
 				"server_id": "",
@@ -303,4 +347,88 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)
+
+	# ── In-app account linking (device-authorisation) ────────────────────────
+	# Mirror of the options-flow link_vome steps as panel-callable services, so
+	# a user can connect this Home Assistant to their Vome account without
+	# leaving the add-on. link_start fetches a code; link_poll checks approval
+	# and, once granted, stores the relay credentials and starts the relay.
+
+	async def _link_start(call: ServiceCall) -> ServiceResponse:
+		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
+		if ((entry.options or {}).get(CONF_RELAY) or {}).get(CONF_RELAY_SERVER_ID):
+			return {"status": "already_linked", "entry_id": entry.entry_id}
+		session = async_get_clientsession(hass)
+		started = await async_request_device_code(
+			session, DEFAULT_PORTAL_URL, name=_link_display_name(hass)
+		)
+		pending = {
+			"device_code": started.get("device_code"),
+			"user_code": started.get("user_code"),
+			"verification_uri": started.get("verification_uri")
+			or (DEFAULT_PORTAL_URL + "/account/link-ha"),
+		}
+		if not pending["device_code"]:
+			raise ValueError("Vome did not return a device code — try again.")
+		hass.data.setdefault(DOMAIN, {}).setdefault(_PENDING_LINK_KEY, {})[entry.entry_id] = pending
+		return {
+			"status": "started",
+			"entry_id": entry.entry_id,
+			"user_code": pending["user_code"] or "",
+			"verification_uri": pending["verification_uri"],
+			"interval": int(started.get("interval") or 5),
+			"expires_in": int(started.get("expires_in") or 900),
+		}
+
+	async def _link_poll(call: ServiceCall) -> ServiceResponse:
+		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
+		pending = hass.data.get(DOMAIN, {}).get(_PENDING_LINK_KEY, {}).get(entry.entry_id)
+		if not pending or not pending.get("device_code"):
+			return {"status": "no_pending"}
+		session = async_get_clientsession(hass)
+		result = await async_poll_device_token(
+			session, DEFAULT_PORTAL_URL, pending["device_code"]
+		)
+		status = result.get("status")
+		if status == "approved":
+			relay = {
+				CONF_RELAY_SERVER_ID: result.get("server_id"),
+				CONF_RELAY_SECRET: result.get("relay_secret"),
+				CONF_RELAY_WS_URL: result.get("relay_ws_url") or DEFAULT_RELAY_WS_URL,
+			}
+			options = dict(entry.options or {})
+			options[CONF_RELAY] = relay
+			hass.config_entries.async_update_entry(entry, options=options)
+			await async_start_relay(hass, entry)
+			hass.data.get(DOMAIN, {}).get(_PENDING_LINK_KEY, {}).pop(entry.entry_id, None)
+			return {"status": "linked", "server_id": relay[CONF_RELAY_SERVER_ID] or ""}
+		if status == "pending":
+			return {
+				"status": "pending",
+				"user_code": pending.get("user_code") or "",
+				"verification_uri": pending.get("verification_uri") or "",
+			}
+		# expired / unknown — drop the stale code so the panel starts over.
+		hass.data.get(DOMAIN, {}).get(_PENDING_LINK_KEY, {}).pop(entry.entry_id, None)
+		return {"status": "expired"}
+
+	async def _unlink(call: ServiceCall) -> ServiceResponse:
+		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
+		options = dict(entry.options or {})
+		was_linked = bool(options.pop(CONF_RELAY, None))
+		hass.config_entries.async_update_entry(entry, options=options)
+		await async_stop_relay(hass, entry)
+		hass.data.get(DOMAIN, {}).get(_PENDING_LINK_KEY, {}).pop(entry.entry_id, None)
+		return {"status": "unlinked", "was_linked": was_linked}
+
+	_link_schema = vol.Schema({vol.Optional("entry_id"): cv.string})
+	for _name, _handler in (
+		("link_start", _link_start),
+		("link_poll", _link_poll),
+		("unlink", _unlink),
+	):
+		hass.services.async_register(
+			DOMAIN, _name, _guard(_handler),
+			schema=_link_schema, supports_response=SupportsResponse.ONLY,
+		)
 	_LOGGER.debug("Registered Vome remote-access services")
