@@ -137,12 +137,16 @@ def _get_coordinator_for_service(hass: HomeAssistant, entry_id: str | None) -> V
 			raise ValueError(f"Unknown config entry_id: {entry_id}")
 		return coordinator
 
-	# hass.data[DOMAIN] also holds the "_services_registered" marker (set
-	# below, once services are registered — which is always, by the time a
-	# service call reaches here), so it must be excluded before counting:
-	# otherwise a genuinely single-entry install always looks like 2+
-	# entries and every call without an explicit entry_id fails.
-	coordinators = {k: v for k, v in domain_data.items() if k != "_services_registered"}
+	# hass.data[DOMAIN] is shared with several non-coordinator entries —
+	# "_services_registered" / "_remote_services_registered" markers,
+	# relay_client's "_relays" registry, services_remote's "_pending_link"
+	# map — so counting the dict directly always overcounts. Filtering by
+	# name would need updating every time a new one is added (and already
+	# missed two live); filtering by type is correct regardless of what
+	# else ever gets stashed in this dict.
+	coordinators = {
+		k: v for k, v in domain_data.items() if isinstance(v, VomeSyncCoordinator)
+	}
 	if len(coordinators) == 1:
 		return next(iter(coordinators.values()))
 

@@ -30,24 +30,35 @@ EXPECTED_SERVICES = frozenset({
 def test_get_coordinator_for_service_single_real_entry_no_entry_id(hass, config_entry):
 	"""A single real config entry resolves without entry_id.
 
-	hass.data[DOMAIN] also carries the "_services_registered" marker
-	(set once services are registered — which is always, in a running
-	instance), so a naive len(domain_data) == 1 check always sees 2+ and
-	every single-install user calling a service without entry_id would hit
-	"Multiple VomeSync entries found" — reproduced live against a real HA
-	instance before this fix.
+	hass.data[DOMAIN] also carries several non-coordinator entries —
+	"_services_registered" / "_remote_services_registered" markers,
+	relay_client's "_relays" registry, services_remote's "_pending_link"
+	map — all present on any running instance, so a naive
+	len(domain_data) == 1 check always sees 5+ and every single-install
+	user calling a service without entry_id would hit "Multiple VomeSync
+	entries found". Reproduced live against a real HA instance: an
+	earlier fix here that excluded marker keys by name caught only
+	"_services_registered" and still failed live, because "_relays" and
+	"_remote_services_registered" are set too — hence filtering by type
+	(isinstance VomeSyncCoordinator) instead of by name.
 	"""
-	mock_coordinator = MagicMock()
+	from custom_components.vomesync.coordinator import VomeSyncCoordinator
+	mock_coordinator = MagicMock(spec=VomeSyncCoordinator)
 	hass.data = {DOMAIN: {
 		config_entry.entry_id: mock_coordinator,
 		"_services_registered": True,
+		"_remote_services_registered": True,
+		"_relays": {config_entry.entry_id: MagicMock()},
+		"_pending_link": {},
 	}}
 	assert _get_coordinator_for_service(hass, None) is mock_coordinator
 
 
 def test_get_coordinator_for_service_multiple_entries_requires_entry_id():
+	from custom_components.vomesync.coordinator import VomeSyncCoordinator
 	hass = MagicMock()
-	c1, c2 = MagicMock(), MagicMock()
+	c1 = MagicMock(spec=VomeSyncCoordinator)
+	c2 = MagicMock(spec=VomeSyncCoordinator)
 	hass.data = {DOMAIN: {
 		"entry-1": c1, "entry-2": c2, "_services_registered": True,
 	}}
