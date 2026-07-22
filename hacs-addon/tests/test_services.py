@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from custom_components.vomesync.const import DOMAIN
-from custom_components.vomesync import _register_services
+from custom_components.vomesync import _register_services, _get_coordinator_for_service
 
 # Switch services (_register_services) + remote-access services
 # (async_register_remote_services). Keep in sync with services.yaml.
@@ -25,6 +25,35 @@ EXPECTED_SERVICES = frozenset({
 	"link_poll",
 	"unlink",
 })
+
+
+def test_get_coordinator_for_service_single_real_entry_no_entry_id(hass, config_entry):
+	"""A single real config entry resolves without entry_id.
+
+	hass.data[DOMAIN] also carries the "_services_registered" marker
+	(set once services are registered — which is always, in a running
+	instance), so a naive len(domain_data) == 1 check always sees 2+ and
+	every single-install user calling a service without entry_id would hit
+	"Multiple VomeSync entries found" — reproduced live against a real HA
+	instance before this fix.
+	"""
+	mock_coordinator = MagicMock()
+	hass.data = {DOMAIN: {
+		config_entry.entry_id: mock_coordinator,
+		"_services_registered": True,
+	}}
+	assert _get_coordinator_for_service(hass, None) is mock_coordinator
+
+
+def test_get_coordinator_for_service_multiple_entries_requires_entry_id():
+	hass = MagicMock()
+	c1, c2 = MagicMock(), MagicMock()
+	hass.data = {DOMAIN: {
+		"entry-1": c1, "entry-2": c2, "_services_registered": True,
+	}}
+	with pytest.raises(ValueError, match="Multiple VomeSync entries"):
+		_get_coordinator_for_service(hass, None)
+	assert _get_coordinator_for_service(hass, "entry-2") is c2
 
 
 @pytest.mark.asyncio
