@@ -14,6 +14,7 @@ Mirrors the AsyncMock(session) style used in test_api_client.py.
 import asyncio
 import base64
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -29,8 +30,10 @@ from custom_components.vomesync.relay_client import (
 	async_ensure_local_access_token,
 	async_poll_device_token,
 	async_request_device_code,
+	resolve_local_core_url,
 )
 from custom_components.vomesync.const import (
+	DEFAULT_LOCAL_CORE_URL,
 	SUPERVISOR_TOKEN_ENV,
 )
 
@@ -48,6 +51,33 @@ def _mock_session_with_response(status=200, text="{}"):
 
 def _client(session, **kwargs):
 	return RelayClient(None, server_id="rly-1", secret="sek", session=session, **kwargs)
+
+
+def _fake_hass(
+	*,
+	port=None,
+	ssl=False,
+	server_host=None,
+	api_port=None,
+	api_ssl=False,
+	internal_url=None,
+):
+	"""A minimal stand-in for the bits of hass the URL resolver reads."""
+	return SimpleNamespace(
+		http=SimpleNamespace(
+			server_port=port,
+			ssl_certificate="/ssl/fullchain.pem" if ssl else None,
+			server_host=server_host,
+		),
+		config=SimpleNamespace(
+			api=SimpleNamespace(port=api_port, use_ssl=api_ssl),
+			internal_url=internal_url,
+		),
+	)
+
+
+def _client_on(hass, session, **kwargs):
+	return RelayClient(hass, server_id="rly-1", secret="sek", session=session, **kwargs)
 
 
 class TestSafePathPortion:
@@ -1052,3 +1082,134 @@ class TestRequestLanTcpToken:
 		client._ws = AsyncMock()
 		token, error = await client.request_lan_tcp_token("rdp")
 		assert token is None and "Timed out" in error
+
+
+class TestResolveLocalCoreUrl:
+	"""HA 2026.8 made the listen port a UI setting and defaulted new installs to
+	port 80, so the local core URL must come from the running instance rather
+	than a constant.  Getting this wrong is silent: the relay stays connected and
+	reports healthy while every dispatched request fails."""
+
+	def test_explicit_override_wins(self):
+		hass = _fake_hass(port=80)
+		assert resolve_local_core_url(hass, "http://10.0.0.5:8123") == "http://10.0.0.5:8123"
+
+	def test_override_trailing_slash_stripped(self):
+		assert resolve_local_core_url(None, "http://10.0.0.5:8123/") == "http://10.0.0.5:8123"
+
+	def test_derives_port_80(self):
+		assert resolve_local_core_url(_fake_hass(port=80)) == "http://127.0.0.1:80"
+
+	def test_derives_legacy_port_8123(self):
+		assert resolve_local_core_url(_fake_hass(port=8123)) == "http://127.0.0.1:8123"
+
+	def test_local_tls_gives_https(self):
+		assert resolve_local_core_url(_fake_hass(port=8123, ssl=True)) == "https://127.0.0.1:8123"
+
+	def test_config_api_is_used_when_http_has_no_port(self):
+		hass = _fake_hass(port=None, api_port=80)
+		assert resolve_local_core_url(hass) == "http://127.0.0.1:80"
+
+	def test_config_api_ssl_flag_gives_https(self):
+		hass = _fake_hass(port=None, api_port=8123, api_ssl=True)
+		assert resolve_local_core_url(hass) == "https://127.0.0.1:8123"
+
+	def test_bound_to_one_interface_dials_that_interface(self):
+		# Loopback is not listening in this case, so 127.0.0.1 would fail.
+		hass = _fake_hass(port=80, server_host=["192.168.1.5"])
+		assert resolve_local_core_url(hass) == "http://192.168.1.5:80"
+
+	def test_bind_list_including_loopback_prefers_loopback(self):
+		hass = _fake_hass(port=80, server_host=["192.168.1.5", "127.0.0.1"])
+		assert resolve_local_core_url(hass) == "http://127.0.0.1:80"
+
+	def test_bind_all_interfaces_uses_loopback(self):
+		assert resolve_local_core_url(_fake_hass(port=80, server_host=["0.0.0.0"])) == "http://127.0.0.1:80"
+
+	def test_ipv6_bind_is_bracketed(self):
+		hass = _fake_hass(port=80, server_host=["fd00::1"])
+		assert resolve_local_core_url(hass) == "http://[fd00::1]:80"
+
+	def test_falls_back_to_internal_url_without_a_port(self):
+		hass = _fake_hass(internal_url="https://ha.example.com/")
+		assert resolve_local_core_url(hass) == "https://ha.example.com"
+
+	def test_ignores_nonsense_internal_url(self):
+		hass = _fake_hass(internal_url="not a url")
+		assert resolve_local_core_url(hass) == DEFAULT_LOCAL_CORE_URL
+
+	def test_no_hass_falls_back_to_default(self):
+		assert resolve_local_core_url(None) == DEFAULT_LOCAL_CORE_URL
+
+	def test_out_of_range_port_falls_back(self):
+		assert resolve_local_core_url(_fake_hass(port=0)) == DEFAULT_LOCAL_CORE_URL
+		assert resolve_local_core_url(_fake_hass(port=99999)) == DEFAULT_LOCAL_CORE_URL
+
+	def test_unusable_hass_never_raises(self):
+		# A half-built hass (http integration not started) must not break setup.
+		assert resolve_local_core_url(MagicMock()) == DEFAULT_LOCAL_CORE_URL
+		assert resolve_local_core_url(SimpleNamespace()) == DEFAULT_LOCAL_CORE_URL
+
+
+class TestClientUsesResolvedLocalUrl:
+	@pytest.mark.asyncio
+	async def test_execute_dials_the_derived_port(self):
+		session, _ = _mock_session_with_response(status=200, text="[]")
+		client = _client_on(_fake_hass(port=80), session, local_token="llt")
+		status, _body, error = await client.execute("GET", "/api/states", None)
+		assert status == 200 and error is None
+		args, _kwargs = session.request.call_args
+		assert args[1] == "http://127.0.0.1:80/api/states"
+
+	@pytest.mark.asyncio
+	async def test_port_change_is_picked_up_without_a_restart(self):
+		# 2026.8 can change the port under a live relay — and roll it back five
+		# minutes later — so the URL must not be captured at construction time.
+		session, _ = _mock_session_with_response(status=200, text="[]")
+		hass = _fake_hass(port=8123)
+		client = _client_on(hass, session, local_token="llt")
+		await client.execute("GET", "/api/states", None)
+		assert session.request.call_args[0][1] == "http://127.0.0.1:8123/api/states"
+
+		hass.http.server_port = 80
+		await client.execute("GET", "/api/states", None)
+		assert session.request.call_args[0][1] == "http://127.0.0.1:80/api/states"
+
+	@pytest.mark.asyncio
+	async def test_override_still_wins_over_derivation(self):
+		session, _ = _mock_session_with_response(status=200, text="[]")
+		client = _client_on(
+			_fake_hass(port=80), session, local_token="llt", local_url="http://10.0.0.5:8123"
+		)
+		await client.execute("GET", "/api/states", None)
+		assert session.request.call_args[0][1] == "http://10.0.0.5:8123/api/states"
+
+	def test_ws_bridge_target_follows_the_derived_port(self):
+		client = _client_on(_fake_hass(port=80), AsyncMock(spec=aiohttp.ClientSession))
+		assert _to_ws_url(client.local_url, "/api/websocket") == "ws://127.0.0.1:80/api/websocket"
+
+	def test_ws_bridge_target_uses_wss_for_local_tls(self):
+		client = _client_on(_fake_hass(port=8123, ssl=True), AsyncMock(spec=aiohttp.ClientSession))
+		assert _to_ws_url(client.local_url, "/api/websocket") == "wss://127.0.0.1:8123/api/websocket"
+
+
+class TestLocalTlsPrefersInternalUrl:
+	"""An instance terminating its own TLS holds a cert for a hostname, so
+	dialling https://127.0.0.1:port fails verification even with the right port."""
+
+	def test_https_prefers_internal_url_over_loopback(self):
+		hass = _fake_hass(port=8123, ssl=True, internal_url="https://ha.example.com:8123")
+		assert resolve_local_core_url(hass) == "https://ha.example.com:8123"
+
+	def test_https_without_internal_url_still_uses_loopback(self):
+		hass = _fake_hass(port=8123, ssl=True)
+		assert resolve_local_core_url(hass) == "https://127.0.0.1:8123"
+
+	def test_plain_http_ignores_internal_url(self):
+		# No cert to satisfy, so loopback is the cheaper and more reliable dial.
+		hass = _fake_hass(port=80, internal_url="https://ha.example.com")
+		assert resolve_local_core_url(hass) == "http://127.0.0.1:80"
+
+	def test_override_still_beats_internal_url(self):
+		hass = _fake_hass(port=8123, ssl=True, internal_url="https://ha.example.com")
+		assert resolve_local_core_url(hass, "http://127.0.0.1:8123") == "http://127.0.0.1:8123"

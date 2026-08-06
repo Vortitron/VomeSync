@@ -63,6 +63,11 @@ RELAY_DEVICE_TOKEN_PATH = "/api/v1/relay/device/token"
 # token — so local core calls use a minted long-lived token instead (see
 # relay_client.async_ensure_local_access_token).  The Supervisor API is still
 # used (token below) for ESPHome add-on discovery.
+# LAST-RESORT fallback only.  Since HA 2026.8 the listen port is a UI setting
+# (Settings → System → Network) and new installs default to port 80, so this
+# constant is not a safe assumption — relay_client.resolve_local_core_url()
+# derives the real one from the running instance and only lands here when it
+# cannot (no hass, or the http integration has not started yet).
 DEFAULT_LOCAL_CORE_URL = "http://127.0.0.1:8123"
 SUPERVISOR_TOKEN_ENV = "SUPERVISOR_TOKEN"  # noqa: S105 - env var name, not a secret
 

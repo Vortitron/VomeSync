@@ -33,7 +33,7 @@ import uuid
 from contextlib import suppress
 from datetime import timedelta
 from typing import Any, Optional
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 import aiohttp
 from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
@@ -156,6 +156,102 @@ def _filter_forward_headers(pairs: Any) -> list[list[str]]:
 	return out
 
 
+# ── Local core URL resolution ────────────────────────────────────────────────
+#
+# Home Assistant 2026.8 made the HTTP listen port a first-class UI setting
+# (Settings → System → Network) and switched new installs to port 80, so a
+# hardcoded ``127.0.0.1:8123`` is no longer a safe assumption — and it never was
+# for installs that terminate TLS locally or bind to a single interface.  Resolve
+# it from the running instance on every use instead of caching it at setup: the
+# port can now change under a live relay, and the five-minute auto-rollback means
+# it can change twice in quick succession.  Getting this wrong is silent — the
+# relay stays connected and reports healthy while every dispatched request fails.
+
+# Addresses that mean "this machine" — if HA binds to one of these (or to
+# nothing, i.e. all interfaces) then loopback is listening and is the safe dial.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "0.0.0.0", "::"})
+
+
+def _local_host(server_host: Any) -> str:
+	"""Return the host to dial for a locally bound Home Assistant.
+
+	``server_host`` is unset on most installs (all interfaces).  2026.8's network
+	page lets a user bind to one specific interface instead, in which case
+	loopback is *not* listening and we have to dial the bound address.
+	"""
+	if isinstance(server_host, str):
+		hosts = [server_host]
+	elif isinstance(server_host, (list, tuple, set)):
+		hosts = [host for host in server_host if isinstance(host, str)]
+	else:
+		hosts = []
+	if not hosts or any(host in _LOOPBACK_HOSTS for host in hosts):
+		return "127.0.0.1"
+	host = hosts[0]
+	return f"[{host}]" if ":" in host else host
+
+
+def _internal_url_base(hass: HomeAssistant) -> Optional[str]:
+	"""Return ``scheme://netloc`` of hass.config.internal_url, if it is usable."""
+	internal_url = getattr(getattr(hass, "config", None), "internal_url", None)
+	if isinstance(internal_url, str) and internal_url:
+		parsed = urlparse(internal_url)
+		if parsed.scheme in ("http", "https") and parsed.netloc:
+			return f"{parsed.scheme}://{parsed.netloc}"
+	return None
+
+
+def _derive_local_core_url(hass: HomeAssistant) -> Optional[str]:
+	"""Derive the local core base URL from the running instance, or ``None``."""
+	http = getattr(hass, "http", None)
+	api = getattr(getattr(hass, "config", None), "api", None)
+
+	# hass.http is the actual server object, so its port is what is really bound;
+	# hass.config.api carries the same value and survives as a fallback.
+	port = getattr(http, "server_port", None)
+	if not isinstance(port, int):
+		port = getattr(api, "port", None)
+
+	use_ssl = bool(getattr(http, "ssl_certificate", None)) or bool(
+		getattr(api, "use_ssl", False)
+	)
+
+	# An instance terminating its own TLS holds a certificate for a *hostname*,
+	# so https://127.0.0.1:port would fail verification even though the port is
+	# right.  internal_url is the name the user gave it — prefer that when set.
+	if use_ssl:
+		internal = _internal_url_base(hass)
+		if internal and internal.startswith("https://"):
+			return internal
+
+	if isinstance(port, int) and 0 < port < 65536:
+		scheme = "https" if use_ssl else "http"
+		return f"{scheme}://{_local_host(getattr(http, 'server_host', None))}:{port}"
+
+	# Last resort before the constant: whatever the user told HA to call itself.
+	return _internal_url_base(hass)
+
+
+def resolve_local_core_url(
+	hass: Optional[HomeAssistant], override: Optional[str] = None
+) -> str:
+	"""Return the base URL of this Home Assistant's own HTTP API.
+
+	``override`` (the ``local_url`` relay option) always wins: derivation can be
+	wrong behind unusual setups, and support needs a way to correct it without a
+	code change.
+	"""
+	if override:
+		return str(override).rstrip("/")
+	if hass is not None:
+		# Resolution must never be the reason the relay stops working.
+		with suppress(Exception):
+			derived = _derive_local_core_url(hass)
+			if derived:
+				return derived
+	return DEFAULT_LOCAL_CORE_URL
+
+
 def _to_ws_url(base_url: Optional[str], path: str) -> str:
 	"""Map an ``http(s)`` base + path to the matching ``ws(s)://`` URL."""
 	base = (base_url or DEFAULT_LOCAL_CORE_URL).rstrip("/")
@@ -242,7 +338,10 @@ class RelayClient:
 		self._secret = secret
 		self._ws_url = ws_url or DEFAULT_RELAY_WS_URL
 		self._local_token = local_token
-		self._local_url = local_url or DEFAULT_LOCAL_CORE_URL
+		# Stored as an override only — the effective URL is resolved per use by
+		# the ``local_url`` property so a port change is picked up without a
+		# restart.  See resolve_local_core_url().
+		self._local_url_override = (local_url or "").rstrip("/") or None
 		self._esphome_url = (esphome_url or "").rstrip("/") or None
 		# Full-UI forwarding is opt-in: it brokers the whole browser session, not
 		# just the scoped /api surface, so the owner must enable it deliberately.
@@ -271,6 +370,16 @@ class RelayClient:
 		# Serialise writes to the single relay socket: HTTP responses and many
 		# concurrent WS frames share it, and aiohttp does not guard interleaving.
 		self._send_lock = asyncio.Lock()
+
+	@property
+	def local_url(self) -> str:
+		"""Base URL of this Home Assistant's own API, resolved on every use.
+
+		Deliberately not cached: 2026.8 lets the listen port change under a
+		running instance (and roll back again five minutes later), so anything
+		captured at setup goes stale silently.
+		"""
+		return resolve_local_core_url(self._hass, self._local_url_override)
 
 	def _get_session(self) -> aiohttp.ClientSession:
 		if self._session is not None:
@@ -436,7 +545,7 @@ class RelayClient:
 		if not self._forward_ui:
 			return 0, None, None, "Full-UI forwarding is disabled for this Home Assistant."
 		return await self._proxy_http_to(
-			method, self._local_url.rstrip("/") + path, data,
+			method, self.local_url + path, data,
 			error_timeout="Local Home Assistant timed out.",
 			error_client="Local Home Assistant error",
 		)
@@ -537,7 +646,7 @@ class RelayClient:
 				"code": 1008, "reason": "WebSocket path not permitted.",
 			})
 			return
-		await self._open_bridged_ws(ws, socket_id, _to_ws_url(self._local_url, path))
+		await self._open_bridged_ws(ws, socket_id, _to_ws_url(self.local_url, path))
 
 	async def _handle_lan_ws_open(
 		self,
@@ -794,7 +903,7 @@ class RelayClient:
 		not used: it 401s requests authenticated with core's own token.
 		"""
 		if self._local_token:
-			return self._local_url, self._local_token
+			return self.local_url, self._local_token
 		return None, None
 
 	async def execute(
@@ -1130,7 +1239,16 @@ async def async_start_relay(hass: HomeAssistant, entry) -> None:
 	)
 	hass.data.setdefault(DOMAIN, {}).setdefault(_RELAYS_KEY, {})[entry.entry_id] = client
 	client.start()
-	_LOGGER.info("Relay started for entry %s (%s)", entry.entry_id, relay[CONF_RELAY_SERVER_ID])
+	# Log the resolved local URL: when it is wrong the relay still connects and
+	# still looks healthy, so this line is the only external evidence of what we
+	# are actually dialling.
+	_LOGGER.info(
+		"Relay started for entry %s (%s), local core %s%s",
+		entry.entry_id,
+		relay[CONF_RELAY_SERVER_ID],
+		client.local_url,
+		" (configured override)" if relay.get(CONF_RELAY_LOCAL_URL) else " (auto-detected)",
+	)
 
 
 async def async_stop_relay(hass: HomeAssistant, entry) -> None:

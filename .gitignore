@@ -17,3 +17,4 @@ backups/20260610_193317/redis_dump.rdb
 skills-lock.json
 */.env
 */*/.env
+backups/*
