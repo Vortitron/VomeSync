@@ -80,6 +80,22 @@ def _client_on(hass, session, **kwargs):
 	return RelayClient(hass, server_id="rly-1", secret="sek", session=session, **kwargs)
 
 
+def _mock_session_for_forward(status=200, body=b"ok", headers=None):
+	"""Session for the *forwarding* path, which reads bytes via resp.read().
+
+	The shared _mock_session_with_response only fills .text, which is what
+	execute() uses — forwarding needs read() to return real bytes.
+	"""
+	resp = AsyncMock()
+	resp.status = status
+	resp.read = AsyncMock(return_value=body)
+	resp.headers = MagicMock()
+	resp.headers.items = MagicMock(return_value=list((headers or {}).items()))
+	session = AsyncMock(spec=aiohttp.ClientSession)
+	session.request.return_value.__aenter__.return_value = resp
+	return session, resp
+
+
 class TestSafePathPortion:
 	def test_returns_portion_without_query(self):
 		assert _safe_path_portion("/api/states") == "/api/states"
@@ -1228,3 +1244,67 @@ class TestSchemeFollowsThePortSource:
 		hass = _fake_hass(port=None, api_port=8123, api_ssl=True)
 		# No internal_url to prefer, so it falls through to the loopback form.
 		assert resolve_local_core_url(hass) == "https://127.0.0.1:8123"
+
+
+class TestWebhookForwarding:
+	"""Allowlisted webhooks cross the tunnel with no login and without
+	full-UI forwarding — the cloudhook equivalent. Nothing else opens up."""
+
+	@pytest.mark.asyncio
+	async def test_listed_webhook_forwards_with_forward_ui_off(self):
+		session, _ = _mock_session_for_forward(status=200, body=b"ok")
+		client = _client_on(_fake_hass(port=8123), session,
+							forward_ui=False, webhooks=["hook1"])
+		status, _h, _b, error = await client._execute_http_proxy(
+			{"method": "POST", "path": "/api/webhook/hook1", "headers": []})
+		assert error is None and status == 200
+		assert session.request.call_args[0][1] == "http://127.0.0.1:8123/api/webhook/hook1"
+
+	@pytest.mark.asyncio
+	async def test_unlisted_webhook_is_refused_with_forward_ui_off(self):
+		session, _ = _mock_session_with_response(status=200, text="ok")
+		client = _client_on(_fake_hass(port=8123), session,
+							forward_ui=False, webhooks=["hook1"])
+		status, _h, _b, error = await client._execute_http_proxy(
+			{"method": "POST", "path": "/api/webhook/other", "headers": []})
+		assert status == 0 and "forwarding is disabled" in error
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_webhooks_do_not_open_any_other_path(self):
+		# The point of the feature is that it is *narrow*.
+		session, _ = _mock_session_with_response(status=200, text="[]")
+		client = _client_on(_fake_hass(port=8123), session,
+							forward_ui=False, webhooks=["hook1"])
+		for path in ("/api/states", "/api/config", "/lovelace", "/auth/token"):
+			status, _h, _b, error = await client._execute_http_proxy(
+				{"method": "GET", "path": path, "headers": []})
+			assert status == 0 and error, f"{path} was forwarded"
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_traversal_via_a_listed_id_is_refused(self):
+		session, _ = _mock_session_with_response(status=200, text="ok")
+		client = _client_on(_fake_hass(port=8123), session,
+							forward_ui=False, webhooks=["hook1"])
+		status, _h, _b, error = await client._execute_http_proxy(
+			{"method": "POST", "path": "/api/webhook/hook1/../../states", "headers": []})
+		assert status == 0 and error
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_no_webhooks_configured_changes_nothing(self):
+		session, _ = _mock_session_with_response(status=200, text="ok")
+		client = _client_on(_fake_hass(port=8123), session, forward_ui=False)
+		status, _h, _b, error = await client._execute_http_proxy(
+			{"method": "POST", "path": "/api/webhook/hook1", "headers": []})
+		assert status == 0 and "forwarding is disabled" in error
+
+	@pytest.mark.asyncio
+	async def test_forward_ui_still_carries_everything_as_before(self):
+		# Adding webhooks must not narrow the existing full-UI behaviour.
+		session, _ = _mock_session_for_forward(status=200, body=b"ok")
+		client = _client_on(_fake_hass(port=8123), session, forward_ui=True)
+		status, _h, _b, error = await client._execute_http_proxy(
+			{"method": "GET", "path": "/lovelace", "headers": []})
+		assert error is None and status == 200

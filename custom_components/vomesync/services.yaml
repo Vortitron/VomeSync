@@ -170,6 +170,58 @@ set_relay_server:
       selector:
         text:
 
+set_webhooks:
+  name: Set published webhooks
+  description: >-
+    Replace the list of Home Assistant webhook ids that can be called from the
+    internet through your Vome address. Published webhooks need no login — the
+    webhook id is the only credential — so list only the ones you mean to
+    expose. Full-UI forwarding is not required.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    webhooks:
+      name: Webhook ids
+      description: The complete list; anything not listed stops being reachable
+      required: true
+      selector:
+        object:
+
+add_webhook:
+  name: Publish a webhook
+  description: >-
+    Make one Home Assistant webhook callable from the internet through your
+    Vome address. Copy the id from the automation's webhook trigger.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    webhook_id:
+      name: Webhook id
+      required: true
+      selector:
+        text:
+
+remove_webhook:
+  name: Unpublish a webhook
+  description: Stop a webhook being reachable from the internet
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    webhook_id:
+      name: Webhook id
+      required: true
+      selector:
+        text:
+
 set_local_url:
   name: Set local Home Assistant address
   description: >-

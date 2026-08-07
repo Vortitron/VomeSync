@@ -46,6 +46,7 @@ from .const import (
 	CONF_RELAY_FORWARD_UI,
 	CONF_RELAY_LAN_ROUTES,
 	CONF_RELAY_LOCAL_TOKEN,
+	CONF_RELAY_WEBHOOKS,
 	CONF_RELAY_LOCAL_URL,
 	CONF_RELAY_SECRET,
 	CONF_RELAY_SERVER_ID,
@@ -93,6 +94,7 @@ from .const import (
 	SUPERVISOR_ADDONS_URL,
 	SUPERVISOR_TOKEN_ENV,
 )
+from .webhooks import is_forwardable_webhook, normalise_webhooks
 from .lan_routes import (
 	ROUTE_HOST,
 	ROUTE_PORT,
@@ -353,6 +355,7 @@ class RelayClient:
 		esphome_url: Optional[str] = None,
 		forward_ui: bool = False,
 		lan_routes: Optional[list] = None,
+		webhooks: Optional[list] = None,
 		session: Optional[aiohttp.ClientSession] = None,
 	) -> None:
 		self._hass = hass
@@ -370,6 +373,8 @@ class RelayClient:
 		self._forward_ui = bool(forward_ui)
 		# Path→LAN tunnels (``/t/<slug>/…``).  Independent of forward_ui.
 		self._lan_routes = normalise_routes(lan_routes)
+		# Publicly callable webhook ids — also independent of forward_ui.
+		self._webhooks = normalise_webhooks(webhooks)
 		# Cache for the auto-discovered ESPHome dashboard base (Supervisor installs).
 		self._esphome_base_cache: Optional[str] = None
 		self._session = session
@@ -563,6 +568,17 @@ class RelayClient:
 		lan = parse_lan_path(path)
 		if lan is not None:
 			return await self._execute_lan_http_proxy(method, lan[0], lan[1], data)
+
+		# Allowlisted webhooks are reachable without full-UI forwarding and
+		# without a login — that is the whole point of a cloudhook. Nothing
+		# else about the instance opens up: this matches one exact path per
+		# explicitly listed id (see webhooks.py for why it is an allowlist).
+		if is_forwardable_webhook(path, method, self._webhooks):
+			return await self._proxy_http_to(
+				method, self.local_url + path, data,
+				error_timeout="Local Home Assistant timed out.",
+				error_client="Local Home Assistant error",
+			)
 
 		if not self._forward_ui:
 			return 0, None, None, "Full-UI forwarding is disabled for this Home Assistant."
@@ -1258,6 +1274,7 @@ async def async_start_relay(hass: HomeAssistant, entry) -> None:
 		esphome_url=relay.get(CONF_RELAY_ESPHOME_URL),
 		forward_ui=bool(relay.get(CONF_RELAY_FORWARD_UI)),
 		lan_routes=relay.get(CONF_RELAY_LAN_ROUTES),
+		webhooks=relay.get(CONF_RELAY_WEBHOOKS),
 	)
 	hass.data.setdefault(DOMAIN, {}).setdefault(_RELAYS_KEY, {})[entry.entry_id] = client
 	client.start()

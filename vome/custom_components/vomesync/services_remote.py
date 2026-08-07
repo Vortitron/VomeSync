@@ -22,6 +22,7 @@ from .const import (
 	CONF_RELAY_LAN_ROUTES,
 	CONF_RELAY_LOCAL_URL,
 	CONF_RELAY_SECRET,
+	CONF_RELAY_WEBHOOKS,
 	CONF_RELAY_SERVER_ID,
 	CONF_RELAY_WS_URL,
 	DEFAULT_PORTAL_URL,
@@ -30,7 +31,9 @@ from .const import (
 	INTEGRATION_VERSION,
 	LAN_TCP_TOKEN_DEFAULT_TTL,
 	LAN_TCP_TOKEN_MAX_TTL,
+	WEBHOOK_MAX,
 )
+from .webhooks import normalise_webhooks, valid_webhook_id
 from .lan_routes import (
 	LAN_MAX_ROUTES,
 	LAN_ROUTE_SCHEMES,
@@ -210,6 +213,8 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 		"forward_ui": bool(relay.get(CONF_RELAY_FORWARD_UI)),
 		"lan_routes": routes,
 		"lan_max": LAN_MAX_ROUTES,
+		"webhooks": normalise_webhooks(relay.get(CONF_RELAY_WEBHOOKS)),
+		"webhook_max": WEBHOOK_MAX,
 		"addon_marker": _addon_marker_present(),
 		# Which address we dial Home Assistant on, and whether we worked it out
 		# or were told. Since 2026.8 the port is a user-facing setting, so this
@@ -307,6 +312,48 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		await _save_relay(hass, entry, relay)
 		return remote_status_payload(hass, entry)
 
+	async def _set_webhooks(call: ServiceCall) -> ServiceResponse:
+		"""Replace the list of publicly callable webhook ids.
+
+		Each listed webhook becomes reachable from the internet with no login —
+		that is the feature — so this is an explicit allowlist the owner
+		curates, never a blanket "expose webhooks" switch.
+		"""
+		entry = _pick_entry(hass, call.data.get("entry_id"))
+		relay = dict((entry.options or {}).get(CONF_RELAY) or {})
+		relay[CONF_RELAY_WEBHOOKS] = normalise_webhooks(call.data.get("webhooks"))
+		await _save_relay(hass, entry, relay)
+		return remote_status_payload(hass, entry)
+
+	async def _add_webhook(call: ServiceCall) -> ServiceResponse:
+		entry = _pick_entry(hass, call.data.get("entry_id"))
+		relay = dict((entry.options or {}).get(CONF_RELAY) or {})
+		current = normalise_webhooks(relay.get(CONF_RELAY_WEBHOOKS))
+		webhook_id = str(call.data.get("webhook_id") or "").strip()
+		if not valid_webhook_id(webhook_id):
+			raise ValueError(
+				"That does not look like a Home Assistant webhook id. Copy it "
+				"from the automation's webhook trigger."
+			)
+		if webhook_id in current:
+			return remote_status_payload(hass, entry)
+		if len(current) >= WEBHOOK_MAX:
+			raise ValueError(f"You can publish at most {WEBHOOK_MAX} webhooks")
+		relay[CONF_RELAY_WEBHOOKS] = current + [webhook_id]
+		await _save_relay(hass, entry, relay)
+		return remote_status_payload(hass, entry)
+
+	async def _remove_webhook(call: ServiceCall) -> ServiceResponse:
+		entry = _pick_entry(hass, call.data.get("entry_id"))
+		relay = dict((entry.options or {}).get(CONF_RELAY) or {})
+		webhook_id = str(call.data.get("webhook_id") or "").strip()
+		relay[CONF_RELAY_WEBHOOKS] = [
+			w for w in normalise_webhooks(relay.get(CONF_RELAY_WEBHOOKS))
+			if w != webhook_id
+		]
+		await _save_relay(hass, entry, relay)
+		return remote_status_payload(hass, entry)
+
 	async def _set_local_url(call: ServiceCall) -> ServiceResponse:
 		"""Override the address the relay dials Home Assistant on.
 
@@ -400,6 +447,30 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			vol.Optional("ws_url", default=""): cv.string,
 		}),
 		supports_response=SupportsResponse.OPTIONAL,
+	)
+	hass.services.async_register(
+		DOMAIN, "set_webhooks", _guard(_set_webhooks),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Required("webhooks"): list,
+		}),
+		supports_response=SupportsResponse.ONLY,
+	)
+	hass.services.async_register(
+		DOMAIN, "add_webhook", _guard(_add_webhook),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Required("webhook_id"): cv.string,
+		}),
+		supports_response=SupportsResponse.ONLY,
+	)
+	hass.services.async_register(
+		DOMAIN, "remove_webhook", _guard(_remove_webhook),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Required("webhook_id"): cv.string,
+		}),
+		supports_response=SupportsResponse.ONLY,
 	)
 	hass.services.async_register(
 		DOMAIN, "set_local_url", _guard(_set_local_url),

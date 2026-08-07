@@ -21,6 +21,9 @@ PANEL_SERVICES = {
 	"remove_lan_route",
 	"mint_lan_tcp_token",
 	"set_local_url",
+	"set_webhooks",
+	"add_webhook",
+	"remove_webhook",
 }
 
 

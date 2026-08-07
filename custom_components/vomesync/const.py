@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.13"
+INTEGRATION_VERSION = "0.9.14"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -49,6 +49,24 @@ CONF_RELAY_FORWARD_UI = "forward_ui"
 # proxied to a configured LAN host:port.  List of route dicts (see lan_routes.py).
 # Independent of forward_ui — you can expose a NAS without opening the HA UI.
 CONF_RELAY_LAN_ROUTES = "lan_routes"
+# Publicly reachable webhooks: an explicit allowlist of Home Assistant webhook
+# ids that may be called from the internet via the friendly domain, WITHOUT
+# full-UI forwarding and without any login.  This is the Nabu Casa "cloudhook"
+# equivalent.  An allowlist rather than a blanket toggle because a webhook id
+# *is* the credential — HA authenticates the caller by knowing the id and
+# nothing else — so opening the whole /api/webhook/ space would expose every
+# webhook the user ever creates, including ones created later by an
+# integration they have not thought about.
+CONF_RELAY_WEBHOOKS = "webhooks"
+# Methods a forwarded webhook may use.  HA registers webhooks for some subset
+# of these; anything else is refused before it reaches Core.
+WEBHOOK_ALLOWED_METHODS = ("GET", "POST", "PUT", "HEAD")
+# Webhook ids HA generates are long random tokens; constrain the shape so a
+# crafted id cannot smuggle a path segment or query into the forwarded URL.
+WEBHOOK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+WEBHOOK_PATH_PREFIX = "/api/webhook/"
+# Cap how many a single install may expose, matching the LAN-route ceiling.
+WEBHOOK_MAX = 32
 
 # The portal (account / device-authorisation) lives on vome.io; the relay
 # WebSocket lives on sync.vome.io.  The portal tells us the WS URL at link time.

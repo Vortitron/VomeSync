@@ -239,3 +239,74 @@ def test_unlinked_status_still_reports_the_local_url(monkeypatch):
 	assert status["local_url"] == "http://127.0.0.1:80"
 	assert status["local_url_source"] == "detected"
 	assert status["trusted_proxy"]["ok"] is True
+
+
+class TestWebhookServices:
+	"""Publishing a webhook makes it callable from the internet with no login,
+	so the services that curate that list are a security surface too."""
+
+	def _handlers(self, entry, monkeypatch):
+		from unittest.mock import AsyncMock, MagicMock
+		import custom_components.vomesync.services_remote as sr
+		hass = MagicMock()
+		hass.data = {}
+		hass.config_entries.async_entries.return_value = [entry]
+		hass.http.trusted_proxies = []
+
+		def _update(e, options=None):
+			e.options = options
+		hass.config_entries.async_update_entry.side_effect = _update
+		monkeypatch.setattr(sr, "async_start_relay", AsyncMock())
+		return _register_and_capture(hass)
+
+	def _entry(self):
+		from types import SimpleNamespace
+		return SimpleNamespace(entry_id="e1", options={"relay": {"server_id": "rly-1"}})
+
+	def test_add_then_remove(self, monkeypatch):
+		import asyncio
+		from types import SimpleNamespace
+		entry = self._entry()
+		h = self._handlers(entry, monkeypatch)
+
+		result = asyncio.run(h["add_webhook"](SimpleNamespace(data={"webhook_id": "hook1"})))
+		assert result["webhooks"] == ["hook1"]
+
+		asyncio.run(h["remove_webhook"](SimpleNamespace(data={"webhook_id": "hook1"})))
+		assert entry.options["relay"]["webhooks"] == []
+
+	def test_adding_twice_is_idempotent(self, monkeypatch):
+		import asyncio
+		from types import SimpleNamespace
+		entry = self._entry()
+		h = self._handlers(entry, monkeypatch)
+		asyncio.run(h["add_webhook"](SimpleNamespace(data={"webhook_id": "hook1"})))
+		result = asyncio.run(h["add_webhook"](SimpleNamespace(data={"webhook_id": "hook1"})))
+		assert result["webhooks"] == ["hook1"]
+
+	def test_a_malformed_id_is_refused_with_a_useful_message(self, monkeypatch):
+		import asyncio
+		from types import SimpleNamespace
+		entry = self._entry()
+		h = self._handlers(entry, monkeypatch)
+		result = asyncio.run(h["add_webhook"](SimpleNamespace(data={"webhook_id": "../states"})))
+		assert "webhook id" in result["error"]
+		assert "webhooks" not in entry.options["relay"]
+
+	def test_set_webhooks_drops_invalid_entries(self, monkeypatch):
+		import asyncio
+		from types import SimpleNamespace
+		entry = self._entry()
+		h = self._handlers(entry, monkeypatch)
+		result = asyncio.run(h["set_webhooks"](
+			SimpleNamespace(data={"webhooks": ["good", "bad/id", "good"]})))
+		assert result["webhooks"] == ["good"]
+
+	def test_status_reports_webhooks_and_the_cap(self, monkeypatch):
+		import asyncio
+		from types import SimpleNamespace
+		entry = self._entry()
+		h = self._handlers(entry, monkeypatch)
+		status = asyncio.run(h["get_remote_status"](SimpleNamespace(data={})))
+		assert status["webhooks"] == []
+		assert status["webhook_max"] >= 1
