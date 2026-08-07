@@ -271,15 +271,36 @@ would have shown a blank address on any not-yet-linked install.
 - **Relay dispatch end to end.** The sandbox VM has been rebuilt and is no
   longer linked to Vome, so nothing exercised the actual tunnel. Derivation is
   proven; the dispatch path that consumes it is not.
-- **A2 device-registry changes** were deployed to the sandbox but nothing
-  exercised switch rename or forget, so they remain unit-tested only.
+- ~~**A2 device-registry changes** were deployed but not exercised.~~
+  **✅ Exercised live 2026-08-07** — see below.
+
+#### A2 exercised live (2026-08-07)
+
+Both migrated call sites driven against the sandbox on HA 2026.8, integration
+0.9.13:
+
+* **Removal** (`coordinator.py`): `create_switch` → device
+  `a2-registry-check` appeared in the registry; `forget_switch` → device gone.
+  The proof is tight because the caller wraps removal in `try/except` — a wrong
+  signature would have been swallowed and the device would have *survived*.
+* **Rename** (`switch.py`): driven through the options flow over REST
+  (init → manage_switches → select → edit_switch → submit). Device
+  `0ef1ec96…` changed name in the registry and was renamed back afterwards.
+* **The scoped branch is the one that ran**, not the legacy fallback:
+  `hasattr(DeviceRegistry, 'async_get_device_by_identifier')` is `True` on
+  2026.8, so `device_compat` took the new API.
+* Log clean — no `device_registry` deprecation warnings, no swallowed
+  exceptions, no "Could not remove device".
+
+Sandbox restored (switch name back to `claude-e2e-test-2`, port 8123).
 
 #### Separately noticed
 
-HA 2026.8 / Python 3.14 flags `websocket_client.py:117` for **blocking SSL
+HA 2026.8 / Python 3.14 flagged `websocket_client.py:117` for **blocking SSL
 calls inside the event loop** (`load_default_certs`, `set_default_verify_paths`
-via `websockets.connect`), with a standing "please create a bug report" notice
-in the log. Pre-existing, unrelated to this work, worth its own fix.
+via `websockets.connect`). **Fixed 2026-08-07** (commit `6484a0b`): pass
+`homeassistant.util.ssl.get_default_context()`, which HA builds once at import
+time, off the loop. `None` for plaintext `ws://`.
 
 #### Original plan
 
