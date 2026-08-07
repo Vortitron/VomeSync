@@ -1213,3 +1213,18 @@ class TestLocalTlsPrefersInternalUrl:
 	def test_override_still_beats_internal_url(self):
 		hass = _fake_hass(port=8123, ssl=True, internal_url="https://ha.example.com")
 		assert resolve_local_core_url(hass, "http://127.0.0.1:8123") == "http://127.0.0.1:8123"
+
+
+class TestSchemeFollowsThePortSource:
+	"""hass.http and hass.config.api describe the same server, so the scheme must
+	come from whichever one supplied the port — OR-ing them lets a stale flag on
+	the source we did not use flip us to a scheme the server is not speaking."""
+
+	def test_http_source_ignores_a_contradictory_api_ssl_flag(self):
+		hass = _fake_hass(port=80, ssl=False, api_port=8123, api_ssl=True)
+		assert resolve_local_core_url(hass) == "http://127.0.0.1:80"
+
+	def test_api_source_uses_the_api_ssl_flag(self):
+		hass = _fake_hass(port=None, api_port=8123, api_ssl=True)
+		# No internal_url to prefer, so it falls through to the loopback form.
+		assert resolve_local_core_url(hass) == "https://127.0.0.1:8123"

@@ -52,7 +52,7 @@
 					"reannounce_owned_switches": "📣 Re-announce owned switches",
 					"cleanup_orphaned_devices": "🧹 Clean up orphaned devices",
 					"edit_connection": "⚙️ Edit connection URLs",
-					"relay_server": "🛰️ Advanced: relay server URL",
+					"relay_server": "🛰️ Change the relay server",
 					"back": "← Back"
 				}
 			},
@@ -325,8 +325,8 @@
 				"description": "This will stop the relay and remove this Home Assistant from your Vome account's relay access."
 			},
 			"relay_server": {
-				"title": "Advanced: relay server URL",
-				"description": "Overrides the WebSocket URL this Home Assistant dials out to (normally set once when you connect to Vome). Only change this if you know what you're doing — e.g. testing against a non-production relay. Leave blank to reset to the default (`{default_url}`).",
+				"title": "Relay server URL",
+				"description": "The address this Home Assistant dials out to reach Vome. It is set for you when you connect your account, so you only need this to point at a different relay — testing against a staging server, for example. Leave blank to go back to the standard relay (`{default_url}`).",
 				"data": {
 					"ws_url": "Relay WebSocket URL"
 				}

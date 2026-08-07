@@ -170,6 +170,28 @@ set_relay_server:
       selector:
         text:
 
+set_local_url:
+  name: Set local Home Assistant address
+  description: >-
+    Override the address the relay uses to reach this Home Assistant. Normally
+    detected automatically from the port Home Assistant is listening on — set
+    this only when detection gets it wrong (a reverse proxy in front of Core, a
+    certificate that matches only one name). Leave blank to go back to
+    automatic detection.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    local_url:
+      name: Local address
+      description: e.g. http://127.0.0.1:8123 — blank returns to automatic detection
+      required: false
+      default: ""
+      selector:
+        text:
+
 add_lan_route:
   name: Add LAN route
   description: Add one /t/<slug>/ tunnel to a LAN host

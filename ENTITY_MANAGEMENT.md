@@ -37,7 +37,7 @@ data:
     - switch.bedroom
 ```
 
-Or via Developer Tools → Services:
+Or via Tools → Actions:
 1. Service: `VomeSync: Link entities`
 2. Target: Select your VomeSync switch
 3. Entities: List of entity IDs to link
@@ -50,8 +50,8 @@ Or via Developer Tools → Services:
 3. Click the gear icon (⚙️) in the top right
 4. You'll see the entity settings page with all attributes
 
-### From Developer Tools:
-1. Go to **Developer Tools** → **States**
+### From Tools:
+1. Go to **Tools** → **States**
 2. Search for your switch (e.g., `switch.devtest`)
 3. View all attributes including linked entities
 
@@ -93,7 +93,7 @@ When you view your VomeSync switch entity in Home Assistant, you'll now see:
 ### Quick Access:
 1. **Search**: Type the switch name in HA search
 2. **Entities List**: Settings → Devices & Services → VomeSync → Click the device
-3. **Developer Tools**: Developer Tools → States → Filter by "vomesync"
+3. **Tools**: Tools → States → Filter by "vomesync"
 
 ### Integration Management:
 For full switch management (edit, delete, link entities via GUI):
@@ -131,7 +131,7 @@ If your switch shows as "unavailable", check:
 
 5. **Check Entity Registry**:
    ```
-   Developer Tools → States → search for your entity
+   Tools → States → search for your entity
    If it doesn't exist, the entity wasn't created properly
    ```
 

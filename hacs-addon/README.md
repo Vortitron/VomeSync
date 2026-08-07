@@ -243,7 +243,7 @@ Visit [sync.vome.io](https://sync.vome.io) to browse community switches. The dir
 ### Switch Not Updating
 - WebSocket connections auto-reconnect after network issues
 - Manual refresh: reload the integration
-- Check entity availability in Developer Tools
+- Check entity availability in Tools
 
 ### Invalid UID Errors
 - Ensure UID is a valid UUID format

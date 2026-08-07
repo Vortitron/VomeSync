@@ -1,7 +1,10 @@
 # Plan: Home Assistant 2026.8 compatibility + Connect vs Nabu Casa Cloud
 
-Written 2026-08-06. Research done; **no code changed yet**. Everything below is a
-to-do list for the next session.
+Written 2026-08-06, updated 2026-08-07. **Part A is complete, green in tests, and
+the port fix is verified live on a real HA 2026.8** — but nothing is released.
+Read the A5 corrections: the original blast-radius claim was overstated, and a
+second live instance of the same bug was found in the portal. Part B is still a
+to-do list.
 
 Sources:
 [2026.8 release notes](https://www.home-assistant.io/blog/2026/08/05/release-20268/) ·
@@ -31,10 +34,12 @@ in `suppress(Exception)` — it can never be the reason the relay stops working.
 auto-detected. 25 new tests; full suite 302 passed, 1 skipped. Add-on copy
 re-synced via `vome/build.sh`.
 
-**Still to do:** expose the `local_url` override in the panel (see point 3
-below) — the override works, but only by editing config entry options directly,
-so support has no self-serve way to correct a bad derivation. Versions were
-deliberately **not** bumped; do that with A2 as one release.
+**Panel override — ✅ DONE 2026-08-07.** New `vomesync.set_local_url` service
+(response-ONLY, guarded, rejects bare hosts and paths; blank clears the
+override), panel route `/api/local_url`, and an editor in the panel's
+Home Assistant UI view showing the address in use and whether it was detected,
+overridden, or guessed. The Overview grows a warning card when detection fell
+back to a guess.
 
 The original analysis follows, for the record.
 
@@ -104,7 +109,21 @@ and SSL-on, and assert the dialled URL follows.
 talks to Core via `http://supervisor/core/api` with `SUPERVISOR_TOKEN`, which is
 port-agnostic. Only the integration's loopback path is broken.
 
-### A2. Device registry — one config entry per device (P1, deadline 2027.8)
+### A2. Device registry — ✅ DONE 2026-08-07
+
+**Implemented:** new `custom_components/vomesync/device_compat.py` with
+`async_get_device_by_identifier()` / `async_remove_device_by_identifier()`.
+Both migrated call sites now scope by `config_entry_id`. The helper picks the
+scoped 2026.8 API when the registry exposes it and falls back to the old global
+lookup otherwise — a **capability check, not a version comparison**, because
+`hacs.json` still supports HA back to 2024.1 where the new helper does not
+exist. 8 new tests cover both branches plus the unscoped and missing-device
+cases. No `via_device`, `primary_config_entry` or `add_/remove_config_entry_id`
+usage was found, so nothing else needed touching.
+
+The original analysis follows.
+
+#### Original analysis
 
 **The change.** Devices are restricted to a single config entry and at most one
 subentry. Physical devices that used to merge across integrations now appear once
@@ -141,7 +160,20 @@ A1.
 the relay-topology memory, gamlabio hit this) may generate "replaced device"
 repair notices. Put a line in the release notes.
 
-### A3. Trusted proxies (P2 — mostly docs)
+### A3. Trusted proxies — ✅ DONE 2026-08-07
+
+**Implemented:** `_trusted_proxy_check()` in `services_remote.py` compares the
+address we dial against `hass.http.trusted_proxies` and reports
+`{ok, hint}` in the status payload; the panel renders a warning card when
+`ok is False`. `ok is None` means "can't tell" (a hostname target we cannot
+resolve) and deliberately produces no warning — crying wolf here would train
+people to ignore the card. Note `use_x_forwarded_for` is not stored on
+`hass.http`, so a non-empty trusted-proxy list is taken as the signal that
+filtering is on.
+
+The original analysis follows.
+
+#### Original analysis
 
 Forward-UI relays request headers through with only hop-by-hop headers stripped
 (`_filter_forward_headers`, `relay_client.py:144`), so whatever `X-Forwarded-For`
@@ -155,7 +187,20 @@ in their trusted-proxy list or forwarded requests will 400.
 **Do:** add a trusted-proxy check to the panel's `/api/diag` verdict card, and a
 note in the Connect setup guide.
 
-### A4. Approachability language pass (P3)
+### A4. Approachability language pass — ✅ DONE 2026-08-07
+
+Renamed Developer Tools → **Tools** (and Services → **Actions**) across
+`ENTITY_MANAGEMENT.md`, `TEST_ENTITY_LINKING.md` and `hacs-addon/README.md`.
+Dropped "Advanced:" from the relay-server option label and title, and replaced
+its "only change this if you know what you're doing" with a description of what
+the setting is for. Internal identifiers (`CONF_SWITCH_ADVANCED`,
+`async_step_create_switch_advanced`) were left alone — HA's change was about
+labels users read, and renaming option keys would migrate stored config for no
+user-visible gain.
+
+The original analysis follows.
+
+#### Original analysis
 
 HA replaced ~43 instances of "advanced"/"expert" with plain feature descriptions,
 and renamed **Developer Tools → Tools**. Our panel copy, [`docs/`](.) and the
@@ -163,7 +208,80 @@ portal guides use both the old menu name and exactly the vocabulary HA just
 removed. Cheap credibility win; our guides read as stale against the new UI
 otherwise.
 
-### A5. Verification
+### A5. Verification — ✅ DONE 2026-08-07 (live on real 2026.8)
+
+Ran on the PLC sandbox (`4139120f-…`, Primo VM 10.100.11.130), upgraded
+2026.4.3 → **2026.8.0**, driven from the HAOS serial console via
+`/root/hacon.py` (a pexpect wrapper left on Primo — reusable).
+
+**Result: the fix works.** With integration 0.9.13 deployed and Core bound to
+port 80, `get_remote_status` returned
+`local_url: "http://127.0.0.1:80"`, `local_url_source: "detected"`. Flipping
+Core back to 8123 and restarting returned `http://127.0.0.1:8123`. Derivation
+tracks the real port in both directions on a real 2026.8 instance.
+
+That call also exercised the **unlinked** path (`linked: false`), which is how I
+found and fixed a gap in my own change: `get_remote_status`'s unlinked
+early-return did not include the new fields, so the panel's forwarding view
+would have shown a blank address on any not-yet-linked install.
+
+#### Corrections to the original analysis — read these
+
+1. **"Silent, total loss of remote access" was too strong.** HA 2026.8 keeps a
+   **compatibility listener on port 8123** (same process) that answers
+   `307 Temporary Redirect` with the path preserved
+   (`Location: http://127.0.0.1/api/states`). Any client that follows redirects
+   — including `aiohttp` by default, i.e. our REST dispatch — keeps working.
+   The fix is still right, but the pre-fix blast radius on HAOS is **smaller
+   than stated**. What genuinely breaks without it: clients that do *not*
+   follow redirects (see 2), WebSocket bridging (`ws_connect` redirect handling
+   is not something to rely on), and the local-TLS case, which never worked.
+2. **A second instance of the same bug exists in the portal, and it is live.**
+   `/var/www/konhas.com/portal/` hardcodes 8123 in ~19 places
+   (`ha_core_api.py:26 HA_PORT`, `ha_ws_command.py:37 HA_PORT`,
+   `supervisor_api.py`, `ha_backdoor.py`, `container_ops.py`,
+   `admin_server_routes.py`, …). Proven broken during this session: the portal's
+   own token refresh does
+   `curl -sS ... http://<vm_ip>:8123/auth/token` with **no `-L`**, so it
+   received the literal body `307: Temporary Redirect` instead of a token and
+   reported "refresh failed". The same request against `:80` returned a valid
+   token. For hosted VMs the portal *assigns* the port so this is latent — but
+   any customer who flips their own HA to port 80 via the new Network page
+   takes portal VM access down with them. **Not fixed; needs its own pass.**
+3. **HTTP settings moved to `/config/.storage/http`** with
+   `"yaml_migration_done": true`. `configuration.yaml`'s `http:` block is
+   migrated once and then **ignored** — editing it has no effect, which cost
+   time here and will confuse support. The store also holds a `pending` slot
+   used by the confirm/rollback flow.
+4. **The five-minute auto-rollback is real and fires.** `ha core options --port
+   80` showed `port: 80` immediately, then reverted to `8123` on its own
+   because nothing confirmed it. Worth knowing before debugging a "my port
+   change didn't stick" report.
+5. **The MCP broker reported failure on an operation that succeeded.**
+   `POST /core/update` returned a broker 500, but the update completed. Do not
+   treat broker errors as proof the operation failed — check the actual state.
+
+#### Not verified live
+
+- **Re-derivation without a restart.** Covered by
+  `test_port_change_is_picked_up_without_a_restart`, but not proven on real
+  hardware: changing the port through the storage file needs a Core restart
+  anyway, and the relay was not linked on this rebuilt sandbox so
+  `set_local_url` (which needs a linked entry) could not be driven either.
+- **Relay dispatch end to end.** The sandbox VM has been rebuilt and is no
+  longer linked to Vome, so nothing exercised the actual tunnel. Derivation is
+  proven; the dispatch path that consumes it is not.
+- **A2 device-registry changes** were deployed to the sandbox but nothing
+  exercised switch rename or forget, so they remain unit-tested only.
+
+#### Separately noticed
+
+HA 2026.8 / Python 3.14 flags `websocket_client.py:117` for **blocking SSL
+calls inside the event loop** (`load_default_certs`, `set_default_verify_paths`
+via `websockets.connect`), with a standing "please create a bug report" notice
+in the log. Pre-existing, unrelated to this work, worth its own fix.
+
+#### Original plan
 
 Sandbox is on HA 2026.7.2. Bump it to 2026.8 and re-run the ingress panel drive
 (supervisor `POST /store/reload` → `/store/addons/b1bff62e_vome/update` → HA
@@ -321,10 +439,16 @@ portal for another reason, which removes the largest single chunk of the work.
 
 ## Suggested order for tomorrow
 
-1. ~~**A1** — derive the local core URL~~ ✅ done; panel override field still open
-2. **A2** — three device-registry call sites
-3. **A5** — sandbox to 2026.8, exercise a port-80 flip end to end
-4. Ship as integration 0.9.13 / add-on 0.3.14, one HA restart
-5. **A3 + A4** — diag check and copy pass
-6. **B1** — backup agent (the standout cheap win)
-7. **B2** — webhooks
+1. ~~**A1** — derive the local core URL + panel override~~ ✅ done
+2. ~~**A2** — device-registry call sites~~ ✅ done
+3. ~~**A3 + A4** — trusted-proxy check and copy pass~~ ✅ done
+4. ~~Version bump to integration 0.9.13 / add-on 0.3.14~~ ✅ done (not released)
+5. ~~**A5** — sandbox to 2026.8, port-80 flip~~ ✅ done, fix verified live
+6. **Portal `:8123` pass** — see A5 correction 2; live bug, own repo ← **next**
+7. **B1** — backup agent (the standout cheap win)
+8. **B2** — webhooks
+
+**Release state:** integration 0.9.13 / add-on 0.3.14, suite green (324 passed,
+1 skipped), derivation verified live on HA 2026.8 in both port configurations.
+Still **not committed, pushed or released** — that is a deliberate hold, not an
+oversight.

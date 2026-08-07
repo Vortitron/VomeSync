@@ -20,6 +20,7 @@ PANEL_SERVICES = {
 	"add_lan_route",
 	"remove_lan_route",
 	"mint_lan_tcp_token",
+	"set_local_url",
 }
 
 

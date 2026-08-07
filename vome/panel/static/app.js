@@ -167,6 +167,30 @@
 		return `<span class="pill ${ok ? "ok" : "off"}">${ok ? onLabel : offLabel}</span>`;
 	}
 
+	// Home Assistant 2026.8 turned the listen port and trusted proxies into
+	// ordinary settings, so both can now change under a running relay. Neither
+	// failure announces itself — the relay stays connected and the status stays
+	// green while the forwarded requests fail — so surface them here.
+	function connectionWarningCard() {
+		if (!state || !state.linked) return "";
+		const proxy = state.trusted_proxy || {};
+		if (proxy.ok === false) {
+			return `
+			<div class="card warn-card">
+				<h2>Home Assistant will refuse forwarded requests</h2>
+				<p class="muted">${escapeHtml(proxy.hint)}</p>
+			</div>`;
+		}
+		if (state.local_url_source === "fallback") {
+			return `
+			<div class="card warn-card">
+				<h2>Can't tell which address Home Assistant is on</h2>
+				<p class="muted">Vome is guessing <code>${escapeHtml(state.local_url || "")}</code>. If remote access doesn't work, set the address yourself under <strong>Home Assistant UI</strong>.</p>
+			</div>`;
+		}
+		return "";
+	}
+
 	function renderOverview() {
 		const routes = (state && state.lan_routes) || [];
 		const enabled = routes.filter((r) => r.enabled !== false).length;
@@ -182,7 +206,7 @@
 				<p class="muted">This Home Assistant isn't linked to a Vome account yet, so remote access and LAN tunnels aren't available. Linking takes about a minute and opens no ports.</p>
 				<div class="row"><button type="button" class="primary" id="ov-connect">Connect to Vome</button></div>
 			</div>` : "";
-		viewEl.innerHTML = `${restartCard}${linkCard}
+		viewEl.innerHTML = `${restartCard}${linkCard}${connectionWarningCard()}
 			<div class="card">
 				<h2>Status</h2>
 				<p class="muted">Same settings as the HACS options menu, laid out as a tree so remote access and LAN tunnels are easier to find.</p>
@@ -213,8 +237,17 @@
 		if (connectBtn) connectBtn.onclick = () => setView("link");
 	}
 
+	function localUrlNote() {
+		const source = (state && state.local_url_source) || "";
+		if (source === "override") return "Set by you. Clear the box to go back to detecting it automatically.";
+		if (source === "fallback") return "Couldn't be detected — this is a guess. If remote access doesn't work, fill it in yourself.";
+		return "Detected from the port Home Assistant is listening on. Leave blank unless remote access doesn't work.";
+	}
+
 	function renderForward() {
 		const on = !!(state && state.forward_ui);
+		const localUrl = (state && state.local_url) || "";
+		const override = (state && state.local_url_override) || "";
 		viewEl.innerHTML = `
 			<div class="card">
 				<h2>Full-UI forwarding</h2>
@@ -226,7 +259,30 @@
 				<div class="row">
 					<button type="button" class="primary" id="save-fwd">Save</button>
 				</div>
+			</div>
+			<div class="card">
+				<h2>How Vome reaches Home Assistant</h2>
+				<p class="muted">Everything Vome does — remote access, the assistant, LAN tunnels — goes through this address on your own machine. Vome currently uses <code>${escapeHtml(localUrl)}</code>. ${escapeHtml(localUrlNote())}</p>
+				<div class="row">
+					<input type="text" id="local-url" placeholder="${escapeHtml(localUrl)}" value="${escapeHtml(override)}" size="30">
+					<button type="button" id="save-local-url">Save address</button>
+				</div>
 			</div>`;
+		document.getElementById("save-local-url").onclick = async () => {
+			try {
+				const value = document.getElementById("local-url").value.trim();
+				state = await api("/api/local_url", {
+					method: "POST",
+					body: JSON.stringify(withEntry({ local_url: value })),
+				});
+				showBanner(value
+					? `Vome will reach Home Assistant at ${state.local_url}.`
+					: "Back to detecting the address automatically.");
+				render();
+			} catch (err) {
+				showBanner(String(err.message || err), true);
+			}
+		};
 		document.getElementById("save-fwd").onclick = async () => {
 			try {
 				const enabled = document.getElementById("fwd").checked;

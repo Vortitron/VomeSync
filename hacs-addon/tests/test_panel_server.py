@@ -79,3 +79,60 @@ def test_read_body_no_body_is_empty():
 
 	fake = types.SimpleNamespace(headers={}, rfile=io.BytesIO(b""))
 	assert server.PanelHandler._read_body(fake) == b""
+
+
+def _panel_post_services():
+	"""Service names the panel's POST table dispatches to, read from the source.
+
+	The mapping lives inside a request handler, so introspecting the AST is the
+	only way to check it without standing up a live HTTP request.
+	"""
+	import ast
+
+	source = (ROOT / "vome" / "panel" / "server.py").read_text(encoding="utf-8")
+	names: set[str] = set()
+	for node in ast.walk(ast.parse(source)):
+		if not isinstance(node, ast.Dict):
+			continue
+		for key, value in zip(node.keys, node.values):
+			if (
+				isinstance(key, ast.Constant)
+				and isinstance(key.value, str)
+				and key.value.startswith("/api/")
+				and isinstance(value, ast.Tuple)
+				and value.elts
+				and isinstance(value.elts[0], ast.Constant)
+			):
+				names.add(value.elts[0].value)
+	return names
+
+
+def test_panel_only_calls_services_the_integration_registers():
+	"""A panel route pointing at a non-existent service fails as a bare 400 with
+	no message — indistinguishable from every other panel failure. Pin it."""
+	from unittest.mock import MagicMock
+
+	from custom_components.vomesync.services_remote import async_register_remote_services
+
+	hass = MagicMock()
+	hass.data = {}
+	async_register_remote_services(hass)
+	remote = {c.args[1] for c in hass.services.async_register.call_args_list}
+
+	# Switch services come from services.py rather than services_remote.py.
+	from custom_components.vomesync.const import DOMAIN  # noqa: F401
+	switch_services = {
+		"create_switch", "subscribe_switch", "delete_switch",
+		"list_switches", "forget_switch",
+	}
+
+	called = _panel_post_services()
+	assert called, "no panel POST routes found — did the mapping move?"
+	unknown = called - remote - switch_services
+	assert not unknown, f"panel calls services that are not registered: {sorted(unknown)}"
+
+
+def test_panel_exposes_the_local_url_route():
+	# The address Vome dials HA on became user-settable in 2026.8; the panel is
+	# the only place a non-technical user can correct a bad detection.
+	assert "set_local_url" in _panel_post_services()

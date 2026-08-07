@@ -949,11 +949,10 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		self._websocket_connections.pop(uid, None)
 
 		try:
-			from homeassistant.helpers import device_registry as dr
-			device_registry = dr.async_get(self.hass)
-			device = device_registry.async_get_device(identifiers={(DOMAIN, uid)})
-			if device:
-				device_registry.async_remove_device(device.id)
+			from .device_compat import async_remove_device_by_identifier
+			async_remove_device_by_identifier(
+				self.hass, (DOMAIN, uid), self.config_entry.entry_id
+			)
 		except Exception as ex:  # noqa: BLE001 - registry cleanup must not block the forget
 			_LOGGER.debug("Could not remove device registry entry for switch %s: %s", uid, ex)
 

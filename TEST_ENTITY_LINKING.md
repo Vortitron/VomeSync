@@ -76,7 +76,7 @@ Look for:
 ### Verify Options are Saved
 
 Check the config entry data:
-1. Go to **Developer Tools** → **States**
+1. Go to **Tools** → **States**
 2. Search for your VomeSync switch entities
 3. Check the integration's config entry in `.storage/core.config_entries` (requires file access)
 

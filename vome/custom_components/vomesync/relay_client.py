@@ -207,14 +207,16 @@ def _derive_local_core_url(hass: HomeAssistant) -> Optional[str]:
 	api = getattr(getattr(hass, "config", None), "api", None)
 
 	# hass.http is the actual server object, so its port is what is really bound;
-	# hass.config.api carries the same value and survives as a fallback.
+	# hass.config.api carries the same value and survives as a fallback.  Take
+	# the scheme from whichever of the two supplied the port rather than OR-ing
+	# them: they describe the same server, so if they ever disagree the one we
+	# trusted for the port is the one to trust for the scheme too.
 	port = getattr(http, "server_port", None)
-	if not isinstance(port, int):
+	if isinstance(port, int):
+		use_ssl = bool(getattr(http, "ssl_certificate", None))
+	else:
 		port = getattr(api, "port", None)
-
-	use_ssl = bool(getattr(http, "ssl_certificate", None)) or bool(
-		getattr(api, "use_ssl", False)
-	)
+		use_ssl = bool(getattr(api, "use_ssl", False))
 
 	# An instance terminating its own TLS holds a certificate for a *hostname*,
 	# so https://127.0.0.1:port would fail verification even though the port is
@@ -250,6 +252,26 @@ def resolve_local_core_url(
 			if derived:
 				return derived
 	return DEFAULT_LOCAL_CORE_URL
+
+
+def describe_local_core_url(
+	hass: Optional[HomeAssistant], override: Optional[str] = None
+) -> tuple[str, str]:
+	"""Return ``(url, source)`` where source is override / detected / fallback.
+
+	The panel shows this because a wrong local URL is otherwise invisible: the
+	relay connects, the status is green, and only the dispatched calls fail.
+	"fallback" specifically means detection did not work and we are guessing —
+	which is the state worth telling somebody about.
+	"""
+	if override:
+		return str(override).rstrip("/"), "override"
+	if hass is not None:
+		with suppress(Exception):
+			derived = _derive_local_core_url(hass)
+			if derived:
+				return derived, "detected"
+	return DEFAULT_LOCAL_CORE_URL, "fallback"
 
 
 def _to_ws_url(base_url: Optional[str], path: str) -> str:

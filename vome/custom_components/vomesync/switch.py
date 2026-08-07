@@ -32,6 +32,7 @@ from .const import (
 	DEFAULT_SWITCH_NAME,
 )
 from .coordinator import VomeSyncCoordinator
+from .device_compat import async_get_device_by_identifier
 from .naming import format_device_model, format_device_name
 from .time_utils import format_timestamp_ms
 
@@ -194,10 +195,15 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 				pass
 			# Update device registry to reflect the new name
 			try:
-				device_registry = dr.async_get(self.coordinator.hass)
-				device = device_registry.async_get_device(identifiers={(DOMAIN, self._uid)})
+				device = async_get_device_by_identifier(
+					self.coordinator.hass,
+					(DOMAIN, self._uid),
+					self.coordinator.config_entry.entry_id,
+				)
 				if device:
-					device_registry.async_update_device(device.id, name=formatted_name)
+					dr.async_get(self.coordinator.hass).async_update_device(
+						device.id, name=formatted_name
+					)
 			except Exception:  # noqa: BLE001
 				pass
 

@@ -304,6 +304,7 @@ class PanelHandler(BaseHTTPRequestHandler):
 		body = self._read_json()
 		mapping = {
 			"/api/forward_ui": ("set_forward_ui", body),
+			"/api/local_url": ("set_local_url", body),
 			"/api/lan_routes": ("set_lan_routes", body),
 			"/api/lan_routes/add": ("add_lan_route", body),
 			"/api/lan_routes/remove": ("remove_lan_route", body),

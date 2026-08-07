@@ -6,7 +6,9 @@ Keeps the HA options flow and the add-on UI on the same code path: both mutate
 from __future__ import annotations
 
 import logging
+from ipaddress import ip_address
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -18,6 +20,7 @@ from .const import (
 	CONF_RELAY,
 	CONF_RELAY_FORWARD_UI,
 	CONF_RELAY_LAN_ROUTES,
+	CONF_RELAY_LOCAL_URL,
 	CONF_RELAY_SECRET,
 	CONF_RELAY_SERVER_ID,
 	CONF_RELAY_WS_URL,
@@ -47,6 +50,7 @@ from .relay_client import (
 	async_request_device_code,
 	async_start_relay,
 	async_stop_relay,
+	describe_local_core_url,
 	get_relay_client,
 )
 
@@ -132,10 +136,56 @@ async def _save_relay(hass: HomeAssistant, entry: ConfigEntry, relay: dict) -> N
 	await async_start_relay(hass, entry)
 
 
+def _trusted_proxy_check(hass: HomeAssistant, local_url: str) -> dict[str, Any]:
+	"""Report whether forwarded requests will survive HA's trusted-proxy filter.
+
+	Full-UI forwarding relays the browser's ``X-Forwarded-For`` through to Core,
+	and the request arrives from the address we dial.  HA ignores the header
+	entirely unless trusted proxies are configured — but 2026.8 turned that into
+	a one-click setting on Settings → System → Network, so far more people will
+	switch it on, and if our address is not on the list the forwarded request is
+	rejected.  ``ok: None`` means we could not tell, which is not a warning.
+	"""
+	try:
+		trusted = list(getattr(getattr(hass, "http", None), "trusted_proxies", None) or [])
+	except Exception:  # noqa: BLE001 - a diagnostic must not raise
+		return {"ok": None, "hint": ""}
+
+	if not trusted:
+		# Nothing configured, so HA is not filtering on the header at all.
+		return {"ok": True, "hint": ""}
+
+	host = urlparse(local_url).hostname or ""
+	try:
+		address = ip_address(host)
+	except ValueError:
+		# A hostname (from internal_url) — we cannot resolve it to compare here.
+		return {"ok": None, "hint": ""}
+
+	for network in trusted:
+		try:
+			if address in network:
+				return {"ok": True, "hint": ""}
+		except TypeError:  # noqa: PERF203 - mixed IPv4/IPv6 entries are normal
+			continue
+
+	return {
+		"ok": False,
+		"hint": (
+			f"Home Assistant has trusted proxies configured but {host} is not "
+			"among them. Remote access through your Vome address will be "
+			"refused. Add it under Settings → System → Network."
+		),
+	}
+
+
 def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
 	"""Public status dict for the add-on panel (no secrets)."""
 	relay = dict((entry.options or {}).get(CONF_RELAY) or {})
 	routes = normalise_routes(relay.get(CONF_RELAY_LAN_ROUTES))
+	local_url, local_url_source = describe_local_core_url(
+		hass, relay.get(CONF_RELAY_LOCAL_URL)
+	)
 	return {
 		"entry_id": entry.entry_id,
 		"integration_version": INTEGRATION_VERSION,
@@ -145,6 +195,13 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 		"lan_routes": routes,
 		"lan_max": LAN_MAX_ROUTES,
 		"addon_marker": _addon_marker_present(),
+		# Which address we dial Home Assistant on, and whether we worked it out
+		# or were told. Since 2026.8 the port is a user-facing setting, so this
+		# can change under a running relay.
+		"local_url": local_url,
+		"local_url_source": local_url_source,
+		"local_url_override": relay.get(CONF_RELAY_LOCAL_URL) or "",
+		"trusted_proxy": _trusted_proxy_check(hass, local_url),
 	}
 
 
@@ -169,6 +226,11 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			# Not linked yet — still surface the (single) Vome entry's id so the
 			# panel can drive the in-app linking services against it.
 			vome_entries = list(hass.config_entries.async_entries(DOMAIN))
+			# The local URL is a property of this Home Assistant, not of the
+			# link, so report it even when unlinked — the panel shows it in the
+			# same place either way, and it is worth being able to check the
+			# address is right *before* connecting an account.
+			local_url, local_url_source = describe_local_core_url(hass, None)
 			return {
 				"entry_id": vome_entries[0].entry_id if len(vome_entries) == 1 else "",
 				"integration_version": INTEGRATION_VERSION,
@@ -178,6 +240,10 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 				"lan_routes": [],
 				"lan_max": LAN_MAX_ROUTES,
 				"addon_marker": _addon_marker_present(),
+				"local_url": local_url,
+				"local_url_source": local_url_source,
+				"local_url_override": "",
+				"trusted_proxy": _trusted_proxy_check(hass, local_url),
 			}
 		# Read-only status must never hard-fail on multiple linked entries:
 		# pick the first so the panel loads, and warn. Writes still target a
@@ -222,6 +288,31 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		if ws_url and not (ws_url.startswith("ws://") or ws_url.startswith("wss://")):
 			raise ValueError("ws_url must start with ws:// or wss://")
 		relay[CONF_RELAY_WS_URL] = ws_url or DEFAULT_RELAY_WS_URL
+		await _save_relay(hass, entry, relay)
+		return remote_status_payload(hass, entry)
+
+	async def _set_local_url(call: ServiceCall) -> ServiceResponse:
+		"""Override the address the relay dials Home Assistant on.
+
+		Detection covers the normal cases, but it cannot see every setup — a
+		reverse proxy in front of Core, a container with its own networking, a
+		certificate that only matches one name.  A blank value clears the
+		override and hands the decision back to detection.
+		"""
+		entry = _pick_entry(hass, call.data.get("entry_id"))
+		relay = dict((entry.options or {}).get(CONF_RELAY) or {})
+		local_url = str(call.data.get("local_url") or "").strip().rstrip("/")
+		if local_url:
+			parsed = urlparse(local_url)
+			if parsed.scheme not in ("http", "https") or not parsed.hostname:
+				raise ValueError(
+					"local_url must be a full address like http://127.0.0.1:8123"
+				)
+			if parsed.path:
+				raise ValueError("local_url must not include a path")
+			relay[CONF_RELAY_LOCAL_URL] = local_url
+		else:
+			relay.pop(CONF_RELAY_LOCAL_URL, None)
 		await _save_relay(hass, entry, relay)
 		return remote_status_payload(hass, entry)
 
@@ -293,6 +384,14 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			vol.Optional("ws_url", default=""): cv.string,
 		}),
 		supports_response=SupportsResponse.OPTIONAL,
+	)
+	hass.services.async_register(
+		DOMAIN, "set_local_url", _guard(_set_local_url),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Optional("local_url", default=""): cv.string,
+		}),
+		supports_response=SupportsResponse.ONLY,
 	)
 	hass.services.async_register(
 		DOMAIN, "add_lan_route", _guard(_add_lan_route),
