@@ -440,7 +440,38 @@ backup screen instead of a portal-side thing the user has to remember exists —
 which is precisely how Nabu Casa presents theirs. Server side needs an upload
 endpoint with per-server auth and quota accounting against the backup plan.
 
-**B2. Cloudhook equivalent.**
+**B2. Cloudhook equivalent — ✅ DONE 2026-08-07 (bar an end-to-end test).**
+
+**Half of it already existed, and it was the permissive half.** The portal
+(`friendly_domains.get_forward_settings` / `forward_policy_for_host`, behind a
+`cookieless_feature_enabled()` kill switch) and the webserver
+(`uiProxy.cookielessAccess`) already admitted `/api/webhook/…` without the
+login cookie when a per-server `webhooks` flag was set. What was missing was
+the component end: the relay refused those requests unless `forward_ui` was on,
+so the path dead-ended.
+
+That means flipping the portal flag would have exposed **every** webhook on the
+instance — including ones an integration creates later that the owner never
+sees. The new `webhooks.py` allowlist is what makes the flag safe: the portal
+decides *whether* webhook paths skip the login, the component decides *which
+ids* are actually forwarded. Neither layer is sufficient alone.
+
+Shipped: `webhooks.py` (exact-match only — extra segments, traversals and
+percent-encoded ids are refused rather than normalised, because the thing being
+matched is a secret), `set_webhooks`/`add_webhook`/`remove_webhook`, a Webhooks
+panel view, 52 unit tests plus relay-level tests pinning that `/api/states`,
+`/api/config`, `/lovelace` and `/auth/token` stay refused with webhooks on.
+
+**Still open:** no end-to-end test with a real linked HA on 0.9.14, and worth
+confirming the portal exposes `set_forward_settings` in its own UI — the flag
+has to be on for any of this to work.
+
+**Note the neighbouring `open` flag** in the same policy removes the cookie gate
+*entirely*. Pre-existing, much broader than webhooks, worth knowing it is there.
+
+The original plan follows.
+
+**B2 (original).**
 
 `https://<slug>.home.vome.io/webhook/<id>`, scoped to the webhook path only. The
 relay already forwards HTTP, so this is mostly routing rules plus a token model
