@@ -56,6 +56,22 @@ from .relay_client import (
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def _notify_backup_agents_changed(hass: HomeAssistant) -> None:
+	"""Tell Home Assistant our set of backup locations changed.
+
+	Linking or unlinking adds/removes a backup agent, but the backup page has
+	already been rendered — without this it keeps showing the old set until a
+	restart, which reads as "the integration is broken".  Imported lazily and
+	guarded: the backup platform only exists on recent cores, and we support
+	back to 2024.1.
+	"""
+	try:
+		from .backup import async_notify_backup_agents_changed
+		async_notify_backup_agents_changed(hass)
+	except Exception:  # noqa: BLE001 - older core, or no backup platform
+		_LOGGER.debug("Could not notify backup agent listeners", exc_info=True)
+
 # In-flight device-authorisation codes, keyed by entry_id, kept between the
 # panel's link_start and link_poll calls (the options flow keeps the equivalent
 # in its own step data).
@@ -499,6 +515,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			options[CONF_RELAY] = relay
 			hass.config_entries.async_update_entry(entry, options=options)
 			await async_start_relay(hass, entry)
+			_notify_backup_agents_changed(hass)
 			hass.data.get(DOMAIN, {}).get(_PENDING_LINK_KEY, {}).pop(entry.entry_id, None)
 			return {"status": "linked", "server_id": relay[CONF_RELAY_SERVER_ID] or ""}
 		if status == "pending":
@@ -517,6 +534,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		was_linked = bool(options.pop(CONF_RELAY, None))
 		hass.config_entries.async_update_entry(entry, options=options)
 		await async_stop_relay(hass, entry)
+		_notify_backup_agents_changed(hass)
 		hass.data.get(DOMAIN, {}).get(_PENDING_LINK_KEY, {}).pop(entry.entry_id, None)
 		return {"status": "unlinked", "was_linked": was_linked}
 
