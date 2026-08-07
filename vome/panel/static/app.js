@@ -244,6 +244,65 @@
 		return "Detected from the port Home Assistant is listening on. Leave blank unless remote access doesn't work.";
 	}
 
+	function renderWebhooks() {
+		const hooks = (state && state.webhooks) || [];
+		const max = (state && state.webhook_max) || 32;
+		const rows = hooks.length ? hooks.map((id) => `
+			<tr>
+				<td><code>${escapeHtml(id)}</code></td>
+				<td class="right"><button type="button" data-unpub="${escapeHtml(id)}">Unpublish</button></td>
+			</tr>`).join("") : `<tr><td colspan="2" class="muted">Nothing published yet.</td></tr>`;
+
+		viewEl.innerHTML = `
+			<div class="card">
+				<h2>Webhooks callable from the internet</h2>
+				<p class="muted">A published webhook can be triggered from anywhere at your Vome address — no login, no Home Assistant UI forwarding. That is what makes it useful to a doorbell, a payment provider or an IFTTT action.</p>
+				<p class="muted"><strong>Publish only webhooks you mean to expose.</strong> Home Assistant treats the webhook id itself as the password: anyone who knows it can trigger the automation. Nothing else about this Home Assistant is opened up, and webhooks you don't list stay unreachable.</p>
+				<table class="routes">
+					<thead><tr><th>Webhook id</th><th></th></tr></thead>
+					<tbody>${rows}</tbody>
+				</table>
+				<p class="muted">${hooks.length} of ${max} published.</p>
+			</div>
+			<div class="card">
+				<h2>Publish a webhook</h2>
+				<p class="muted">Copy the id from your automation's webhook trigger (Settings → Automations → the trigger's webhook id).</p>
+				<div class="row">
+					<input type="text" id="hook-id" placeholder="webhook id" size="34">
+					<button type="button" class="primary" id="publish-hook">Publish</button>
+				</div>
+			</div>`;
+
+		document.getElementById("publish-hook").onclick = async () => {
+			const value = document.getElementById("hook-id").value.trim();
+			if (!value) { showBanner("Enter a webhook id first.", true); return; }
+			try {
+				state = await api("/api/webhooks/add", {
+					method: "POST",
+					body: JSON.stringify(withEntry({ webhook_id: value })),
+				});
+				showBanner(`Published ${value}.`);
+				render();
+			} catch (err) {
+				showBanner(String(err.message || err), true);
+			}
+		};
+		viewEl.querySelectorAll("[data-unpub]").forEach((btn) => {
+			btn.onclick = async () => {
+				try {
+					state = await api("/api/webhooks/remove", {
+						method: "POST",
+						body: JSON.stringify(withEntry({ webhook_id: btn.dataset.unpub })),
+					});
+					showBanner("Unpublished — it can no longer be called from the internet.");
+					render();
+				} catch (err) {
+					showBanner(String(err.message || err), true);
+				}
+			};
+		});
+	}
+
 	function renderForward() {
 		const on = !!(state && state.forward_ui);
 		const localUrl = (state && state.local_url) || "";
@@ -913,6 +972,7 @@
 		if (current === "overview") renderOverview();
 		else if (current === "forward") renderForward();
 		else if (current === "lan") renderLan();
+		else if (current === "webhooks") renderWebhooks();
 		else if (current === "link") renderLink();
 		else if (current === "switches") renderSwitches();
 		else renderAbout();

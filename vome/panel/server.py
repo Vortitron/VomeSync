@@ -305,6 +305,9 @@ class PanelHandler(BaseHTTPRequestHandler):
 		mapping = {
 			"/api/forward_ui": ("set_forward_ui", body),
 			"/api/local_url": ("set_local_url", body),
+			"/api/webhooks": ("set_webhooks", body),
+			"/api/webhooks/add": ("add_webhook", body),
+			"/api/webhooks/remove": ("remove_webhook", body),
 			"/api/lan_routes": ("set_lan_routes", body),
 			"/api/lan_routes/add": ("add_lan_route", body),
 			"/api/lan_routes/remove": ("remove_lan_route", body),
