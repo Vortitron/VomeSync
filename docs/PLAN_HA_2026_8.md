@@ -299,6 +299,70 @@ subscribers to restart twice.
 
 ---
 
+## Part A′ — Portal `:8123` pass (different repo: `/var/www/konhas.com`)
+
+✅ **Core modules done 2026-08-07.** Found during A5; see A5 correction 2 for how.
+
+**The design turns on one measured fact.** `curl -L` is *not* a fix for the 8123
+compatibility redirect: curl **drops the `Authorization` header across a
+port-only redirect**. Verified locally with a two-port redirect harness — same
+host, 307, `AUTH=<<ABSENT>>` on both GET and POST (the *method* survives, the
+credential does not). So following redirects would convert every authenticated
+portal call from a 307 into a 401. The port has to be discovered.
+
+**New `portal/ha_endpoint.py`.** `resolve_ha_port(cs, vm_ip)` does one cheap
+unauthenticated probe of `:8123` and adopts the redirect's port; `ha_base_url()`
+wraps it. Properties worth keeping:
+
+- **Same-host only.** A redirect to another host is refused — following one
+  would send tenant traffic somewhere we did not intend.
+- **Port allowlist** (80/443/8123/8124), so a misconfigured or compromised guest
+  cannot aim us at an arbitrary service.
+- **Never fatal.** Any probe failure or exception falls back to 8123; discovery
+  makes calls *more* likely to land, it can never be why one fails.
+- **Cached in-process** (15 min TTL) with `invalidate()`. No schema change for
+  something that moves about once a year.
+
+**Probe target matters.** It probes `/api/`, not `/`. Measured against the live
+sandbox: `/` answers `302 → /onboarding.html` whether or not anything moved, so
+a redirect there proves nothing; `/api/` answers a flat `401` when the port is
+right and only redirects when it genuinely moved.
+
+**Verified live, both directions.** With the sandbox on 8123 the resolver
+returned `http://10.100.11.130:8123`. With it moved to 80, the raw probe from
+the container server returned `307 http://10.100.11.130/api/` and the resolver
+returned `http://10.100.11.130:80` — confirming HA emits a `Location` the
+parser accepts when probed across the network, not just from localhost. (That
+was worth checking: if the header had carried a configured base URL instead,
+the parser would have refused it and silently fallen back to 8123, keeping the
+bug while looking fine.)
+
+21 unit tests in `tests/test_ha_endpoint.py`.
+
+**One bug found by the portal's own suite.** The cache key did
+`(cs or {}).get('id')` *outside* the guarded block, and several call paths pass
+`cs` as a bare string — so a non-dict raised `AttributeError` straight through
+the "never fatal" contract. Now via `_cs_id()`, with a parametrised test over
+every `cs` shape the real call paths use.
+
+**Wired through:** `supervisor_api.py` (all six sites — token refresh, the two
+WS-helper argv calls, `/api/config`, `/api/hassio{endpoint}`, backup upload,
+core logs), `ha_core_api.py` (the brokered-HA engine), `ha_ws_command.py`.
+Fixing the refresh alone would have been worse than useless — the token would
+renew and every subsequent call would still hit the wrong port.
+
+**Still hardcoded, deliberately not touched:** `admin_server_routes.py`,
+`container_ops.py`, `custom_domain_service.py`, `nginx_maps.py`, `ha_proxy.py`,
+`database.py`, `ha_backdoor.py`. Most of these are the **host-side port
+allocation scheme** (`8123 + offset`), which is the portal's own choice of
+where to publish a VM and is *not* the same bug — changing it blindly would
+break provisioning. `ha_backdoor.py` and the `container_ops.py` health probes
+are genuine instances and should be a follow-up.
+
+**Not deployed.** Portal ships main→live via Jenkins; nothing pushed.
+
+---
+
 ## Part B — Nabu Casa Cloud vs Vome Connect
 
 **Price context.** Cloud is **$6.50/mo (~62 kr)** or $65/yr. Connect is
@@ -322,6 +386,25 @@ breadth, and breadth is what gets compared on a feature grid.
 ### The cheap wins, in order
 
 **B1. Backup agent — best value per line of code we have available.**
+
+**Scoping note (2026-08-07): smaller than first estimated.** The portal already
+has the whole storage pipeline — `portal/backup_plans.py` (`stage_offsite_copy`,
+`process_backup_arrival`, `latest_backup_info`, `_prune_local_generations`),
+`backup_destinations.fan_out_backup`, Fernet encryption under
+`BACKUP_ENCRYPTION_KEY`, local generations plus per-destination GFS rotation.
+Today it is fed from `chap_service.native_backup_path(server_id)` — backups
+*arriving* from a hosted/CHAP VM.
+
+So B1 is **not** "build backup storage". It is two smaller pieces:
+1. an authenticated **upload endpoint** that drops a file where
+   `stage_offsite_copy` already expects it, entitlement-checked against the
+   Connect backup plan; and
+2. the HA-side `backup.py` `BackupAgent` that streams to it.
+
+Everything downstream — encryption, rotation, fan-out, retention — is done.
+Worth re-checking `ENCRYPT_MAX_BYTES` (512 MB) before shipping: larger backups
+stage *unencrypted* with only a log warning, which is a defensible choice for
+our own VMs but a different proposition for a self-hoster's data we invited in.
 
 Implement `custom_components/vomesync/backup.py`:
 

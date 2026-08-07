@@ -19,6 +19,27 @@ from .log_utils import log_throttled
 _LOGGER = logging.getLogger(__name__)
 
 
+def _default_ssl_context():
+	"""A ready-made SSL context, or ``None`` if HA does not offer one.
+
+	Letting ``websockets.connect`` build its own context does blocking file I/O
+	(``load_default_certs`` / ``set_default_verify_paths`` read the CA bundle
+	off disk) *inside the event loop* — HA flags this and asks for a bug report
+	on every reconnect.  ``homeassistant.util.ssl`` builds its context once at
+	import time, off the loop, which is exactly what we want.
+	"""
+	try:
+		from homeassistant.util.ssl import get_default_context
+		return get_default_context()
+	except Exception:  # noqa: BLE001 - older/newer HA, or no HA at all in tests
+		return None
+
+
+def _ssl_for(url: str):
+	"""Context for a ``wss://`` URL; ``None`` for plaintext ``ws://``."""
+	return _default_ssl_context() if str(url).startswith("wss://") else None
+
+
 class VomeSyncWebSocketClient:
 	"""WebSocket client for VomeSync real-time updates."""
 
@@ -118,7 +139,8 @@ class VomeSyncWebSocketClient:
 				url,
 				ping_interval=30,
 				ping_timeout=10,
-				close_timeout=10
+				close_timeout=10,
+				ssl=_ssl_for(url),
 			) as websocket:
 				self.connections[uid] = websocket
 				_LOGGER.info("WebSocket connected for switch %s", uid)
