@@ -73,7 +73,32 @@ const config = {
 		// Cookie carrying the access token (scoped to .vome.io by the portal).
 		forwardCookieName: process.env.RELAY_FORWARD_COOKIE || 'vome_fwd',
 		// Largest request body the proxy will buffer before forwarding (25 MiB).
-		forwardMaxBodyBytes: parsePositiveInt(process.env.RELAY_FORWARD_MAX_BODY, 26214400)
+		forwardMaxBodyBytes: parsePositiveInt(process.env.RELAY_FORWARD_MAX_BODY, 26214400),
+		// ── Rate limits for *unauthenticated* forwarded traffic ──────────────
+		// A request carrying a valid forwarding cookie is never limited here:
+		// Vome already checked ownership + subscription to mint it.  Everything
+		// else — the 302-to-authorise path, webhook deliveries, and all traffic
+		// in `open` (companion-app) mode — reaches Home Assistant without Vome
+		// vouching for it, so it gets a per-client budget.  Set a max to 0 to
+		// disable that bucket.
+		forwardRateWindowMs: parsePositiveInt(process.env.RELAY_FORWARD_RATE_WINDOW_MS, 300000),
+		// Generous: one cold load of the HA frontend is ~100 requests, and a
+		// household NATs several devices behind one address.
+		forwardRateMax: parsePositiveInt(process.env.RELAY_FORWARD_RATE_MAX, 600),
+		// Tight: this is HA's own login/token surface, where guessing pays off.
+		forwardAuthRateMax: parsePositiveInt(process.env.RELAY_FORWARD_AUTH_RATE_MAX, 30),
+		// Each accepted upgrade pins a relay tunnel until it closes.
+		forwardWsRateMax: parsePositiveInt(process.env.RELAY_FORWARD_WS_RATE_MAX, 60),
+		// Peers whose `X-Real-IP` the proxy believes.  The proxy listens on
+		// 0.0.0.0 for the portal host's nginx, so a client that reaches the port
+		// directly could otherwise claim any address and mint itself a fresh
+		// rate-limit bucket per request.  Empty = trust the header from anyone,
+		// which is only safe while the firewall rule restricting this port to
+		// the portal host holds; set it to nginx's address to stop depending on
+		// that.  Untrusted peers are keyed on their real socket address.
+		forwardTrustedProxies: process.env.RELAY_FORWARD_TRUSTED_PROXIES
+			? process.env.RELAY_FORWARD_TRUSTED_PROXIES.split(',').map((s) => s.trim()).filter(Boolean)
+			: []
 	},
 	analytics: {
 		enabled: process.env.ENABLE_ANALYTICS === 'true',

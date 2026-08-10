@@ -30,6 +30,12 @@
  *     the instance (Nabu Casa "Remote UI" parity — required for the HA
  *     companion app, which cannot complete the portal cookie flow).
  * Policy misses fail closed to cookie-only.
+ *
+ * Anything admitted *without* the cookie — the 302 path, webhook deliveries,
+ * and every request in `open` mode — is rate limited per client address before
+ * it can reach the home (see limitUnauthenticated).  Without that, `open` mode
+ * hands an attacker who learns the hostname an unmetered channel to HA's login
+ * form.  Cookie-bearing requests skip it: Vome already vouched for them.
  */
 const WebSocket = require('ws');
 const logger = require('../utils/logger');
@@ -38,6 +44,7 @@ const relayManagerSingleton = require('../websocket/relayManager');
 const relayPortal = require('../utils/relayPortal');
 const uiAccess = require('./uiAccess');
 const relayBridge = require('../websocket/relayBridge');
+const authManager = require('../utils/auth');
 const { abortUpgrade } = require('../websocket/upgradeRouter');
 
 // Friendly-host forwarding policy cache: a webhook burst or an app sync must
@@ -78,6 +85,36 @@ const HOP_BY_HOP = new Set([
 function originalHost(req) {
 	const h = req.headers || {};
 	return String(h['x-ha-original-host'] || h.host || '');
+}
+
+/**
+ * Paths where guessing pays off: Home Assistant's own login and token endpoints
+ * (`/auth/login_flow`, `/auth/token`, `/auth/authorize`).  These get a much
+ * smaller budget than ordinary traffic, because the thing being protected is a
+ * password rather than bandwidth.
+ */
+const AUTH_PATH_RE = /^\/auth(\/|$)/;
+
+/**
+ * The client's address, for rate-limit keying.
+ *
+ * nginx runs on the *portal* host and proxies here, so the socket's peer is
+ * always nginx — every visitor would otherwise share one bucket.  The real
+ * address arrives in `X-Real-IP`.  That header is only believed from a peer in
+ * `relay.forwardTrustedProxies` (empty = believe anyone, relying on the
+ * firewall rule that restricts this port); an untrusted peer is keyed on the
+ * address it actually connected from, so it cannot mint itself a fresh bucket.
+ */
+function clientIp(req) {
+	const peer = (req && req.socket && req.socket.remoteAddress) || '';
+	const trusted = config.relay.forwardTrustedProxies;
+	if (trusted.length === 0 || trusted.includes(peer)) {
+		const real = req && req.headers && req.headers['x-real-ip'];
+		if (real) {
+			return String(real).trim();
+		}
+	}
+	return peer || 'unknown';
 }
 
 /** Drop our own forwarding cookie from a Cookie header value (don't leak it to HA). */
@@ -145,6 +182,8 @@ function createUiProxy(deps = {}) {
 	const relay = deps.relayManager || relayManagerSingleton;
 	const verify = deps.verifyAccessToken || uiAccess.verifyAccessToken;
 	const fetchPolicy = deps.fetchForwardPolicy || relayPortal.fetchForwardPolicy;
+	const checkLimit = deps.checkRateLimit
+		|| ((id, action, max, windowMs) => authManager.checkRateLimit(id, action, max, windowMs));
 	const cookieName = config.relay.forwardCookieName;
 	const maxBody = config.relay.forwardMaxBodyBytes;
 	// noServer: the dedicated proxy server's `upgrade` event calls handleUpgrade.
@@ -174,6 +213,46 @@ function createUiProxy(deps = {}) {
 	}
 
 	/**
+	 * Spend one unit of this client's unauthenticated budget.
+	 *
+	 * Returns `{ retryAfter }` when the caller must refuse, or null to proceed.
+	 * Runs *before* the forwarding-policy lookup so a flood cannot be turned
+	 * into portal load, and before anything crosses the relay.
+	 *
+	 * Fails open on a limiter error, deliberately: Redis being unreachable must
+	 * not take remote access down with it.  The store is shared with the rest
+	 * of the backend's limits, so this survives a proxy restart.
+	 */
+	async function limitUnauthenticated(req, { websocket = false } = {}) {
+		const path = String(req.url || '').split('?')[0];
+		let action = 'fwd_unauth';
+		let max = config.relay.forwardRateMax;
+		if (websocket) {
+			action = 'fwd_unauth_ws';
+			max = config.relay.forwardWsRateMax;
+		} else if (AUTH_PATH_RE.test(path)) {
+			action = 'fwd_unauth_auth';
+			max = config.relay.forwardAuthRateMax;
+		}
+		if (!max || max <= 0) {
+			return null;
+		}
+		let result;
+		try {
+			result = await checkLimit(clientIp(req), action, max, config.relay.forwardRateWindowMs);
+		} catch (err) {
+			logger.error('Forward rate-limit check failed:', err.message || err);
+			return null;
+		}
+		if (!result || result.allowed !== false) {
+			return null;
+		}
+		logger.warn(`Forward rate limit hit (${action}) for ${originalHost(req)}`);
+		const remainingMs = (result.resetTime || 0) - Date.now();
+		return { retryAfter: Math.max(1, Math.ceil(remainingMs / 1000)) };
+	}
+
+	/**
 	 * Cookie-less admittance: `{ serverId }` when the owner's forwarding policy
 	 * admits this request without the portal cookie, else null.
 	 */
@@ -196,6 +275,15 @@ function createUiProxy(deps = {}) {
 	async function httpHandler(req, res) {
 		let access = authorise(req);
 		if (!access) {
+			const limited = await limitUnauthenticated(req);
+			if (limited) {
+				res.writeHead(429, {
+					'Retry-After': String(limited.retryAfter),
+					'Content-Type': 'text/plain'
+				});
+				res.end('Too many requests');
+				return;
+			}
 			try {
 				access = await cookielessAccess(req);
 			} catch (err) {
@@ -272,6 +360,11 @@ function createUiProxy(deps = {}) {
 		}
 		let access = authorise(req);
 		if (!access) {
+			const limited = await limitUnauthenticated(req, { websocket: true });
+			if (limited) {
+				abortUpgrade(socket, 429, 'Too many requests');
+				return;
+			}
 			// Only `open` (companion-app) mode admits a cookie-less WebSocket;
 			// the webhook policy never applies here.
 			try {
@@ -308,7 +401,10 @@ function createUiProxy(deps = {}) {
 		relayBridge.bridgeSocket(browser, relay, serverId, { path: req.url, headers });
 	}
 
-	return { httpHandler, handleUpgrade, bridge, _wss: wss, _policyCache: policyCache };
+	return {
+		httpHandler, handleUpgrade, bridge,
+		_wss: wss, _policyCache: policyCache, _limitUnauthenticated: limitUnauthenticated
+	};
 }
 
 module.exports = {
@@ -320,6 +416,8 @@ module.exports = {
 	applyResponseHeaders,
 	stripOwnCookie,
 	isWebhookPath,
+	clientIp,
 	HOP_BY_HOP,
-	POLICY_CACHE_TTL_MS
+	POLICY_CACHE_TTL_MS,
+	AUTH_PATH_RE
 };

@@ -16,7 +16,8 @@ const {
 	filterResponseHeaders,
 	applyResponseHeaders,
 	stripOwnCookie,
-	isWebhookPath
+	isWebhookPath,
+	clientIp
 } = require('../../../src/proxy/uiProxy');
 
 /** Let pending microtasks/immediates run (async authorise path in handlers). */
@@ -460,5 +461,165 @@ describe('uiProxy.bridge', () => {
 		const browser = fakeBrowserWs();
 		proxy.bridge(browser, fakeReq({ url: '/api/websocket', rawHeaders: [] }), 'rly-1');
 		expect(browser.closed).toMatchObject({ code: 1011 });
+	});
+});
+
+describe('uiProxy.clientIp', () => {
+	const original = config.relay.forwardTrustedProxies;
+
+	afterEach(() => { config.relay.forwardTrustedProxies = original; });
+
+	function req({ peer = '10.0.0.1', realIp = null } = {}) {
+		const r = fakeReq({ headers: realIp ? { 'x-real-ip': realIp } : {} });
+		r.socket = { remoteAddress: peer };
+		return r;
+	}
+
+	test('trusts X-Real-IP when no trusted-proxy list is configured', () => {
+		config.relay.forwardTrustedProxies = [];
+		expect(clientIp(req({ peer: '10.0.0.1', realIp: '203.0.113.7' }))).toBe('203.0.113.7');
+	});
+
+	test('falls back to the socket peer when the header is absent', () => {
+		config.relay.forwardTrustedProxies = [];
+		expect(clientIp(req({ peer: '10.0.0.1' }))).toBe('10.0.0.1');
+	});
+
+	test('honours X-Real-IP from a listed proxy', () => {
+		config.relay.forwardTrustedProxies = ['10.0.0.1'];
+		expect(clientIp(req({ peer: '10.0.0.1', realIp: '203.0.113.7' }))).toBe('203.0.113.7');
+	});
+
+	test('an unlisted peer cannot mint itself a fresh bucket', () => {
+		// The security property: once a trusted list exists, someone who reaches
+		// the proxy port directly is keyed on where they actually came from, so
+		// rotating X-Real-IP does not reset their budget.
+		config.relay.forwardTrustedProxies = ['10.0.0.1'];
+		expect(clientIp(req({ peer: '198.51.100.4', realIp: '203.0.113.7' }))).toBe('198.51.100.4');
+	});
+
+	test('degrades to a single shared bucket rather than throwing', () => {
+		config.relay.forwardTrustedProxies = [];
+		expect(clientIp(fakeReq({ headers: {} }))).toBe('unknown');
+	});
+});
+
+describe('uiProxy rate limits on unauthenticated traffic', () => {
+	const host = { host: 'nyvyn.home.vome.io' };
+
+	/**
+	 * A proxy whose limiter refuses everything (`allow: false`) or nothing,
+	 * recording the calls so we can assert which bucket was charged.
+	 */
+	function limitedProxy({ allow = true, policy = null, cookieOk = false } = {}) {
+		const calls = [];
+		const checkRateLimit = jest.fn(async (identifier, action, limit, windowMs) => {
+			calls.push({ identifier, action, limit, windowMs });
+			return { allowed: allow, current: allow ? 1 : limit + 1, limit, resetTime: Date.now() + 60000 };
+		});
+		const fetchForwardPolicy = jest.fn(async () => policy);
+		const relay = {
+			isConnected: () => true,
+			forwardHttp: async () => ({ status: 200, headers: [], bodyB64: undefined })
+		};
+		const proxy = createUiProxy({
+			relayManager: relay,
+			verifyAccessToken: () => (cookieOk ? { serverId: 'rly-1', userId: 'u1' } : null),
+			fetchForwardPolicy,
+			checkRateLimit
+		});
+		return { proxy, calls, checkRateLimit, fetchForwardPolicy };
+	}
+
+	async function runHttp(proxy, reqOpts) {
+		const req = fakeReq(reqOpts);
+		const res = fakeRes();
+		proxy.httpHandler(req, res);
+		await tick();
+		req.emit('end');
+		await res.done;
+		return res;
+	}
+
+	test('refuses an over-budget request with 429 and Retry-After', async () => {
+		const { proxy } = limitedProxy({ allow: false });
+		const res = await runHttp(proxy, { url: '/lovelace', headers: host });
+		expect(res.statusCode).toBe(429);
+		expect(Number(res.headers['Retry-After'])).toBeGreaterThan(0);
+	});
+
+	test('never charges a request that carries a valid forwarding cookie', async () => {
+		// Vome already checked ownership and subscription to mint it, so paid
+		// remote access must not be throttled by a noisy neighbour on its NAT.
+		const { proxy, checkRateLimit } = limitedProxy({ allow: false, cookieOk: true });
+		const res = await runHttp(proxy, { url: '/lovelace', headers: host });
+		expect(res.statusCode).toBe(200);
+		expect(checkRateLimit).not.toHaveBeenCalled();
+	});
+
+	test('open mode is rate limited — that is the whole point', async () => {
+		// `open` skips the cookie gate, so without this an attacker who learns
+		// the hostname gets an unmetered channel to Home Assistant's login form.
+		const { proxy, calls } = limitedProxy({ allow: false, policy: { serverId: 'rly-1', open: true } });
+		const res = await runHttp(proxy, { url: '/lovelace', headers: host });
+		expect(res.statusCode).toBe(429);
+		expect(calls[0].action).toBe('fwd_unauth');
+	});
+
+	test('charges the tight bucket for HA login and token endpoints', async () => {
+		const { proxy, calls } = limitedProxy({ policy: { serverId: 'rly-1', open: true } });
+		await runHttp(proxy, { method: 'POST', url: '/auth/login_flow', headers: host });
+		expect(calls[0].action).toBe('fwd_unauth_auth');
+		expect(calls[0].limit).toBe(config.relay.forwardAuthRateMax);
+		expect(calls[0].limit).toBeLessThan(config.relay.forwardRateMax);
+	});
+
+	test('a query string cannot smuggle a login attempt into the loose bucket', async () => {
+		const { proxy, calls } = limitedProxy({ policy: { serverId: 'rly-1', open: true } });
+		await runHttp(proxy, { url: '/auth/token?redirect=/lovelace', headers: host });
+		expect(calls[0].action).toBe('fwd_unauth_auth');
+	});
+
+	test('spends the budget before touching the portal', async () => {
+		// Otherwise a flood becomes portal load instead of a cheap 429.
+		const { proxy, fetchForwardPolicy } = limitedProxy({ allow: false, policy: { serverId: 'rly-1', open: true } });
+		await runHttp(proxy, { url: '/lovelace', headers: host });
+		expect(fetchForwardPolicy).not.toHaveBeenCalled();
+	});
+
+	test('fails open when the limiter itself is broken', async () => {
+		// Redis being unreachable must not take remote access down with it.
+		const proxy = createUiProxy({
+			relayManager: { isConnected: () => true, forwardHttp: async () => ({ status: 200, headers: [] }) },
+			verifyAccessToken: () => null,
+			fetchForwardPolicy: async () => ({ serverId: 'rly-1', open: true }),
+			checkRateLimit: async () => { throw new Error('redis down'); }
+		});
+		const res = await runHttp(proxy, { url: '/lovelace', headers: host });
+		expect(res.statusCode).toBe(200);
+	});
+
+	test('aborts an over-budget WebSocket upgrade with 429', async () => {
+		const { proxy, calls } = limitedProxy({ allow: false, policy: { serverId: 'rly-1', open: true } });
+		const socket = { writable: true, written: '', destroyed: false,
+			write(s) { this.written += s; }, destroy() { this.destroyed = true; } };
+		await proxy.handleUpgrade(fakeReq({ url: '/api/websocket', headers: host }), socket, Buffer.alloc(0));
+		expect(socket.written).toContain('429');
+		expect(socket.destroyed).toBe(true);
+		expect(calls[0].action).toBe('fwd_unauth_ws');
+		expect(calls[0].limit).toBe(config.relay.forwardWsRateMax);
+	});
+
+	test('a bucket set to 0 is disabled', async () => {
+		const originalMax = config.relay.forwardRateMax;
+		config.relay.forwardRateMax = 0;
+		try {
+			const { proxy, checkRateLimit } = limitedProxy({ allow: false, policy: { serverId: 'rly-1', open: true } });
+			const res = await runHttp(proxy, { url: '/lovelace', headers: host });
+			expect(checkRateLimit).not.toHaveBeenCalled();
+			expect(res.statusCode).toBe(200);
+		} finally {
+			config.relay.forwardRateMax = originalMax;
+		}
 	});
 });
