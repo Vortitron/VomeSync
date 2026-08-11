@@ -4,9 +4,28 @@ const path = require('path');
 const config = require('../config/config');
 const redact = require('./redact');
 
+// Redact in place. `redact()` rebuilds plain objects from Object.entries(),
+// which keeps every string key but silently drops the Symbol ones winston
+// carries on `info` — Symbol(level) above all. A transport checks
+// `this.levels[info[Symbol.for('level')]] <= this.levels[level]`, and with the
+// symbol gone that compares `undefined <= n`, which is false, so the transport
+// discards the line. Returning a fresh object therefore threw away *every* log
+// the process ever emitted, on every transport, with no error anywhere.
+// Assigning the redacted values back over the original keeps the symbols.
+const SPLAT = Symbol.for('splat');
 const redactFormat = winston.format((info) => {
 	try {
-		return redact(info);
+		const redacted = redact(info);
+		if (!redacted || typeof redacted !== 'object') {
+			return info;
+		}
+		// Format arguments live on a symbol, so they never reached redact()
+		// above; they are only interpolated if format.splat() is in the chain,
+		// but redact them anyway so adding it later cannot leak a key.
+		if (Array.isArray(info[SPLAT])) {
+			info[SPLAT] = redact(info[SPLAT]);
+		}
+		return Object.assign(info, redacted);
 	} catch (_err) {
 		return info;
 	}
