@@ -141,6 +141,18 @@ RELAY_FORWARD_STRIP_HEADERS = frozenset({
 	# forwarded it verbatim the browser would try to gunzip already-plain
 	# bytes and fail with ERR_CONTENT_DECODING_FAILED.
 	"content-encoding",
+	# Proxy hops on the *relay's* side of the tunnel.  We reach core over
+	# loopback, so it is not behind those proxies and must not be told it is:
+	# HA's forwarded middleware answers 400 to every request carrying
+	# X-Forwarded-For unless the user set `http.use_x_forwarded_for`, which a
+	# stock install has not.  The relay strips these too — dropping them here
+	# as well keeps a home safe from any relay that does not.
+	"x-forwarded-for",
+	"x-forwarded-host",
+	"x-forwarded-proto",
+	"x-forwarded-port",
+	"x-real-ip",
+	"forwarded",
 })
 
 # An RPC targets either the local HA core REST API ("core", the default) or the

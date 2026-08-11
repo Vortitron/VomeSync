@@ -75,6 +75,30 @@ const HOP_BY_HOP = new Set([
 ]);
 
 /**
+ * Headers describing a hop on *Vome's* side of the tunnel.
+ *
+ * nginx sets these so this proxy can tell visitors apart for the rate limit
+ * (see clientIp), and they must stop here.  Past the tunnel the component
+ * dials Core over loopback inside the home, so Home Assistant is not behind
+ * these proxies and the addresses in them are not its clients.
+ *
+ * Forwarding `X-Forwarded-For` does not merely mislead — HA's forwarded
+ * middleware rejects any request carrying it unless the home has opted into
+ * `http.use_x_forwarded_for`, which a stock install has not.  It answers 400
+ * to *every* request, so leaking this header takes the whole friendly domain
+ * down rather than degrading anything gracefully.
+ *
+ * The cost is that HA sees one loopback client for everyone, so its built-in
+ * brute-force ban can't act per visitor.  That check belongs out here anyway:
+ * this proxy sees the real address (limitUnauthenticated) before a request is
+ * ever worth forwarding.
+ */
+const VOME_HOP_HEADERS = new Set([
+	'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto',
+	'x-forwarded-port', 'x-real-ip', 'forwarded'
+]);
+
+/**
  * The browser's real host (the friendly domain).
  *
  * Friendly domains reuse the shared `*.<SERVER_DOMAIN>` wildcard vhost, whose
@@ -133,7 +157,7 @@ function collectRequestHeaders(req, cookieName) {
 	for (let i = 0; i + 1 < raw.length; i += 2) {
 		const name = raw[i];
 		let value = raw[i + 1];
-		if (HOP_BY_HOP.has(name.toLowerCase())) {
+		if (HOP_BY_HOP.has(name.toLowerCase()) || VOME_HOP_HEADERS.has(name.toLowerCase())) {
 			continue;
 		}
 		if (name.toLowerCase() === 'cookie') {
@@ -418,6 +442,7 @@ module.exports = {
 	isWebhookPath,
 	clientIp,
 	HOP_BY_HOP,
+	VOME_HOP_HEADERS,
 	POLICY_CACHE_TTL_MS,
 	AUTH_PATH_RE
 };

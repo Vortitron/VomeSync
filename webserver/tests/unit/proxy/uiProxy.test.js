@@ -86,6 +86,33 @@ describe('uiProxy header helpers', () => {
 		expect(map.Cookie).toBe('ha_theme=dark'); // our cookie removed, HA's kept
 	});
 
+	// Regression: nginx adds these so the rate limit can tell visitors apart.
+	// If they cross the tunnel, HA's forwarded middleware 400s *every* request
+	// on a stock install (no http.use_x_forwarded_for) — a total outage of the
+	// friendly domain, not a degraded feature.
+	test('collectRequestHeaders strips the proxy hop headers nginx adds', () => {
+		const req = fakeReq({ rawHeaders: [
+			'X-Forwarded-For', '203.0.113.9, 10.0.0.1',
+			'X-Real-IP', '203.0.113.9',
+			'X-Forwarded-Proto', 'https',
+			'X-Forwarded-Host', 'gamlabio.home.vome.io',
+			'X-Forwarded-Port', '443',
+			'Forwarded', 'for=203.0.113.9;proto=https',
+			'Accept', 'text/html'
+		] });
+		const map = Object.fromEntries(collectRequestHeaders(req, config.relay.forwardCookieName));
+		for (const name of ['X-Forwarded-For', 'X-Real-IP', 'X-Forwarded-Proto',
+			'X-Forwarded-Host', 'X-Forwarded-Port', 'Forwarded']) {
+			expect(map[name]).toBeUndefined();
+		}
+		expect(map.Accept).toBe('text/html'); // ordinary headers still cross
+	});
+
+	test('collectRequestHeaders strips hop headers whatever their casing', () => {
+		const req = fakeReq({ rawHeaders: ['x-forwarded-for', '203.0.113.9'] });
+		expect(collectRequestHeaders(req, 'vome_fwd')).toEqual([]);
+	});
+
 	test('collectRequestHeaders drops a Cookie header that held only our cookie', () => {
 		const req = fakeReq({ rawHeaders: ['Cookie', 'vome_fwd=secret'] });
 		expect(collectRequestHeaders(req, 'vome_fwd')).toEqual([]);

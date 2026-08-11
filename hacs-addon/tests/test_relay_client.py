@@ -693,6 +693,23 @@ class TestForwardHelpers:
 		assert "content-encoding" not in lowered
 		assert "Content-Type: text/html" in [f"{k}: {v}" for k, v in out]
 
+	def test_filter_strips_relay_side_proxy_hops(self):
+		# The relay's nginx adds these so it can rate limit per visitor. We
+		# reach core over loopback, so it is not behind those proxies — and a
+		# stock install without http.use_x_forwarded_for answers 400 to every
+		# request carrying X-Forwarded-For, taking the whole domain down.
+		pairs = [
+			("Content-Type", "text/html"),
+			("X-Forwarded-For", "203.0.113.9, 10.0.0.1"),
+			("X-Real-IP", "203.0.113.9"),
+			("X-Forwarded-Proto", "https"),
+			("X-Forwarded-Host", "gamlabio.home.vome.io"),
+			("X-Forwarded-Port", "443"),
+			("Forwarded", "for=203.0.113.9;proto=https"),
+		]
+		out = _filter_forward_headers(pairs)
+		assert out == [["Content-Type", "text/html"]]
+
 	def test_filter_accepts_dict_input(self):
 		out = _filter_forward_headers({"X-Test": "1", "Connection": "close"})
 		assert out == [["X-Test", "1"]]
