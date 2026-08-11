@@ -251,6 +251,35 @@ module.exports = {
 };
 ```
 
+### Test Redis (pinned on purpose)
+
+The jest suites run against a throwaway Redis started by `redis-memory-server`
+(`webserver/tests/globalSetup.js`), which downloads and compiles `redis-server`
+from source the first time it is asked for a version.
+
+`webserver/package.json` pins that version:
+
+```json
+"redisMemoryServer": { "version": "7.4.6" }
+```
+
+Two reasons the pin has to stay:
+
+- **The default is a moving target.** `redis-memory-server` defaults to
+  `stable`, i.e. *whatever redis.io publishes today*. That is now Redis 8.x,
+  whose tarball bundles the RedisBloom/RediSearch/RedisJSON/TimeSeries modules
+  and needs `cmake`, `rustc` and autotools to build. CI has none of them, so
+  `npm ci` fails at postinstall — with nothing in this repo having changed.
+- **It should match production.** `docker/docker-compose.yml` runs
+  `redis:7-alpine`. Before the pin, developer machines were quietly testing
+  against Redis 8.3 while production ran 7.
+
+If you deliberately move the pin, bump `redis:7-alpine` with it.
+
+CI additionally sets `REDISMS_DOWNLOAD_DIR` to a path under `JENKINS_HOME`
+(`jenkins/pipelines/Jenkinsfile.vomesync-ci`), because the pipeline's `cleanWs()`
+deletes the in-workspace cache and every build would otherwise recompile Redis.
+
 ### Pytest Configuration
 
 **File**: `hacs-addon/tests/conftest.py`

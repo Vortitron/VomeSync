@@ -51,6 +51,9 @@
 		"redis-memory-server": "^0.9.0",
 		"cross-env": "^7.0.3"
 	},
+	"redisMemoryServer": {
+		"version": "7.4.6"
+	},
 	"engines": {
 		"node": ">=18.0.0"
 	}

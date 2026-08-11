@@ -34,6 +34,15 @@ pipeline {
     environment {
         RUN_MAIN_PIPELINE = 'true'
         NODE_OPTIONS = '--max-old-space-size=2048'
+
+        // redis-memory-server compiles redis-server from source during `npm ci`
+        // and caches it under the workspace — which `cleanWs()` deletes at the
+        // end of every build, so each build paid for a fresh compile. Point the
+        // cache at JENKINS_HOME so it survives, and one compile serves every
+        // later build. (The version is pinned in webserver/package.json: the
+        // default, "stable", is now Redis 8.x, whose tarball bundles modules
+        // that need cmake and rustc — neither of which is in the agent image.)
+        REDISMS_DOWNLOAD_DIR = "${env.JENKINS_HOME}/.cache/redis-memory-server"
     }
 
     stages {
