@@ -650,3 +650,89 @@ describe('uiProxy rate limits on unauthenticated traffic', () => {
 		}
 	});
 });
+
+describe('uiProxy blocks brute-forced logins', () => {
+	const host = { host: 'nyvyn.home.vome.io' };
+	const LOGIN = '/auth/login_flow/abc123';
+
+	/** A proxy whose login guard is a spy, with a scripted block verdict. */
+	function guardedProxy({ blocked = null, cookieOk = false, body } = {}) {
+		const observed = [];
+		const loginGuard = {
+			isBlocked: jest.fn(async () => blocked),
+			observe: jest.fn(async (serverId, ip, verdict) => {
+				observed.push({ serverId, ip, verdict });
+				return null;
+			}),
+			recordFailure: jest.fn(),
+			recordSuccess: jest.fn()
+		};
+		const relay = {
+			isConnected: () => true,
+			forwardHttp: async () => ({ status: 200, headers: [], bodyB64: body })
+		};
+		const proxy = createUiProxy({
+			relayManager: relay,
+			verifyAccessToken: () => (cookieOk ? { serverId: 'rly-1', userId: 'u1' } : null),
+			fetchForwardPolicy: async () => ({ serverId: 'rly-1', open: true }),
+			checkRateLimit: async (_i, _a, limit) => ({ allowed: true, current: 1, limit, resetTime: 0 }),
+			loginGuard
+		});
+		return { proxy, loginGuard, observed };
+	}
+
+	async function runHttp(proxy, reqOpts) {
+		const req = fakeReq(reqOpts);
+		const res = fakeRes();
+		proxy.httpHandler(req, res);
+		await tick();
+		req.emit('end');
+		await res.done;
+		return res;
+	}
+
+	const failureBody = Buffer.from(JSON.stringify({
+		type: 'form', errors: { base: 'invalid_auth' }
+	})).toString('base64');
+
+	test('refuses a blocked client with 429 and Retry-After', async () => {
+		const { proxy } = guardedProxy({ blocked: { retryAfter: 900 } });
+		const res = await runHttp(proxy, { method: 'POST', url: LOGIN, headers: host });
+		expect(res.statusCode).toBe(429);
+		expect(res.headers['Retry-After']).toBe('900');
+	});
+
+	test('a failed login is counted', async () => {
+		const { proxy, observed } = guardedProxy({ body: failureBody });
+		await runHttp(proxy, { method: 'POST', url: LOGIN, headers: host });
+		expect(observed).toEqual([{ serverId: 'rly-1', ip: expect.any(String), verdict: 'failure' }]);
+	});
+
+	test('a successful login clears the record', async () => {
+		const body = Buffer.from(JSON.stringify({ type: 'create_entry', result: 'x' })).toString('base64');
+		const { proxy, observed } = guardedProxy({ body });
+		await runHttp(proxy, { method: 'POST', url: LOGIN, headers: host });
+		expect(observed[0].verdict).toBe('success');
+	});
+
+	// Vome already vouched for a cookie-bearing visitor; the guard is for the
+	// open door, not for the owner who mistypes their own password.
+	test('never charges or blocks a cookie-bearing request', async () => {
+		const { proxy, loginGuard, observed } = guardedProxy({
+			blocked: { retryAfter: 900 }, cookieOk: true, body: failureBody
+		});
+		const res = await runHttp(proxy, { method: 'POST', url: LOGIN, headers: host });
+		expect(res.statusCode).toBe(200);
+		expect(loginGuard.isBlocked).not.toHaveBeenCalled();
+		expect(observed).toEqual([]);
+	});
+
+	// Only the login endpoints are barred, so a shared NAT address that got
+	// blocked does not lose access to the rest of the home.
+	test('a block does not touch ordinary traffic', async () => {
+		const { proxy, loginGuard } = guardedProxy({ blocked: { retryAfter: 900 } });
+		const res = await runHttp(proxy, { url: '/lovelace', headers: host });
+		expect(res.statusCode).toBe(200);
+		expect(loginGuard.isBlocked).not.toHaveBeenCalled();
+	});
+});

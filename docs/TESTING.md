@@ -11,7 +11,8 @@ This document provides comprehensive information about testing the VomeSync proj
 5. [Test Configuration](#test-configuration)
 6. [Writing Tests](#writing-tests)
 7. [Continuous Integration](#continuous-integration)
-8. [Troubleshooting](#troubleshooting)
+8. [Upgrading Home Assistant](#upgrading-home-assistant)
+9. [Troubleshooting](#troubleshooting)
 
 ## Test Overview
 
@@ -521,3 +522,35 @@ cd docker && docker-compose down -v
 - **Concurrent Connections**: > 1000 WebSocket clients
 
 This comprehensive testing setup ensures VomeSync maintains high quality, reliability, and performance across all components and deployment scenarios.
+
+## Upgrading Home Assistant
+
+**Run this first when bumping the pinned Home Assistant version:**
+
+```bash
+venv/bin/python -m pytest hacs-addon/tests/test_ha_compat_contract.py -v
+```
+
+`test_ha_compat_contract.py` pins the parts of Home Assistant's *behaviour* that
+Vome depends on but which are not a documented API — so a release can change
+them without a deprecation warning and without breaking an import. Each
+assertion names what breaks and where.
+
+A failure here is never flaky. It means a released behaviour we rely on has
+changed and something of ours is now wrong. What it currently guards:
+
+| Coupling | Depends on it | Why it is silent if it breaks |
+| --- | --- | --- |
+| A wrong password returns **HTTP 200** with `errors.base = invalid_auth`/`invalid_code` | `webserver/src/proxy/loginGuard.js` | The brute-force guard stops counting failures. No error, no log — just an unlimited password oracle on every friendly domain in `open` mode. |
+| `FlowResultType.FORM`/`CREATE_ENTRY` serialise to `form`/`create_entry` | `loginGuard.classifyLoginResponse` | Same as above. |
+| `/auth/login_flow/{flow_id}` is still the login endpoint | `loginGuard.LOGIN_FLOW_PATH_RE` | The guard watches a path nothing posts to. |
+| Core 400s an unexpected `X-Forwarded-For` | `uiProxy.VOME_HOP_HEADERS` | The header strip stops being load-bearing — safe, but the reasoning behind it is no longer true. |
+| Core's IP ban is off by default and keys on the socket peer | The decision to guard at the proxy | If Core could see real client addresses, the guard could move there. |
+
+Add to this file rather than spreading a new assumption about Core through the
+codebase with nothing watching it.
+
+Beyond this file, an HA upgrade should also get a run of the full add-on suite
+(`venv/bin/python -m pytest hacs-addon/tests/`) and a real smoke test on a
+sandbox instance — see `docs/PLAN_HA_2026_8.md` for how the 2026.8 pass was
+done, including the live-instance verification that caught the port change.

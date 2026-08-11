@@ -43,6 +43,7 @@ const config = require('../config/config');
 const relayManagerSingleton = require('../websocket/relayManager');
 const relayPortal = require('../utils/relayPortal');
 const uiAccess = require('./uiAccess');
+const loginGuardFactory = require('./loginGuard');
 const relayBridge = require('../websocket/relayBridge');
 const authManager = require('../utils/auth');
 const { abortUpgrade } = require('../websocket/upgradeRouter');
@@ -208,6 +209,7 @@ function createUiProxy(deps = {}) {
 	const fetchPolicy = deps.fetchForwardPolicy || relayPortal.fetchForwardPolicy;
 	const checkLimit = deps.checkRateLimit
 		|| ((id, action, max, windowMs) => authManager.checkRateLimit(id, action, max, windowMs));
+	const loginGuard = deps.loginGuard || loginGuardFactory.createLoginGuard();
 	const cookieName = config.relay.forwardCookieName;
 	const maxBody = config.relay.forwardMaxBodyBytes;
 	// noServer: the dedicated proxy server's `upgrade` event calls handleUpgrade.
@@ -298,6 +300,9 @@ function createUiProxy(deps = {}) {
 
 	async function httpHandler(req, res) {
 		let access = authorise(req);
+		// Cookie-bearing traffic is Vome-vouched: neither the rate limit nor
+		// the brute-force block applies to it.
+		const vouched = Boolean(access);
 		if (!access) {
 			const limited = await limitUnauthenticated(req);
 			if (limited) {
@@ -313,6 +318,21 @@ function createUiProxy(deps = {}) {
 			} catch (err) {
 				logger.error('Forward policy check failed:', err.message || err);
 				access = null;
+			}
+		}
+		// Only the login endpoints are barred, not the whole instance: a block
+		// keyed on an address that may be a household's shared NAT should stop
+		// the guessing, not cut everyone behind it off from their own home.
+		if (access && !vouched && loginGuardFactory.isLoginFlowRequest(req.method, req.url)) {
+			const blocked = await loginGuard.isBlocked(access.serverId, clientIp(req));
+			if (blocked) {
+				logger.warn(`Blocked login attempt for ${originalHost(req)}`);
+				res.writeHead(429, {
+					'Retry-After': String(blocked.retryAfter),
+					'Content-Type': 'text/plain'
+				});
+				res.end('Too many failed login attempts');
+				return;
 			}
 		}
 		if (!access) {
@@ -364,6 +384,14 @@ function createUiProxy(deps = {}) {
 				res.writeHead(502);
 				res.end(result.error || 'Forwarding failed.');
 				return;
+			}
+			// Home Assistant answers a wrong password with 200 and the error in
+			// the body, so the verdict is only visible here, on the way back.
+			if (!vouched && loginGuardFactory.isLoginFlowRequest(req.method, req.url)) {
+				const verdict = loginGuardFactory.classifyLoginResponse(result.status, result.bodyB64);
+				if (verdict) {
+					await loginGuard.observe(access.serverId, clientIp(req), verdict);
+				}
 			}
 			const body = result.bodyB64 ? Buffer.from(result.bodyB64, 'base64') : Buffer.alloc(0);
 			applyResponseHeaders(res, filterResponseHeaders(result.headers));

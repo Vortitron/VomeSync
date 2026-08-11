@@ -89,6 +89,22 @@ const config = {
 		forwardAuthRateMax: parsePositiveInt(process.env.RELAY_FORWARD_AUTH_RATE_MAX, 30),
 		// Each accepted upgrade pins a relay tunnel until it closes.
 		forwardWsRateMax: parsePositiveInt(process.env.RELAY_FORWARD_WS_RATE_MAX, 60),
+		// Failed Home Assistant logins per client before it is blocked from
+		// trying again (see proxy/loginGuard.js).  Counting failures rather
+		// than requests is what makes this a brute-force check instead of a
+		// rate limit; five leaves room for a mistyped password.  Home Assistant
+		// cannot do this itself — over the relay every visitor reaches it as
+		// 127.0.0.1, so this proxy holds the only real client address.
+		loginFailMax: parsePositiveInt(process.env.RELAY_LOGIN_FAIL_MAX, 5),
+		loginFailWindowMs: parsePositiveInt(process.env.RELAY_LOGIN_FAIL_WINDOW_MS, 900000),
+		// Escalating block: 15m, 1h, 6h, then a day for anyone still going.
+		loginBlockLadderMs: (process.env.RELAY_LOGIN_BLOCK_LADDER_MS
+			? process.env.RELAY_LOGIN_BLOCK_LADDER_MS.split(',')
+				.map((s) => parsePositiveInt(s.trim(), 0)).filter((n) => n > 0)
+			: [900000, 3600000, 21600000, 86400000]),
+		// How long a client's strike count survives, so that going quiet for a
+		// while and returning does not reset it to the shortest block.
+		loginStrikeTtlMs: parsePositiveInt(process.env.RELAY_LOGIN_STRIKE_TTL_MS, 604800000),
 		// Peers whose `X-Real-IP` the proxy believes.  The proxy listens on
 		// 0.0.0.0 for the portal host's nginx, so a client that reaches the port
 		// directly could otherwise claim any address and mint itself a fresh
