@@ -6,7 +6,7 @@ Keeps the HA options flow and the add-on UI on the same code path: both mutate
 from __future__ import annotations
 
 import logging
-from ipaddress import ip_address
+from contextlib import suppress
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -28,6 +28,7 @@ from .const import (
 	DEFAULT_PORTAL_URL,
 	DEFAULT_RELAY_WS_URL,
 	DOMAIN,
+	FORWARD_HOST_KEY,
 	INTEGRATION_VERSION,
 	LAN_TCP_TOKEN_DEFAULT_TTL,
 	LAN_TCP_TOKEN_MAX_TTL,
@@ -155,47 +156,56 @@ async def _save_relay(hass: HomeAssistant, entry: ConfigEntry, relay: dict) -> N
 	await async_start_relay(hass, entry)
 
 
-def _trusted_proxy_check(hass: HomeAssistant, local_url: str) -> dict[str, Any]:
-	"""Report whether forwarded requests will survive HA's trusted-proxy filter.
+def _external_url_check(hass: HomeAssistant, forward_ui: bool) -> dict[str, Any]:
+	"""Report whether Home Assistant knows its own public address.
 
-	Full-UI forwarding relays the browser's ``X-Forwarded-For`` through to Core,
-	and the request arrives from the address we dial.  HA ignores the header
-	entirely unless trusted proxies are configured — but 2026.8 turned that into
-	a one-click setting on Settings → System → Network, so far more people will
-	switch it on, and if our address is not on the list the forwarded request is
-	rejected.  ``ok: None`` means we could not tell, which is not a warning.
+	``external_url`` is what Core hands out when something needs to name this
+	instance from outside — the companion app reconciling a saved server, push
+	notification links, OAuth redirects.  Left unset while the friendly domain
+	is serving the world, those all fall back to an address the outside cannot
+	reach, and the failure is silent: the app reports a generic connection
+	problem rather than "your instance does not know its own name".
+
+	``expected`` is the friendly host we have actually served a request on, so
+	it is the address the user really reaches, not a guess.  Blank until the
+	domain has been visited at least once (see RelayClient._note_forward_host).
 	"""
-	try:
-		trusted = list(getattr(getattr(hass, "http", None), "trusted_proxies", None) or [])
-	except Exception:  # noqa: BLE001 - a diagnostic must not raise
-		return {"ok": None, "hint": ""}
+	current = ""
+	with suppress(Exception):  # noqa: BLE001 - a diagnostic must not raise
+		current = str(getattr(getattr(hass, "config", None), "external_url", None) or "")
+	expected = _observed_forward_url(hass)
+	if not forward_ui:
+		# Nothing of ours depends on it, so silence rather than nag.
+		return {"ok": True, "current": current, "expected": expected, "hint": ""}
+	if not current:
+		return {
+			"ok": False,
+			"current": "",
+			"expected": expected,
+			"hint": (
+				"Home Assistant has no external address set, so it cannot tell "
+				"apps and notifications how to reach it from outside."
+			),
+		}
+	if expected and current.rstrip("/") != expected.rstrip("/"):
+		return {
+			"ok": False,
+			"current": current,
+			"expected": expected,
+			"hint": (
+				f"Home Assistant calls itself {current}, but it is being reached "
+				f"on {expected}. Links it sends out will point at the wrong place."
+			),
+		}
+	return {"ok": True, "current": current, "expected": expected, "hint": ""}
 
-	if not trusted:
-		# Nothing configured, so HA is not filtering on the header at all.
-		return {"ok": True, "hint": ""}
 
-	host = urlparse(local_url).hostname or ""
-	try:
-		address = ip_address(host)
-	except ValueError:
-		# A hostname (from internal_url) — we cannot resolve it to compare here.
-		return {"ok": None, "hint": ""}
-
-	for network in trusted:
-		try:
-			if address in network:
-				return {"ok": True, "hint": ""}
-		except TypeError:  # noqa: PERF203 - mixed IPv4/IPv6 entries are normal
-			continue
-
-	return {
-		"ok": False,
-		"hint": (
-			f"Home Assistant has trusted proxies configured but {host} is not "
-			"among them. Remote access through your Vome address will be "
-			"refused. Add it under Settings → System → Network."
-		),
-	}
+def _observed_forward_url(hass: HomeAssistant) -> str:
+	"""The friendly-domain origin we last served a forwarded request on."""
+	host = ""
+	with suppress(Exception):  # noqa: BLE001 - a diagnostic must not raise
+		host = str((hass.data.get(DOMAIN) or {}).get(FORWARD_HOST_KEY) or "")
+	return f"https://{host}" if host else ""
 
 
 def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
@@ -222,7 +232,11 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 		"local_url": local_url,
 		"local_url_source": local_url_source,
 		"local_url_override": relay.get(CONF_RELAY_LOCAL_URL) or "",
-		"trusted_proxy": _trusted_proxy_check(hass, local_url),
+		# Whether Core knows the public name it is being reached on. Only
+		# meaningful once full-UI forwarding is actually serving that name.
+		"external_url": _external_url_check(
+			hass, bool(relay.get(CONF_RELAY_FORWARD_UI))
+		),
 	}
 
 
@@ -264,7 +278,8 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 				"local_url": local_url,
 				"local_url_source": local_url_source,
 				"local_url_override": "",
-				"trusted_proxy": _trusted_proxy_check(hass, local_url),
+				# Nothing is being forwarded yet, so this cannot be wrong.
+				"external_url": _external_url_check(hass, False),
 			}
 		# Read-only status must never hard-fail on multiple linked entries:
 		# pick the first so the panel loads, and warn. Writes still target a
@@ -379,6 +394,42 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		await _save_relay(hass, entry, relay)
 		return remote_status_payload(hass, entry)
 
+	async def _set_external_url(call: ServiceCall) -> ServiceResponse:
+		"""Tell Home Assistant the public address it is reached on.
+
+		This is Core's own setting (Settings → System → Network), not ours —
+		we offer it because the panel is where the problem becomes visible and
+		because we are the ones who know the answer.  An empty value means
+		"use the address we have actually been serving".
+
+		``configuration.yaml`` wins over the stored value, so confirm the write
+		took rather than reporting success on a silent no-op.
+		"""
+		entry = _pick_entry(hass, call.data.get("entry_id"))
+		url = str(call.data.get("external_url") or "").strip().rstrip("/")
+		if not url:
+			url = _observed_forward_url(hass)
+		if not url:
+			raise ValueError(
+				"No address to set yet — open Home Assistant on your Vome "
+				"address once, then try again."
+			)
+		parsed = urlparse(url)
+		if parsed.scheme not in ("http", "https") or not parsed.hostname:
+			raise ValueError(
+				"external_url must be a full address like https://home.example.com"
+			)
+		if parsed.path or parsed.query or parsed.fragment:
+			raise ValueError("external_url must not include a path")
+		await hass.config.async_update(external_url=url)
+		if str(getattr(hass.config, "external_url", "") or "").rstrip("/") != url:
+			raise ValueError(
+				"Home Assistant did not keep that address. It is probably pinned "
+				"by an 'external_url' under 'homeassistant:' in configuration.yaml "
+				"— change it there instead."
+			)
+		return remote_status_payload(hass, entry)
+
 	async def _add_lan_route(call: ServiceCall) -> ServiceResponse:
 		entry = _pick_entry(hass, call.data.get("entry_id"))
 		relay = dict((entry.options or {}).get(CONF_RELAY) or {})
@@ -477,6 +528,14 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Optional("local_url", default=""): cv.string,
+		}),
+		supports_response=SupportsResponse.ONLY,
+	)
+	hass.services.async_register(
+		DOMAIN, "set_external_url", _guard(_set_external_url),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Optional("external_url", default=""): cv.string,
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)

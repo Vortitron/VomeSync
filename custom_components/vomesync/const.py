@@ -155,6 +155,16 @@ RELAY_FORWARD_STRIP_HEADERS = frozenset({
 	"forwarded",
 })
 
+# Where the last friendly host we served a forwarded request on is remembered
+# (in ``hass.data[DOMAIN]``).  The relay knows the public name; core does not,
+# and cannot be told it without the user setting it — so observing the traffic
+# is the only way the panel can offer to fill it in for them.
+FORWARD_HOST_KEY = "_forward_host"
+
+# The relay's nginx names the browser's real host here, because the shared
+# wildcard vhost has already rewritten Host by the time it proxies.
+FORWARD_HOST_HEADER = "x-ha-original-host"
+
 # An RPC targets either the local HA core REST API ("core", the default) or the
 # local ESPHome dashboard ("esphome").  ESPHome flows through the same tunnel so
 # the home-assistant-mcp server can list devices and read/write device YAML

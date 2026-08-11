@@ -29,6 +29,7 @@ import base64
 import json
 import logging
 import os
+import re
 import uuid
 from contextlib import suppress
 from datetime import timedelta
@@ -67,6 +68,8 @@ from .const import (
 	RELAY_DEVICE_TOKEN_PATH,
 	RELAY_FORWARD_HTTP_TIMEOUT,
 	RELAY_FORWARD_MAX_BODY,
+	FORWARD_HOST_HEADER,
+	FORWARD_HOST_KEY,
 	RELAY_FORWARD_STRIP_HEADERS,
 	RELAY_FORWARD_WS_PATHS,
 	RELAY_MINT_TOKEN_TIMEOUT,
@@ -172,6 +175,11 @@ def _filter_forward_headers(pairs: Any) -> list[list[str]]:
 # Addresses that mean "this machine" — if HA binds to one of these (or to
 # nothing, i.e. all interfaces) then loopback is listening and is the safe dial.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "0.0.0.0", "::"})
+
+# A bare hostname, nothing else — this value is offered to the user as the
+# address to publish as their external URL, so it must not be able to smuggle a
+# path, credentials or a second host into that field.
+_SAFE_FORWARD_HOST_RE = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
 
 
 def _local_host(server_host: Any) -> str:
@@ -534,6 +542,7 @@ class RelayClient:
 		body (base64) so binary assets survive the JSON hop.
 		"""
 		request_id = data.get("requestId")
+		self._note_forward_host(data.get("headers"))
 		status, headers, body_b64, error = await self._execute_http_proxy(data)
 		response: dict[str, Any] = {
 			"type": RELAY_WS_MSG_HTTP_PROXY_RESPONSE,
@@ -547,6 +556,25 @@ class RelayClient:
 		if error:
 			response["error"] = error
 		await self._send(ws, response)
+
+	def _note_forward_host(self, headers: Any) -> None:
+		"""Remember the friendly host this request came in on.
+
+		Core has no way to learn the public name it is being served under — the
+		relay reaches it over loopback — so the panel cannot offer to set
+		``external_url`` without watching the traffic for it.  Best effort by
+		design: a miss only costs the panel a pre-filled value.
+		"""
+		with suppress(Exception):  # noqa: BLE001 - never break a forward over a hint
+			for name, value in _normalise_header_input(headers):
+				if name.lower() != FORWARD_HOST_HEADER:
+					continue
+				host = value.strip()
+				# Straight into a URL for the user, so refuse anything that
+				# could carry a path, port trick or injected whitespace.
+				if host and _SAFE_FORWARD_HOST_RE.fullmatch(host):
+					self._hass.data.setdefault(DOMAIN, {})[FORWARD_HOST_KEY] = host
+				return
 
 	async def _execute_http_proxy(
 		self, data: dict

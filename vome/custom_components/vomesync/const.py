@@ -141,7 +141,29 @@ RELAY_FORWARD_STRIP_HEADERS = frozenset({
 	# forwarded it verbatim the browser would try to gunzip already-plain
 	# bytes and fail with ERR_CONTENT_DECODING_FAILED.
 	"content-encoding",
+	# Proxy hops on the *relay's* side of the tunnel.  We reach core over
+	# loopback, so it is not behind those proxies and must not be told it is:
+	# HA's forwarded middleware answers 400 to every request carrying
+	# X-Forwarded-For unless the user set `http.use_x_forwarded_for`, which a
+	# stock install has not.  The relay strips these too — dropping them here
+	# as well keeps a home safe from any relay that does not.
+	"x-forwarded-for",
+	"x-forwarded-host",
+	"x-forwarded-proto",
+	"x-forwarded-port",
+	"x-real-ip",
+	"forwarded",
 })
+
+# Where the last friendly host we served a forwarded request on is remembered
+# (in ``hass.data[DOMAIN]``).  The relay knows the public name; core does not,
+# and cannot be told it without the user setting it — so observing the traffic
+# is the only way the panel can offer to fill it in for them.
+FORWARD_HOST_KEY = "_forward_host"
+
+# The relay's nginx names the browser's real host here, because the shared
+# wildcard vhost has already rewritten Host by the time it proxies.
+FORWARD_HOST_HEADER = "x-ha-original-host"
 
 # An RPC targets either the local HA core REST API ("core", the default) or the
 # local ESPHome dashboard ("esphome").  ESPHome flows through the same tunnel so

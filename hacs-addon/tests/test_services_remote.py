@@ -86,10 +86,12 @@ def test_in_app_link_flow(monkeypatch):
 	assert "relay" not in entry.options
 
 
-def _hass_on(port=None, trusted=None, internal_url=None):
+def _hass_on(port=None, trusted=None, internal_url=None, external_url=None,
+			 forward_host=None):
 	"""Fake hass exposing just what the status diagnostics read."""
 	from types import SimpleNamespace
 	from ipaddress import ip_network
+	from custom_components.vomesync.const import DOMAIN, FORWARD_HOST_KEY
 	return SimpleNamespace(
 		http=SimpleNamespace(
 			server_port=port,
@@ -100,7 +102,9 @@ def _hass_on(port=None, trusted=None, internal_url=None):
 		config=SimpleNamespace(
 			api=SimpleNamespace(port=None, use_ssl=False),
 			internal_url=internal_url,
+			external_url=external_url,
 		),
+		data={DOMAIN: {FORWARD_HOST_KEY: forward_host}} if forward_host else {},
 	)
 
 
@@ -130,36 +134,116 @@ class TestLocalUrlInStatus:
 		assert payload["local_url_source"] == "fallback"
 
 
-class TestTrustedProxyCheck:
-	def test_no_trusted_proxies_is_fine(self):
-		# Without trusted proxies HA ignores the forwarded header entirely.
-		entry = _FakeEntry("abc", {"relay": {"server_id": "rly-1"}})
-		assert remote_status_payload(_hass_on(port=80), entry)["trusted_proxy"]["ok"] is True
+class TestExternalUrlCheck:
+	"""Core cannot learn the public name it is served under, and nothing tells
+	the user it is missing — the companion app just fails to reconnect."""
 
-	def test_loopback_covered_by_trusted_proxies(self):
-		entry = _FakeEntry("abc", {"relay": {"server_id": "rly-1"}})
-		hass = _hass_on(port=80, trusted=["127.0.0.0/8"])
-		assert remote_status_payload(hass, entry)["trusted_proxy"]["ok"] is True
-
-	def test_trusted_proxies_without_our_address_warns(self):
-		entry = _FakeEntry("abc", {"relay": {"server_id": "rly-1"}})
-		hass = _hass_on(port=80, trusted=["192.168.1.0/24"])
-		check = remote_status_payload(hass, entry)["trusted_proxy"]
-		assert check["ok"] is False
-		assert "127.0.0.1" in check["hint"]
-
-	def test_mixed_ipv4_ipv6_entries_do_not_break_the_check(self):
-		entry = _FakeEntry("abc", {"relay": {"server_id": "rly-1"}})
-		hass = _hass_on(port=80, trusted=["fd00::/8", "127.0.0.0/8"])
-		assert remote_status_payload(hass, entry)["trusted_proxy"]["ok"] is True
-
-	def test_hostname_target_is_unknown_not_a_warning(self):
-		# internal_url gives a name we cannot resolve here; don't cry wolf.
-		entry = _FakeEntry("abc", {
-			"relay": {"server_id": "rly-1", "local_url": "https://ha.example.com"},
+	def _entry(self, forward_ui=True):
+		return _FakeEntry("abc", {
+			"relay": {"server_id": "rly-1", "forward_ui": forward_ui},
 		})
-		hass = _hass_on(trusted=["192.168.1.0/24"])
-		assert remote_status_payload(hass, entry)["trusted_proxy"]["ok"] is None
+
+	def test_unset_while_forwarding_warns(self):
+		hass = _hass_on(port=80, forward_host="myhome.home.vome.io")
+		check = remote_status_payload(hass, self._entry())["external_url"]
+		assert check["ok"] is False
+		assert check["expected"] == "https://myhome.home.vome.io"
+
+	def test_matching_url_is_fine(self):
+		hass = _hass_on(port=80, external_url="https://myhome.home.vome.io",
+						forward_host="myhome.home.vome.io")
+		assert remote_status_payload(hass, self._entry())["external_url"]["ok"] is True
+
+	def test_trailing_slash_is_not_a_mismatch(self):
+		hass = _hass_on(port=80, external_url="https://myhome.home.vome.io/",
+						forward_host="myhome.home.vome.io")
+		assert remote_status_payload(hass, self._entry())["external_url"]["ok"] is True
+
+	def test_pointing_somewhere_else_warns(self):
+		hass = _hass_on(port=80, external_url="https://old.example.com",
+						forward_host="myhome.home.vome.io")
+		check = remote_status_payload(hass, self._entry())["external_url"]
+		assert check["ok"] is False
+		assert "old.example.com" in check["hint"]
+
+	def test_silent_when_forwarding_is_off(self):
+		# Nothing of ours depends on it then, so nagging would be noise.
+		hass = _hass_on(port=80)
+		assert remote_status_payload(hass, self._entry(forward_ui=False))["external_url"]["ok"] is True
+
+	def test_unset_with_no_observed_host_still_warns_without_a_target(self):
+		hass = _hass_on(port=80)
+		check = remote_status_payload(hass, self._entry())["external_url"]
+		assert check["ok"] is False
+		assert check["expected"] == ""
+
+
+class TestSetExternalUrlService:
+	"""The panel offers to set Core's own External URL, so a wrong or silently
+	dropped write would leave the user believing a broken setup is fixed."""
+
+	def _handlers(self, monkeypatch, *, forward_host=None, accepts=True):
+		import asyncio
+		from types import SimpleNamespace
+		from unittest.mock import AsyncMock, MagicMock
+		import custom_components.vomesync.services_remote as sr
+		from custom_components.vomesync.const import DOMAIN, FORWARD_HOST_KEY
+
+		entry = SimpleNamespace(entry_id="e1", options={"relay": {"server_id": "rly-1"}})
+		hass = MagicMock()
+		hass.data = {DOMAIN: {FORWARD_HOST_KEY: forward_host}} if forward_host else {}
+		hass.config_entries.async_entries.return_value = [entry]
+		hass.http.trusted_proxies = []
+		hass.config.external_url = None
+		hass.config.internal_url = None
+		hass.config.api = SimpleNamespace(port=None, use_ssl=False)
+
+		async def _async_update(external_url=None, **_kw):
+			if accepts:
+				hass.config.external_url = external_url
+		hass.config.async_update = _async_update
+		monkeypatch.setattr(sr, "async_start_relay", AsyncMock())
+		return _register_and_capture(hass), hass, asyncio
+
+	def test_blank_uses_the_address_we_have_been_served_on(self, monkeypatch):
+		from types import SimpleNamespace
+		handlers, hass, asyncio = self._handlers(
+			monkeypatch, forward_host="myhome.home.vome.io")
+		result = asyncio.run(handlers["set_external_url"](SimpleNamespace(data={})))
+		assert "error" not in result
+		assert hass.config.external_url == "https://myhome.home.vome.io"
+
+	def test_blank_with_nothing_observed_explains_itself(self, monkeypatch):
+		from types import SimpleNamespace
+		handlers, _hass, asyncio = self._handlers(monkeypatch)
+		result = asyncio.run(handlers["set_external_url"](SimpleNamespace(data={})))
+		assert "No address to set yet" in result["error"]
+
+	def test_rejects_a_url_with_a_path(self, monkeypatch):
+		from types import SimpleNamespace
+		handlers, _hass, asyncio = self._handlers(monkeypatch)
+		result = asyncio.run(handlers["set_external_url"](
+			SimpleNamespace(data={"external_url": "https://ha.example.com/lovelace"})
+		))
+		assert "must not include a path" in result["error"]
+
+	def test_rejects_a_bare_host(self, monkeypatch):
+		from types import SimpleNamespace
+		handlers, _hass, asyncio = self._handlers(monkeypatch)
+		result = asyncio.run(handlers["set_external_url"](
+			SimpleNamespace(data={"external_url": "ha.example.com"})
+		))
+		assert "full address" in result["error"]
+
+	def test_a_yaml_pinned_url_is_reported_not_silently_ignored(self, monkeypatch):
+		# hass.config.async_update is a no-op when configuration.yaml sets the
+		# value, so a naive handler would report success and change nothing.
+		from types import SimpleNamespace
+		handlers, _hass, asyncio = self._handlers(monkeypatch, accepts=False)
+		result = asyncio.run(handlers["set_external_url"](
+			SimpleNamespace(data={"external_url": "https://ha.example.com"})
+		))
+		assert "configuration.yaml" in result["error"]
 
 
 class TestSetLocalUrlService:
@@ -238,7 +322,7 @@ def test_unlinked_status_still_reports_the_local_url(monkeypatch):
 	assert status["linked"] is False
 	assert status["local_url"] == "http://127.0.0.1:80"
 	assert status["local_url_source"] == "detected"
-	assert status["trusted_proxy"]["ok"] is True
+	assert status["external_url"]["ok"] is True
 
 
 class TestWebhookServices:

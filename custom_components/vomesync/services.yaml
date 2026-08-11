@@ -244,6 +244,28 @@ set_local_url:
       selector:
         text:
 
+set_external_url:
+  name: Set external Home Assistant address
+  description: >-
+    Tell Home Assistant the public address it is reached on (Settings > System >
+    Network > External URL). Apps and notifications use it to find this instance
+    from outside; left unset, the companion app can fail to reconnect without
+    saying why. Leave blank to use the Vome address already serving this
+    instance.
+  fields:
+    entry_id:
+      name: Config entry ID
+      required: false
+      selector:
+        text:
+    external_url:
+      name: External address
+      description: e.g. https://myhome.home.vome.io — blank uses your Vome address
+      required: false
+      default: ""
+      selector:
+        text:
+
 add_lan_route:
   name: Add LAN route
   description: Add one /t/<slug>/ tunnel to a LAN host

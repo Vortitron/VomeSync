@@ -73,6 +73,7 @@ def _fake_hass(
 			api=SimpleNamespace(port=api_port, use_ssl=api_ssl),
 			internal_url=internal_url,
 		),
+		data={},
 	)
 
 
@@ -709,6 +710,31 @@ class TestForwardHelpers:
 		]
 		out = _filter_forward_headers(pairs)
 		assert out == [["Content-Type", "text/html"]]
+
+	def test_notes_the_friendly_host_it_was_served_on(self):
+		# Core is reached over loopback and so cannot learn its own public
+		# name; watching the forwarded traffic is the only source for it.
+		from custom_components.vomesync.const import DOMAIN, FORWARD_HOST_KEY
+		client = _client_on(_fake_hass(), None)
+		client._note_forward_host([["X-HA-Original-Host", "myhome.home.vome.io"]])
+		assert client._hass.data[DOMAIN][FORWARD_HOST_KEY] == "myhome.home.vome.io"
+
+	@pytest.mark.parametrize("bad", [
+		"evil.com/../path", "evil.com host", "https://evil.com",
+		"user:pw@evil.com", "", "a" * 300,
+	])
+	def test_refuses_a_host_it_could_not_safely_offer_as_a_url(self, bad):
+		# This value is handed to the user as the address to publish, so it
+		# must not be able to carry a path, credentials or a second host.
+		from custom_components.vomesync.const import DOMAIN, FORWARD_HOST_KEY
+		client = _client_on(_fake_hass(), None)
+		client._note_forward_host([["X-HA-Original-Host", bad]])
+		assert not (client._hass.data.get(DOMAIN) or {}).get(FORWARD_HOST_KEY)
+
+	def test_a_missing_header_is_not_an_error(self):
+		client = _client_on(_fake_hass(), None)
+		client._note_forward_host([["Accept", "text/html"]])
+		client._note_forward_host(None)
 
 	def test_filter_accepts_dict_input(self):
 		out = _filter_forward_headers({"X-Test": "1", "Connection": "close"})

@@ -167,18 +167,30 @@
 		return `<span class="pill ${ok ? "ok" : "off"}">${ok ? onLabel : offLabel}</span>`;
 	}
 
-	// Home Assistant 2026.8 turned the listen port and trusted proxies into
-	// ordinary settings, so both can now change under a running relay. Neither
-	// failure announces itself — the relay stays connected and the status stays
-	// green while the forwarded requests fail — so surface them here.
+	// Neither of these failures announces itself — the relay stays connected
+	// and the status stays green while things quietly break at the edges — so
+	// surface them here, where someone is already looking for an explanation.
 	function connectionWarningCard() {
 		if (!state || !state.linked) return "";
-		const proxy = state.trusted_proxy || {};
-		if (proxy.ok === false) {
+		const ext = state.external_url || {};
+		if (ext.ok === false) {
+			// Offer the fix, but show the manual route too: this is Home
+			// Assistant's own setting and it affects more than Vome, so nobody
+			// should have to take our word for what the button did.
+			const target = ext.expected || "";
 			return `
 			<div class="card warn-card">
-				<h2>Home Assistant will refuse forwarded requests</h2>
-				<p class="muted">${escapeHtml(proxy.hint)}</p>
+				<h2>Home Assistant doesn't know its own address</h2>
+				<p class="muted">${escapeHtml(ext.hint)}</p>
+				<p class="muted">Set <strong>External URL</strong> under Settings → System → Network${
+					target ? ` to <code>${escapeHtml(target)}</code>` : ""
+				}, or let Vome do it:</p>
+				<div class="row">
+					<button id="fix-external-url" class="btn"${target ? "" : " disabled"}>
+						${target ? `Set it to ${escapeHtml(target)}` : "Waiting for a remote visit"}
+					</button>
+				</div>
+				${target ? "" : `<p class="muted">Open Home Assistant on your Vome address once so we can see which name you reach it on.</p>`}
 			</div>`;
 		}
 		if (state.local_url_source === "fallback") {
@@ -235,6 +247,22 @@
 		};
 		const connectBtn = document.getElementById("ov-connect");
 		if (connectBtn) connectBtn.onclick = () => setView("link");
+		// Only present while the external-URL warning is showing.
+		const fixExternal = document.getElementById("fix-external-url");
+		if (fixExternal) fixExternal.onclick = async () => {
+			fixExternal.disabled = true;
+			try {
+				state = await api("/api/external_url", {
+					method: "POST",
+					body: JSON.stringify(withEntry({ external_url: "" })),
+				});
+				showBanner(`Home Assistant now calls itself ${(state.external_url || {}).current || ""}.`);
+				render();
+			} catch (err) {
+				fixExternal.disabled = false;
+				showBanner(String(err.message || err), true);
+			}
+		};
 	}
 
 	function localUrlNote() {
