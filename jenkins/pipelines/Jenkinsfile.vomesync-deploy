@@ -13,9 +13,14 @@ pipeline {
     agent any
 
     parameters {
+        // 'all' leads because the first choice is the default, and a
+        // push-triggered build takes the defaults. Declarative pipelines
+        // re-register their parameters on every run, so this list — not the
+        // Job DSL one in VomeHome's casc.yaml — is what sticks after the
+        // first build. Keep the two in step.
         choice(
             name: 'TARGET',
-            choices: ['dev', 'live', 'all'],
+            choices: ['all', 'dev', 'live'],
             description: 'Which service tier to deploy'
         )
         booleanParam(
@@ -43,7 +48,10 @@ pipeline {
     options {
         ansiColor('xterm')
         timestamps()
-        timeout(time: 30, unit: 'MINUTES')
+        // Generous enough to cover the live approval wait — a stage timeout
+        // cannot outlive the pipeline's. The actual work is capped per stage
+        // below, so a hung build still dies quickly rather than idling here.
+        timeout(time: 4, unit: 'HOURS')
         buildDiscarder(logRotator(numToKeepStr: '15', daysToKeepStr: '30'))
         disableConcurrentBuilds()
     }
@@ -58,20 +66,14 @@ pipeline {
             when {
                 expression { params.RUN_TESTS_FIRST }
             }
+            options {
+                timeout(time: 40, unit: 'MINUTES')
+            }
             steps {
                 build job: 'VomeSync/vomesync-ci',
                       wait: true,
                       propagate: true,
                       parameters: [booleanParam(name: 'FORCE_RUN', value: true)]
-            }
-        }
-
-        stage('Approval') {
-            when {
-                expression { params.TARGET == 'live' || params.TARGET == 'all' }
-            }
-            steps {
-                input message: "Deploy VomeSync to LIVE?", ok: "Yes, deploy to production"
             }
         }
 
@@ -111,6 +113,9 @@ pipeline {
             when {
                 expression { params.TARGET == 'dev' || params.TARGET == 'all' }
             }
+            options {
+                timeout(time: 25, unit: 'MINUTES')
+            }
             steps {
                 script {
                     def cacheFlag = params.NO_CACHE ? '--no-cache' : ''
@@ -125,9 +130,33 @@ pipeline {
             }
         }
 
+        // Deliberately *after* Deploy DEV. It used to sit ahead of every
+        // deploy stage, which meant TARGET=all gated dev behind the live
+        // approval too — a push-triggered build then deployed nothing at all
+        // until someone clicked. Dev now goes out unattended and the click
+        // buys only the live promotion, which is the whole point of the gate.
+        stage('Approval') {
+            when {
+                expression { params.TARGET == 'live' || params.TARGET == 'all' }
+            }
+            options {
+                // VomeHome learned this one the hard way: an approval sitting
+                // under a short pipeline timeout aborts every unattended
+                // deploy (see docs/reliability_runbook.md, live autodeploys).
+                // Wait for the operator instead of dying.
+                timeout(time: 3, unit: 'HOURS')
+            }
+            steps {
+                input message: "Deploy VomeSync to LIVE?", ok: "Yes, deploy to production"
+            }
+        }
+
         stage('Deploy LIVE') {
             when {
                 expression { params.TARGET == 'live' || params.TARGET == 'all' }
+            }
+            options {
+                timeout(time: 25, unit: 'MINUTES')
             }
             steps {
                 script {
