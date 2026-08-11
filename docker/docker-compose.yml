@@ -1,8 +1,21 @@
+# Docker's json-file driver keeps every byte forever unless told otherwise, and
+# there is no /etc/docker/daemon.json on this host setting a global cap. That
+# was harmless only while the webserver logged nothing at all (see the redaction
+# fix in src/utils/logger.js); with logging restored — at LOG_LEVEL=debug on
+# live — an uncapped log on a disk sitting at 88% is a slow outage waiting to
+# happen. 50 MB per service, rotated.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   vomesync-redis:
     image: redis:7-alpine
     container_name: vomesync-redis
     restart: unless-stopped
+    logging: *default-logging
     command: >
       sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
         exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD";
@@ -29,6 +42,7 @@ services:
       dockerfile: Dockerfile
     container_name: vomesync-webserver
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       vomesync-redis:
         condition: service_healthy
@@ -86,6 +100,7 @@ services:
     image: nginx:alpine
     container_name: vomesync-website
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ../website:/usr/share/nginx/html:ro
       - ./nginx/website.conf:/etc/nginx/conf.d/default.conf:ro
@@ -109,6 +124,7 @@ services:
     image: redis:7-alpine
     container_name: vomesync-redis-dev
     restart: unless-stopped
+    logging: *default-logging
     command: redis-server --appendonly yes
     volumes:
       - ../.redisdata:/data
@@ -128,6 +144,7 @@ services:
       dockerfile: Dockerfile
     container_name: vomesync-webserver-dev
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       vomesync-redis-dev:
         condition: service_healthy
@@ -169,6 +186,7 @@ services:
     image: nginx:alpine
     container_name: vomesync-website-dev
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ../website:/usr/share/nginx/html:ro
       - ./nginx/website.conf:/etc/nginx/conf.d/default.conf:ro
@@ -193,6 +211,7 @@ services:
     image: nginx:alpine
     container_name: vomesync-proxy
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - vomesync-webserver
       - vomesync-website
