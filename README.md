@@ -8,49 +8,29 @@
 
 Security audit: see `docs/SECURITY_AUDIT.html`.
 Architecture diagrams: see `docs/ARCHITECTURE.md`.
-Detailed architecture docs:
-- `docs/ARCHITECTURE_SERVER.md`
-- `docs/API.md`
-- `docs/ARCHITECTURE_INTEGRATION.md`
-- `docs/ARCHITECTURE_WEBSITE.md`
+Integration architecture: `docs/ARCHITECTURE_INTEGRATION.md`.
+The sync.vome.io API, website and Docker stack live in **[Vortitron/VomeSync-server](https://github.com/Vortitron/VomeSync-server)**.
 
 ## Project Overview
 
-VomeSync consists of four main components:
+This repository is the **Home Assistant** side of VomeSync (HACS custom repository and Supervisor add-on store URL). The public API at sync.vome.io is a separate repo.
 
-### 1. **Webserver** (`/webserver/`)
-- **Purpose**: Core API server and WebSocket handler (sync.vome.io)
-- **Technology**: Node.js, Express, WebSockets, Redis
-- **Features**: Switch creation, state management, real-time broadcasting
-- **Deployment**: Docker container with health checks
-
-### 2. **Home Assistant Integration** (`/custom_components/vomesync/`)
+### Home Assistant Integration (`/custom_components/vomesync/`)
 - **Purpose**: HACS custom integration for Home Assistant
 - **Technology**: Python, asyncio, `aiohttp`, `websockets`
-- **Features**: Config flow UI, switch/sensor entities, real-time updates, entity linking
+- **Features**: Config flow UI, switch/sensor entities, real-time updates, entity linking, relay remote access
 - **Installation**: Via HACS or manual installation
 
-### 3. **Public Website** (`/website/`)
-- **Purpose**: Community switch directory (sync.vome.io)
-- **Technology**: Vanilla HTML/CSS/JavaScript
-- **Features**: Browse public switches, search/filter, UID copying
-- **Deployment**: Static files served via Nginx
-
-### 4. **Docker Infrastructure** (`/docker/`)
-- **Purpose**: Complete deployment orchestration
-- **Technology**: Docker Compose, Nginx proxy, Redis
-- **Features**: SSL termination, load balancing, monitoring
-- **Management**: Automated deployment scripts
-
-### 5. **Official Home Assistant Add-on** (`/vome/` + root `repository.yaml`)
-- **Status**: Store-ready layout — shared integration vendored into the add-on folder
-- **Purpose**: Supervisor install path without HACS; clearer remote-access / LAN UI; future companions
+### Official Home Assistant Add-on (`/vome/` + root `repository.yaml`)
+- **Purpose**: Supervisor install path without HACS; ingress panel for remote access / LAN tunnels
 - **Add-on Store URL**: `https://github.com/Vortitron/VomeSync` (requires `repository.yaml` at repo root)
 - **Design**:
   - `vome/build.sh` syncs `custom_components/vomesync` → `vome/custom_components/vomesync` (committed; Supervisor build context cannot see the parent tree)
-  - Ingress panel for remote access / LAN tunnels
   - MCP: `ha_addon_install_vome` (+ `ha_supervisor_api`) on Supervised/HAOS targets
   - Jenkins: `VomeSync/vome-addon-ci` + `VomeSync/vome-addon-release`
+
+### Server (separate repo)
+API, WebSocket, public directory and Docker deploy: **[Vortitron/VomeSync-server](https://github.com/Vortitron/VomeSync-server)** (`/var/www/VomeSync-server` on this host).
 
 This README outlines the architecture, setup, and user flow for developers, contributors, and users.
 The project is maintained by Vortitron, with monetization via subscriptions for premium features.
@@ -355,27 +335,10 @@ configured**, so existing switch sync is unaffected. To enable end-to-end:
 - `RELAY_PORTAL_VERIFY_URL` — the portal's verify endpoint
   (default `https://vome.io/api/internal/relay/verify`).
 
-The portal side additionally needs `RELAY_DISPATCH_URL` (pointing at this
-backend's `/internal/relay/dispatch`) and `RELAY_WS_URL`
-(default `wss://sync.vome.io/ws/relay`). nginx already proxies `/ws/relay` to the
-WS upstream via the existing `/ws` location. Tests:
-`webserver/tests/unit/websocket/relayManager.test.js` and
-`webserver/tests/unit/routes/internal-routes.test.js`.
-
-### Backup & restore (Redis)
-- **What to back up**: Redis data (keys: `switch:*`, `user:*`, `key:*`, `apikey:*`, `session_token:*`, `public_switches` set, event/user sets).
-- **How**: enable Redis RDB snapshots (e.g., `save 900 1`); mount `/data` to a host path and copy the `.rdb` file; optional AOF for finer granularity if ops permits.
-- **Schedule**: nightly snapshot with 7–14 day retention; encrypt at rest; store off-host (S3 or similar) with bucket-level SSE/KMS.
-- **Restore**: stop webserver, place `.rdb` into Redis data dir, start Redis, then restart webserver; verify with `GET /api/health` and spot-check `GET /api/public-switches` and a known `GET /api/switch/<uid>`.
-- **Testing**: quarterly restore drills into a staging environment; run `npm test -- api` afterward to validate behaviour.
-
-### GDPR considerations
-- **Personal data stored**: personal keys (UUID), API keys (UUID), optional profile links, timestamps, usage events tied to keys. No names/emails unless put in descriptions/links by users.
-- **Data minimisation**: only store what is required for switch auth and activity; comments are owner/API-key only. Session tokens are short-lived and single-use.
-- **Retention**: switches and key data expire after 90 days of inactivity by default (configurable via `SWITCH_TTL_DAYS` env var). TTL is refreshed on any status read, owner listing, or state change. Backups retain at most 14 days by policy above.
-- **Rights**: `/api/delete-key` deletes a personal key and all associated switches/events; also removes from public sets. This serves erasure/export needs; add export-on-request if required.
-- **Security**: rate limiting in API, JWT for HA, API keys revocable, HTTPS via nginx. Backups must be encrypted; access to keys limited.
-- **Incident response**: if compromise suspected, rotate Redis password, revoke API keys (`/api/api-keys/:apiKey`), encourage users to regenerate personal keys, and purge session tokens (`session_token:*`).
+The portal side additionally needs `RELAY_DISPATCH_URL` (pointing at the
+server's `/internal/relay/dispatch`) and `RELAY_WS_URL`
+(default `wss://sync.vome.io/ws/relay`). Server env, forwarding rate limits,
+Redis backup and GDPR notes: **[VomeSync-server](https://github.com/Vortitron/VomeSync-server)**.
 
 ### Test Suite Status
 

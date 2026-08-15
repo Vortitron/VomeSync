@@ -4,10 +4,8 @@ These diagrams are intentionally high‑level and **omit sensitive details** (in
 
 ## Detailed architecture docs
 
-- `docs/ARCHITECTURE_SERVER.md` — deployment + server internals
-- `docs/API.md` — API endpoints + flows
+- [VomeSync-server](https://github.com/Vortitron/VomeSync-server) — sync.vome.io API, website, Docker (`docs/ARCHITECTURE_SERVER.md`, `docs/API.md`, `docs/ARCHITECTURE_WEBSITE.md` in that repo)
 - `docs/ARCHITECTURE_INTEGRATION.md` — Home Assistant integration + menu map
-- `docs/ARCHITECTURE_WEBSITE.md` — website UI + data flows
 
 ## 1) Deployment Topology (Server + Backend Apps)
 

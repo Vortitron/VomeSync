@@ -1,18 +1,29 @@
+# Leftover working copies after the split to Vortitron/VomeSync-server.
+# Keep on disk so the live compose stack still runs until cutover.
+/webserver/
+/website/
+/docker/
+/favicon/
+/tests/e2e/
+/test-backend.sh
+/docs/API.md
+/docs/ARCHITECTURE_SERVER.md
+/docs/ARCHITECTURE_WEBSITE.md
+/docs/OPERATIONS.md
+/docs/SETUP.md
+/jenkins/pipelines/Jenkinsfile.vomesync-ci
+/jenkins/pipelines/Jenkinsfile.vomesync-deploy
+/jenkins/pipelines/Jenkinsfile.vomesync-e2e
 node_modules
 venv
-webserver/.env
-docker/.env
 .redisdata/
-webserver/media/
 custom_components/vomesync/__pycache__/
 hacs-addon/tests/__pycache__/
+vome/custom_components/vomesync/__pycache__/
 __pycache__/
 .pytest_cache
 .coverage
 coverage.xml
-webserver/coverage/
-backups/20260610_193317/.env
-backups/20260610_193317/redis_dump.rdb
 .agents/skills/*
 skills-lock.json
 */.env

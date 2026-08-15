@@ -1,9 +1,0 @@
-iVomeSync — the relay/integration component of VomeHome (vome.io).	
-iYour HA dials out to this host; agents and the portal broker calls	
-idown that connection. Nothing here is agent-callable directly.	
-i	
-hVomeHome agent directory (MCP, API, trials)	URL:https://vome.io/.well-known/agent.gopher
-hllms.txt (same content, llms.txt convention)	URL:https://vome.io/llms.txt
-hVomeSync source + docs	URL:https://github.com/Vortitron/VomeSync
-hwebsite (human-readable)	URL:https://sync.vome.io/
-.
