@@ -15,6 +15,11 @@ pipeline {
         buildDiscarder(logRotator(numToKeepStr: '10', daysToKeepStr: '14'))
     }
 
+    triggers {
+        pollSCM('H/5 * * * *')
+        githubPush()
+    }
+
     parameters {
         booleanParam(
             name: 'FORCE_RUN',
