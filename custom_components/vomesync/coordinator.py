@@ -39,6 +39,20 @@ _LINKED_TRIGGER_BLOCK_SECONDS = 30.0
 
 _LINKED_ENTITY_SUPPRESSION_SECONDS = 2.0
 
+# A subscription whose switch has gone from the server is permanent: the
+# server keeps switch state in Redis under a TTL, and once that lapses
+# nothing recreates it.  The subscription stays in the config entry, though,
+# so the coordinator went on asking for its status every
+# UPDATE_INTERVAL_SECONDS -- 2 880 requests a day that can only ever 404.
+# One stale subscription was accounting for a fifth of all 404s on the
+# server.  The warning about it was already throttled; the request was not.
+#
+# Backing off leaves the entity exactly as it was (absent from the data, so
+# it reads unavailable) rather than holding a stale state alive: the switch
+# really has gone, and its owner should be able to see that and remove it.
+_SUB_MISSES_BEFORE_BACKOFF = 3
+_SUB_BACKOFF_MAX_SECONDS = 1800.0
+
 _TOGGLE_COOLDOWN_SECONDS = 1.0
 
 _LINK_CFG_ENTITIES = "entities"
@@ -132,6 +146,10 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		self._warning_throttle: Dict[str, float] = {}
 		self._last_owned_switch_count: Optional[int] = None
 
+		# Backoff for subscriptions the server no longer knows about.
+		self._sub_misses: Dict[str, int] = {}
+		self._sub_next_poll: Dict[str, float] = {}
+
 	async def _async_update_data(self) -> Dict[str, Any]:
 		"""Fetch data from API."""
 		try:
@@ -210,9 +228,14 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					sub_uid_to_name[uid] = name or DEFAULT_SWITCH_NAME
 			
 			subscriptions_data: Dict[str, Dict[str, Any]] = {}
+			now = time.monotonic()
 			for uid, name in sub_uid_to_name.items():
+				if now < self._sub_next_poll.get(uid, 0.0):
+					continue
 				status = await self.api_client.get_switch_status(uid)
 				if status:
+					self._sub_misses.pop(uid, None)
+					self._sub_next_poll.pop(uid, None)
 					subscriptions_data[uid] = {
 						**status,
 						"name": name,
@@ -223,14 +246,29 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					if self._websocket_connections.get(uid) is not True:
 						await self._ensure_websocket_connection(uid)
 				else:
+					misses = self._sub_misses.get(uid, 0) + 1
+					self._sub_misses[uid] = misses
+					if misses >= _SUB_MISSES_BEFORE_BACKOFF:
+						delay = min(
+							UPDATE_INTERVAL_SECONDS
+							* 2 ** (misses - _SUB_MISSES_BEFORE_BACKOFF + 1),
+							_SUB_BACKOFF_MAX_SECONDS,
+						)
+						self._sub_next_poll[uid] = now + delay
+					else:
+						delay = 0
 					log_throttled(
 						_LOGGER.warning,
 						self._warning_throttle,
 						f"sub_status_missing:{uid}",
 						600,
-						"Imported subscription %s (uid=%s) returned no status from API",
+						"Imported subscription %s (uid=%s) returned no status from API "
+						"(%d in a row; next check in %ds). Remove the subscription if "
+						"the switch is gone for good.",
 						name,
-						uid
+						uid,
+						misses,
+						int(delay) or UPDATE_INTERVAL_SECONDS,
 					)
 			
 			self._last_owned_switch_count = owned_count
