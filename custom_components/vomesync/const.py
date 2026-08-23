@@ -129,6 +129,18 @@ LAN_TCP_TOKEN_MAX_TTL = 86400
 # than buffered unbounded; the frontend WebSocket carries small JSON frames.
 RELAY_FORWARD_HTTP_TIMEOUT = 60
 RELAY_FORWARD_MAX_BODY = 25 * 1024 * 1024
+# Some Home Assistant endpoints answer with a response that never ends --
+# /api/hassio/supervisor/logs/follow, anything Server-Sent Events, a camera
+# stream.  Forwarding buffers the whole body before replying, so those can
+# only ever run out the clock and surface as a blank 502 a minute later,
+# with nothing to say which of the two it was.
+#
+# Reading the body therefore gets its own budget, well under the overall
+# timeout, so the browser is told what happened instead of being left to hang
+# for a minute.  It still has to be generous enough for a legitimate body up
+# to the cap below: 20s for 25 MiB from a local Home Assistant is ample, and
+# the connect/response phases keep the remainder of the overall timeout.
+RELAY_FORWARD_BODY_TIMEOUT = 20
 # Exact path portions (query excluded) a browser WebSocket bridge may open.
 RELAY_FORWARD_WS_PATHS = ("/api/websocket",)
 # Hop-by-hop headers are connection-scoped and must not be forwarded across the

@@ -68,6 +68,7 @@ from .const import (
 	RELAY_DEVICE_TOKEN_PATH,
 	RELAY_FORWARD_HTTP_TIMEOUT,
 	RELAY_FORWARD_MAX_BODY,
+	RELAY_FORWARD_BODY_TIMEOUT,
 	FORWARD_HOST_HEADER,
 	FORWARD_HOST_KEY,
 	RELAY_FORWARD_STRIP_HEADERS,
@@ -159,6 +160,49 @@ def _filter_forward_headers(pairs: Any) -> list[list[str]]:
 			continue
 		out.append([name, value])
 	return out
+
+
+async def _read_forwardable_body(resp) -> tuple[Optional[bytes], Optional[str]]:
+	"""Read a response body the relay can actually carry.
+
+	Returns ``(body, None)`` or ``(None, reason)``.
+
+	``resp.read()`` waits for the body to end.  A Home Assistant endpoint whose
+	body never ends -- ``/api/hassio/supervisor/logs/follow``, Server-Sent
+	Events, a camera stream -- therefore consumed the whole forward timeout and
+	surfaced as a blank 502 a minute later, indistinguishable from the instance
+	being down.  Forwarding buffers whole responses, so these genuinely cannot
+	be carried; the point here is to say so straight away and say which it is.
+
+	Server-Sent Events announce themselves in the content type, so those are
+	refused outright.  Everything else gets a read budget well short of the
+	overall timeout: a body still arriving after that is either a stream or so
+	slow it is not worth waiting on, and either way the browser is better told
+	than left hanging.  A declared Content-Length over the cap is refused
+	before a byte is read, rather than after buffering 25 MiB.
+	"""
+	content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+	if content_type == "text/event-stream":
+		return None, (
+			"That page streams updates continuously, which cannot be carried "
+			"over the relay."
+		)
+
+	declared = resp.headers.get("Content-Length")
+	if declared is not None and declared.strip().isdigit():
+		if int(declared) > RELAY_FORWARD_MAX_BODY:
+			return None, "Response body too large to forward."
+
+	try:
+		raw = await asyncio.wait_for(resp.read(), timeout=RELAY_FORWARD_BODY_TIMEOUT)
+	except asyncio.TimeoutError:
+		return None, (
+			"That page did not finish loading. It may stream continuously, like a "
+			"live log or a camera feed, which cannot be carried over the relay."
+		)
+	if len(raw) > RELAY_FORWARD_MAX_BODY:
+		return None, "Response body too large to forward."
+	return raw, None
 
 
 # ── Local core URL resolution ────────────────────────────────────────────────
@@ -675,9 +719,9 @@ class RelayClient:
 				allow_redirects=False,
 				timeout=aiohttp.ClientTimeout(total=RELAY_FORWARD_HTTP_TIMEOUT),
 			) as resp:
-				raw = await resp.read()
-				if len(raw) > RELAY_FORWARD_MAX_BODY:
-					return 0, None, None, "Response body too large to forward."
+				raw, refusal = await _read_forwardable_body(resp)
+				if refusal is not None:
+					return 0, None, None, refusal
 				out_headers = _filter_forward_headers(resp.headers.items())
 				return resp.status, out_headers, base64.b64encode(raw).decode("ascii"), None
 		except asyncio.TimeoutError:
