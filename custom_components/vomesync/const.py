@@ -110,6 +110,12 @@ RELAY_ALLOWED_METHODS = ("GET", "POST", "PUT", "DELETE")
 # injects no token; the user signs in to their Home Assistant as normal.
 RELAY_WS_MSG_HTTP_PROXY = "http_proxy"
 RELAY_WS_MSG_HTTP_PROXY_RESPONSE = "http_proxy_response"
+# A response whose body has not finished arriving goes back in pieces: the
+# head on the response above with ``streaming: true``, then chunks, then an
+# end.  Abort travels the other way, when the browser stops listening.
+RELAY_WS_MSG_HTTP_PROXY_CHUNK = "http_proxy_chunk"
+RELAY_WS_MSG_HTTP_PROXY_END = "http_proxy_end"
+RELAY_WS_MSG_HTTP_PROXY_ABORT = "http_proxy_abort"
 RELAY_WS_MSG_WS_OPEN = "ws_open"
 RELAY_WS_MSG_WS_OPEN_ACK = "ws_open_ack"
 RELAY_WS_MSG_WS_DATA = "ws_data"

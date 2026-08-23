@@ -86,6 +86,9 @@ from .const import (
 	RELAY_WS_MSG_HELLO,
 	RELAY_WS_MSG_HTTP_PROXY,
 	RELAY_WS_MSG_HTTP_PROXY_RESPONSE,
+	RELAY_WS_MSG_HTTP_PROXY_ABORT,
+	RELAY_WS_MSG_HTTP_PROXY_CHUNK,
+	RELAY_WS_MSG_HTTP_PROXY_END,
 	RELAY_WS_MSG_MINT_LAN_TCP_TOKEN,
 	RELAY_WS_MSG_MINT_LAN_TCP_TOKEN_RESPONSE,
 	RELAY_WS_MSG_PING,
@@ -162,7 +165,55 @@ def _filter_forward_headers(pairs: Any) -> list[list[str]]:
 	return out
 
 
-async def _read_forwardable_body(resp) -> tuple[Optional[bytes], Optional[str]]:
+class _StreamSink:
+	"""Carries one forwarded response back in pieces instead of all at once.
+
+	Used only for a body that has not finished arriving by the time the read
+	budget runs out. Everything that completes promptly still goes back whole,
+	which keeps the ordinary path -- and the header rewriting that happens
+	after it -- exactly as it was.
+	"""
+
+	def __init__(self, client, ws, request_id):
+		self._client = client
+		self._ws = ws
+		self._request_id = request_id
+		self.started = False
+		self.aborted = False
+
+	async def begin(self, status: int, headers: Any) -> None:
+		"""Send the head. The body follows as chunks."""
+		self.started = True
+		await self._client._send(self._ws, {
+			"type": RELAY_WS_MSG_HTTP_PROXY_RESPONSE,
+			"requestId": self._request_id,
+			"status": status,
+			"headers": headers,
+			"streaming": True,
+		})
+
+	async def chunk(self, data: bytes) -> None:
+		if self.aborted or not data:
+			return
+		await self._client._send(self._ws, {
+			"type": RELAY_WS_MSG_HTTP_PROXY_CHUNK,
+			"requestId": self._request_id,
+			"dataB64": base64.b64encode(data).decode("ascii"),
+		})
+
+	async def finish(self, error: Optional[str] = None) -> None:
+		message: dict[str, Any] = {
+			"type": RELAY_WS_MSG_HTTP_PROXY_END,
+			"requestId": self._request_id,
+		}
+		if error:
+			message["error"] = error
+		await self._client._send(self._ws, message)
+
+
+async def _read_forwardable_body(
+	resp, *, sink: Optional["_StreamSink"] = None
+) -> tuple[Optional[bytes], Optional[str]]:
 	"""Read a response body the relay can actually carry.
 
 	Returns ``(body, None)`` or ``(None, reason)``.
@@ -182,27 +233,81 @@ async def _read_forwardable_body(resp) -> tuple[Optional[bytes], Optional[str]]:
 	before a byte is read, rather than after buffering 25 MiB.
 	"""
 	content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-	if content_type == "text/event-stream":
-		return None, (
-			"That page streams updates continuously, which cannot be carried "
-			"over the relay."
-		)
+	is_event_stream = content_type == "text/event-stream"
 
 	declared = resp.headers.get("Content-Length")
-	if declared is not None and declared.strip().isdigit():
-		if int(declared) > RELAY_FORWARD_MAX_BODY:
-			return None, "Response body too large to forward."
+	declared_over_cap = (
+		declared is not None
+		and declared.strip().isdigit()
+		and int(declared) > RELAY_FORWARD_MAX_BODY
+	)
 
-	try:
-		raw = await asyncio.wait_for(resp.read(), timeout=RELAY_FORWARD_BODY_TIMEOUT)
-	except asyncio.TimeoutError:
-		return None, (
-			"That page did not finish loading. It may stream continuously, like a "
-			"live log or a camera feed, which cannot be carried over the relay."
-		)
-	if len(raw) > RELAY_FORWARD_MAX_BODY:
-		return None, "Response body too large to forward."
-	return raw, None
+	if sink is None:
+		# No way to send a body in pieces: refuse what cannot be buffered, and
+		# say which of the two it is rather than running out the clock.
+		if is_event_stream:
+			return None, (
+				"That page streams updates continuously, which cannot be carried "
+				"over the relay."
+			)
+		if declared_over_cap:
+			return None, "Response body too large to forward."
+		try:
+			raw = await asyncio.wait_for(resp.read(), timeout=RELAY_FORWARD_BODY_TIMEOUT)
+		except asyncio.TimeoutError:
+			return None, (
+				"That page did not finish loading. It may stream continuously, like "
+				"a live log or a camera feed, which cannot be carried over the relay."
+			)
+		if len(raw) > RELAY_FORWARD_MAX_BODY:
+			return None, "Response body too large to forward."
+		return raw, None
+
+	headers = _filter_forward_headers(resp.headers.items())
+
+	# Known up front to be uncarryable whole: start streaming without waiting
+	# to find out the slow way.
+	if is_event_stream or declared_over_cap:
+		await sink.begin(resp.status, headers)
+		await _pump(resp, sink)
+		return None, None
+
+	# Otherwise buffer, but only for as long as the budget allows. A body that
+	# finishes in time goes back whole, so the ordinary path -- and everything
+	# that happens to a whole response afterwards -- is untouched. One that
+	# does not is handed over mid-flight, keeping what has already been read.
+	chunks: list[bytes] = []
+	total = 0
+	deadline = asyncio.get_event_loop().time() + RELAY_FORWARD_BODY_TIMEOUT
+	while True:
+		remaining = deadline - asyncio.get_event_loop().time()
+		if remaining <= 0:
+			break
+		try:
+			chunk = await asyncio.wait_for(resp.content.readany(), timeout=remaining)
+		except asyncio.TimeoutError:
+			break
+		if not len(chunk):
+			return b"".join(chunks), None
+		chunks.append(chunk)
+		total += len(chunk)
+		if total > RELAY_FORWARD_MAX_BODY:
+			break
+
+	await sink.begin(resp.status, headers)
+	for chunk in chunks:
+		await sink.chunk(chunk)
+	await _pump(resp, sink)
+	return None, None
+
+
+async def _pump(resp, sink: "_StreamSink") -> None:
+	"""Send the rest of a response body as chunks until it ends or is aborted."""
+	while not sink.aborted:
+		chunk = await resp.content.readany()
+		if not len(chunk):
+			return
+		await sink.chunk(chunk)
 
 
 # ── Local core URL resolution ────────────────────────────────────────────────
@@ -446,6 +551,9 @@ class RelayClient:
 		# socket (the reverse direction of ha_rpc/http_proxy/ws_open, which are
 		# all backend-initiated) — currently only mint_lan_tcp_token.
 		self._pending_requests: dict[str, asyncio.Future] = {}
+		# Streaming forwards in flight, so an abort from the backend can find
+		# the read it needs to stop: requestId -> _StreamSink.
+		self._streaming: dict[Any, "_StreamSink"] = {}
 		# Serialise writes to the single relay socket: HTTP responses and many
 		# concurrent WS frames share it, and aiohttp does not guard interleaving.
 		self._send_lock = asyncio.Lock()
@@ -546,6 +654,12 @@ class RelayClient:
 			await self._handle_ws_close(data)
 		elif mtype == RELAY_WS_MSG_PING:
 			await self._send(ws, {"type": RELAY_WS_MSG_PONG})
+		elif mtype == RELAY_WS_MSG_HTTP_PROXY_ABORT:
+			# The browser stopped listening. Without this a closed tab leaves a
+			# log tail being read forever, one open request per abandoned page.
+			sink = self._streaming.get(data.get("requestId"))
+			if sink is not None:
+				sink.aborted = True
 		elif mtype == RELAY_WS_MSG_HELLO:
 			_LOGGER.debug("Relay (%s): hello acknowledged", self._server_id)
 		elif mtype == RELAY_WS_MSG_MINT_LAN_TCP_TOKEN_RESPONSE:
@@ -587,7 +701,28 @@ class RelayClient:
 		"""
 		request_id = data.get("requestId")
 		self._note_forward_host(data.get("headers"))
-		status, headers, body_b64, error = await self._execute_http_proxy(data)
+		# Only offer a sink when the backend said it can take a response in
+		# pieces. An older backend does not send `stream`, and would be left
+		# holding a head with no body it understands.
+		sink = (
+			_StreamSink(self, ws, request_id)
+			if data.get("stream") and request_id is not None
+			else None
+		)
+		if sink is not None:
+			self._streaming[request_id] = sink
+		try:
+			status, headers, body_b64, error = await self._execute_http_proxy(
+				data, sink=sink
+			)
+		finally:
+			if sink is not None:
+				self._streaming.pop(request_id, None)
+		# A started stream has already sent its head and body; all that is left
+		# is to close it off.
+		if sink is not None and sink.started:
+			await sink.finish(error)
+			return
 		response: dict[str, Any] = {
 			"type": RELAY_WS_MSG_HTTP_PROXY_RESPONSE,
 			"requestId": request_id,
@@ -621,7 +756,7 @@ class RelayClient:
 				return
 
 	async def _execute_http_proxy(
-		self, data: dict
+		self, data: dict, *, sink: Optional["_StreamSink"] = None
 	) -> tuple[int, Optional[list], Optional[str], Optional[str]]:
 		"""Run one forwarded HTTP request; return ``(status, headers, bodyB64, error)``.
 
@@ -658,6 +793,7 @@ class RelayClient:
 			method, self.local_url + path, data,
 			error_timeout="Local Home Assistant timed out.",
 			error_client="Local Home Assistant error",
+			sink=sink,
 		)
 
 	async def _execute_lan_http_proxy(
@@ -695,8 +831,15 @@ class RelayClient:
 		*,
 		error_timeout: str,
 		error_client: str,
+		sink: Optional["_StreamSink"] = None,
 	) -> tuple[int, Optional[list], Optional[str], Optional[str]]:
-		"""Shared HTTP forward to ``url`` (local HA or a LAN device)."""
+		"""Shared HTTP forward to ``url`` (local HA or a LAN device).
+
+		With a ``sink``, a body still arriving when the read budget runs out is
+		handed back in pieces rather than refused.  A LAN route passes no sink:
+		its response headers are rewritten after this returns, which streaming
+		would bypass.
+		"""
 		req_headers = {
 			name: value for name, value in _normalise_header_input(data.get("headers"))
 			if name.lower() not in RELAY_FORWARD_STRIP_HEADERS
@@ -719,7 +862,10 @@ class RelayClient:
 				allow_redirects=False,
 				timeout=aiohttp.ClientTimeout(total=RELAY_FORWARD_HTTP_TIMEOUT),
 			) as resp:
-				raw, refusal = await _read_forwardable_body(resp)
+				raw, refusal = await _read_forwardable_body(resp, sink=sink)
+				if sink is not None and sink.started:
+					# Already delivered, head and body both.
+					return resp.status, None, None, None
 				if refusal is not None:
 					return 0, None, None, refusal
 				out_headers = _filter_forward_headers(resp.headers.items())

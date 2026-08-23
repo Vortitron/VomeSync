@@ -112,3 +112,149 @@ async def test_a_bad_content_length_does_not_break_the_forward():
 	body, refusal = await relay_client._read_forwardable_body(resp)
 	assert refusal is None
 	assert body == b"ok"
+
+
+# ── Streaming: carrying a body that has not finished arriving ────────────────
+
+
+class FakeContent:
+	"""``resp.content`` — yields queued chunks, then EOF, then blocks forever."""
+
+	def __init__(self, chunks, stall_before=None):
+		self._chunks = list(chunks)
+		self._stall_before = stall_before
+		self._stalled = False
+		self.reads = 0
+
+	async def readany(self):
+		# One-shot: a tail goes quiet, the read budget lapses, then it speaks
+		# again. A permanent stall would hang the pump, which has no idle
+		# timeout on purpose -- an idle log tail is not a broken one.
+		if (
+			self._stall_before is not None
+			and not self._stalled
+			and self.reads == self._stall_before
+		):
+			self._stalled = True
+			await asyncio.Event().wait()  # cancelled by the caller's budget
+		self.reads += 1
+		if self._chunks:
+			return self._chunks.pop(0)
+		return b""
+
+
+class StreamingResponse(FakeResponse):
+	def __init__(self, headers=None, chunks=(), stall_before=None, status=200):
+		super().__init__(headers=headers)
+		self.status = status
+		self.content = FakeContent(chunks, stall_before=stall_before)
+
+
+class RecordingSink:
+	"""Stands in for _StreamSink, recording the frames it would send."""
+
+	def __init__(self, abort_after=None):
+		self.started = False
+		self.aborted = False
+		self.head = None
+		self.chunks = []
+		self._abort_after = abort_after
+
+	async def begin(self, status, headers):
+		self.started = True
+		self.head = (status, headers)
+
+	async def chunk(self, data):
+		if self.aborted:
+			return
+		self.chunks.append(data)
+		if self._abort_after is not None and len(self.chunks) >= self._abort_after:
+			self.aborted = True
+
+
+@pytest.mark.asyncio
+async def test_a_body_that_finishes_in_time_still_goes_back_whole(monkeypatch):
+	"""The ordinary case must not change shape just because streaming exists.
+
+	Everything that happens to a whole response afterwards — header rewriting
+	for LAN routes, the size cap — depends on it coming back in one piece.
+	"""
+	sink = RecordingSink()
+	resp = StreamingResponse(
+		headers={"Content-Type": "text/html"}, chunks=[b"<html>", b"</html>"]
+	)
+	body, refusal = await relay_client._read_forwardable_body(resp, sink=sink)
+
+	assert refusal is None
+	assert body == b"<html></html>"
+	assert sink.started is False, 'a prompt response must not be streamed'
+
+
+@pytest.mark.asyncio
+async def test_an_event_stream_is_streamed_rather_than_refused(monkeypatch):
+	"""With somewhere to send pieces, SSE is carried instead of turned away."""
+	sink = RecordingSink()
+	resp = StreamingResponse(
+		headers={"Content-Type": "text/event-stream"},
+		chunks=[b"data: one\n\n", b"data: two\n\n"],
+	)
+	body, refusal = await relay_client._read_forwardable_body(resp, sink=sink)
+
+	assert refusal is None and body is None
+	assert sink.started is True
+	assert sink.head[0] == 200
+	assert sink.chunks == [b"data: one\n\n", b"data: two\n\n"]
+
+
+@pytest.mark.asyncio
+async def test_a_tail_that_goes_quiet_is_handed_over_mid_flight(monkeypatch):
+	"""The /logs/follow case: some output, then a wait, then more.
+
+	What was already read has to survive the switch, or the page loses its
+	first screenful.
+	"""
+	monkeypatch.setattr(relay_client, "RELAY_FORWARD_BODY_TIMEOUT", 0.05)
+	sink = RecordingSink()
+	# Two chunks arrive, then the tail goes quiet past the budget.
+	resp = StreamingResponse(
+		headers={"Content-Type": "text/plain"},
+		chunks=[b"line one\n", b"line two\n", b"line three\n"],
+		stall_before=2,
+	)
+	body, refusal = await relay_client._read_forwardable_body(resp, sink=sink)
+
+	assert refusal is None and body is None
+	assert sink.started is True
+	assert b"".join(sink.chunks).startswith(b"line one\nline two\n"), \
+		'output read before the switch must not be dropped'
+
+
+@pytest.mark.asyncio
+async def test_an_oversize_body_is_streamed_instead_of_refused():
+	"""The cap exists because buffering needs one; streaming does not."""
+	sink = RecordingSink()
+	resp = StreamingResponse(
+		headers={
+			"Content-Type": "video/mp4",
+			"Content-Length": str(relay_client.RELAY_FORWARD_MAX_BODY + 1),
+		},
+		chunks=[b"video-bytes"],
+	)
+	body, refusal = await relay_client._read_forwardable_body(resp, sink=sink)
+
+	assert refusal is None and body is None
+	assert sink.started is True
+	assert sink.chunks == [b"video-bytes"]
+
+
+@pytest.mark.asyncio
+async def test_an_abort_stops_the_pump():
+	"""A closed tab must stop the read, or the tail is carried for ever."""
+	sink = RecordingSink(abort_after=1)
+	resp = StreamingResponse(
+		headers={"Content-Type": "text/event-stream"},
+		chunks=[b"one", b"two", b"three"],
+	)
+	await relay_client._read_forwardable_body(resp, sink=sink)
+
+	assert sink.chunks == [b"one"], 'the pump kept reading after the abort'
