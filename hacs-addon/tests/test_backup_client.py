@@ -92,13 +92,53 @@ class TestGet:
 
 
 class TestUpload:
+	"""Uploads stream; they are not multipart and are never buffered whole.
+
+	Multipart made the portal parse the entire body before its own streaming
+	store ran, spooling every byte to a temp file first. On a 4 GB tmpfs,
+	against backups several times that, it filled the disk and 500'd every
+	upload -- so the shape of this request is load-bearing, not cosmetic.
+	"""
+
+	@staticmethod
+	async def _sent_body(session):
+		"""The bytes the client actually put on the wire."""
+		body = session.post.call_args[1]["data"]
+		assert not isinstance(body, aiohttp.FormData), "must not be multipart"
+		return b"".join([chunk async for chunk in body])
+
 	@pytest.mark.asyncio
-	async def test_posts_multipart_with_id_and_metadata(self):
+	async def test_frames_the_metadata_ahead_of_the_archive(self):
 		session = _session_with(_response(payload={"backup": {"backup_id": "a"}}))
 		await _client(session).async_upload("a", {"date": "2026-08-07"}, b"tar")
-		_args, kwargs = session.post.call_args
-		form = kwargs["data"]
-		assert isinstance(form, aiohttp.FormData)
+
+		body = await self._sent_body(session)
+		length = int.from_bytes(body[:4], "big")
+		assert json.loads(body[4:4 + length]) == {"date": "2026-08-07"}
+		assert body[4 + length:] == b"tar"
+
+	@pytest.mark.asyncio
+	async def test_the_id_travels_in_a_header(self):
+		session = _session_with(_response(payload={"backup": {}}))
+		await _client(session).async_upload("a", {}, b"tar")
+
+		headers = session.post.call_args[1]["headers"]
+		assert headers["X-Backup-Id"] == "a"
+		assert headers["Content-Type"] == "application/vnd.vome.backup"
+
+	@pytest.mark.asyncio
+	async def test_an_async_iterator_is_consumed_a_chunk_at_a_time(self):
+		"""What Home Assistant's backup platform actually hands us."""
+		async def _chunks():
+			for part in (b"aa", b"bb", b"cc"):
+				yield part
+
+		session = _session_with(_response(payload={"backup": {}}))
+		await _client(session).async_upload("a", {}, _chunks())
+
+		body = await self._sent_body(session)
+		length = int.from_bytes(body[:4], "big")
+		assert body[4 + length:] == b"aabbcc"
 
 	@pytest.mark.asyncio
 	async def test_upload_timeout_allows_a_large_archive(self):

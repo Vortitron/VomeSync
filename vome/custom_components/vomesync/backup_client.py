@@ -13,6 +13,7 @@ recovers the owning server from it.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from typing import Any, AsyncIterator, Optional
@@ -32,6 +33,20 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 AGENT_PATH = "/api/sync/agent/backups"
+
+# Uploads are sent as a stream with the metadata framed at the head of the
+# body, not as multipart.  Multipart made the portal buffer the entire archive
+# to a temporary file before its own streaming store ever ran -- on a 4 GB
+# tmpfs, against backups several times that, which filled the disk and 500'd
+# every upload.  Framing keeps both ends streaming end to end.
+#
+# Layout: 4-byte big-endian metadata length, that many bytes of JSON, then the
+# archive.  Metadata is framed rather than sent as a header because HA's
+# ``extra_metadata`` is free-form and a large one would breach the server's
+# 8 KB header ceiling -- a limit that would only ever bite whoever had the
+# most add-ons.
+STREAM_CONTENT_TYPE = "application/vnd.vome.backup"
+_UPLOAD_CHUNK = 1024 * 1024
 
 # Uploads are streamed, so the timeout has to cover a multi-gigabyte archive on
 # a domestic uplink rather than a typical API call.
@@ -144,20 +159,41 @@ class VomeBackupClient:
 	async def async_upload(
 		self, backup_id: str, metadata: dict, stream: Any
 	) -> dict:
-		"""Stream ``stream`` up as a multipart upload.
+		"""Stream ``stream`` up, metadata framed at the head of the body.
 
-		``stream`` may be an async iterator or a file-like; aiohttp accepts both
-		as a payload, so the archive is never fully buffered here.
+		``stream`` may be an async iterator (what Home Assistant's backup
+		platform hands us) or a plain file-like; both are read a chunk at a
+		time, so the archive is never held in memory at either end.
 		"""
-		form = aiohttp.FormData()
-		form.add_field("backup_id", backup_id)
-		form.add_field("metadata", json.dumps(metadata or {}))
-		form.add_field(
-			"backup", stream, filename=f"{backup_id}.tar",
-			content_type="application/x-tar",
-		)
+		blob = json.dumps(metadata or {}).encode()
+
+		async def _body():
+			yield len(blob).to_bytes(4, "big") + blob
+			if isinstance(stream, (bytes, bytearray, memoryview)):
+				# Not what Home Assistant sends, but a caller handing over a
+				# whole archive in memory should upload it, not raise
+				# AttributeError on a missing .read().
+				yield bytes(stream)
+				return
+			if hasattr(stream, "__aiter__"):
+				async for chunk in stream:
+					if chunk:
+						yield chunk
+				return
+			while True:
+				chunk = stream.read(_UPLOAD_CHUNK)
+				if inspect.isawaitable(chunk):
+					chunk = await chunk
+				if not chunk:
+					return
+				yield chunk
+
+		headers = dict(self._headers)
+		headers["X-Backup-Id"] = backup_id
+		headers["Content-Type"] = STREAM_CONTENT_TYPE
+
 		async with self._session.post(
-			self._url(), headers=self._headers, data=form, timeout=UPLOAD_TIMEOUT
+			self._url(), headers=headers, data=_body(), timeout=UPLOAD_TIMEOUT
 		) as resp:
 			await self._raise_for_status(resp)
 			data = await resp.json()
