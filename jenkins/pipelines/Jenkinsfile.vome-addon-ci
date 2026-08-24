@@ -15,8 +15,14 @@ pipeline {
         buildDiscarder(logRotator(numToKeepStr: '10', daysToKeepStr: '14'))
     }
 
+    // A declarative triggers block self-registers on the job every time this
+    // pipeline runs, which is why pollSCM is not here: it would put the trigger
+    // straight back after any change made in casc.yaml.  It is gone because the
+    // git plugin reports "Working Directory does not exist -> Changes found" on
+    // every poll of these jobs, so a five-minute poll ran a full CI build every
+    // five minutes forever -- thousands of them -- whether or not anything had
+    // changed.  The GitHub webhook is what triggers these jobs.
     triggers {
-        pollSCM('H/5 * * * *')
         githubPush()
     }
 

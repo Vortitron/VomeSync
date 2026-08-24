@@ -53,6 +53,7 @@
 					"cleanup_orphaned_devices": "🧹 Clean up orphaned devices",
 					"edit_connection": "⚙️ Edit connection URLs",
 					"relay_server": "🛰️ Change the relay server",
+					"vome_backups": "💾 Back up to Vome",
 					"back": "← Back"
 				}
 			},
@@ -388,6 +389,16 @@
 				"data": {
 					"confirm": "Confirm deletion"
 				}
+			},
+			"vome_backups": {
+				"title": "Back up to Vome",
+				"description": "{info}",
+				"data": {
+					"secret": "Connection key"
+				},
+				"data_description": {
+					"secret": "The key from vome.io. Leave empty to disconnect."
+				}
 			}
 		},
 		"error": {
@@ -417,7 +428,8 @@
 			"lan_port_invalid": "Port must be between 1 and 65535.",
 			"lan_scheme_invalid": "Scheme must be http or https.",
 			"lan_route_invalid": "That LAN route is not valid.",
-			"lan_too_many": "You already have the maximum number of LAN routes."
+			"lan_too_many": "You already have the maximum number of LAN routes.",
+			"invalid_backup_key": "That does not look like a Vome connection key — they start with \"vbk_\". Copy the whole value from vome.io."
 		},
 		"abort": {
 			"no_switches": "No switches to manage. Create or subscribe to switches first.",

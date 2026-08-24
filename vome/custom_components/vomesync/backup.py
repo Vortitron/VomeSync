@@ -18,13 +18,12 @@ from homeassistant.components.backup import AgentBackup, BackupAgent, BackupAgen
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .backup_client import VomeBackupClient, VomeBackupError
-from .const import (
-	CONF_RELAY,
-	CONF_RELAY_SECRET,
-	CONF_RELAY_SERVER_ID,
-	DOMAIN,
+from .backup_client import (
+	VomeBackupClient,
+	VomeBackupError,
+	credentials_for_entry,
 )
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,13 +31,11 @@ DATA_LISTENERS = "_backup_agent_listeners"
 
 
 def _linked_entries(hass: HomeAssistant) -> list:
-	"""Config entries whose Home Assistant is linked to a Vome account."""
-	entries = []
-	for entry in hass.config_entries.async_entries(DOMAIN):
-		relay = (entry.options or {}).get(CONF_RELAY) or {}
-		if relay.get(CONF_RELAY_SERVER_ID) and relay.get(CONF_RELAY_SECRET):
-			entries.append(entry)
-	return entries
+	"""Config entries that can store backups in a Vome account."""
+	return [
+		entry for entry in hass.config_entries.async_entries(DOMAIN)
+		if all(credentials_for_entry(entry))
+	]
 
 
 async def async_get_backup_agents(hass: HomeAssistant, **kwargs: Any) -> list[BackupAgent]:
@@ -80,11 +77,11 @@ class VomeBackupAgent(BackupAgent):
 	def __init__(self, hass: HomeAssistant, entry) -> None:
 		self._hass = hass
 		self._entry = entry
-		relay = (entry.options or {}).get(CONF_RELAY) or {}
-		self._server_id = relay.get(CONF_RELAY_SERVER_ID) or ""
+		server_id, secret = credentials_for_entry(entry)
+		self._server_id = server_id or ""
 		self._client = VomeBackupClient(
 			async_get_clientsession(hass),
-			secret=relay.get(CONF_RELAY_SECRET) or "",
+			secret=secret or "",
 		)
 		self.name = entry.title or "Vome"
 		# Stable across restarts and unique per linked account, so Home
