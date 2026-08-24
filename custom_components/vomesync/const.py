@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.15"
+INTEGRATION_VERSION = "0.9.16"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -36,6 +36,18 @@ CONF_RELAY = "relay"  # options key holding the dict below
 CONF_RELAY_SERVER_ID = "server_id"
 CONF_RELAY_SECRET = "secret"  # noqa: S105 - dict key, not a secret value
 CONF_RELAY_WS_URL = "ws_url"
+# Backing up to Vome *without* a relay link.  A hosted VomeHome instance has
+# no relay tunnel to itself, so it has no relay secret and never gets one --
+# which meant its Home Assistant could not authenticate to the backup agent
+# at all.  The portal issues a separate, narrower credential for exactly this
+# (``portal/backup_agent_auth.py``): it grants that server's backup storage
+# and nothing else, and in particular cannot open a relay tunnel.  Stored
+# under its own options key so it is independent of any relay link.
+CONF_BACKUP = "backup"  # options key holding the dict below
+CONF_BACKUP_SECRET = "secret"  # noqa: S105 - dict key, not a secret value
+# The key embeds the server it belongs to, so the user pastes one value and
+# we derive the rest rather than asking them to copy an id as well.
+BACKUP_SECRET_PREFIX = "vbk_"
 CONF_RELAY_LOCAL_TOKEN = "local_token"  # noqa: S105 - optional non-supervised fallback
 CONF_RELAY_LOCAL_URL = "local_url"
 CONF_RELAY_ESPHOME_URL = "esphome_url"  # optional explicit ESPHome dashboard base URL
@@ -70,6 +82,21 @@ WEBHOOK_MAX = 32
 
 # The portal (account / device-authorisation) lives on vome.io; the relay
 # WebSocket lives on sync.vome.io.  The portal tells us the WS URL at link time.
+def backup_secret_server_id(secret):
+	"""The server id a Vome backup key belongs to, or None if malformed.
+
+	Mirrors ``portal.backup_agent_auth._server_id_from_secret``.  Parsed
+	rather than asked for separately: the id is already in the key, and a
+	second field is a second thing to get wrong.
+	"""
+	if not isinstance(secret, str) or not secret.startswith(BACKUP_SECRET_PREFIX):
+		return None
+	server_id, _, token = secret[len(BACKUP_SECRET_PREFIX):].partition(".")
+	if not server_id or not token:
+		return None
+	return server_id
+
+
 DEFAULT_PORTAL_URL = "https://vome.io"
 DEFAULT_RELAY_WS_URL = "wss://sync.vome.io/ws/relay"
 RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"

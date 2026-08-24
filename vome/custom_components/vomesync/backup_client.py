@@ -19,7 +19,15 @@ from typing import Any, AsyncIterator, Optional
 
 import aiohttp
 
-from .const import DEFAULT_PORTAL_URL
+from .const import (
+	CONF_BACKUP,
+	CONF_BACKUP_SECRET,
+	CONF_RELAY,
+	CONF_RELAY_SECRET,
+	CONF_RELAY_SERVER_ID,
+	DEFAULT_PORTAL_URL,
+	backup_secret_server_id,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,6 +38,41 @@ AGENT_PATH = "/api/sync/agent/backups"
 UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=6 * 60 * 60, connect=30)
 METADATA_TIMEOUT = aiohttp.ClientTimeout(total=60)
 DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=6 * 60 * 60, connect=30)
+
+
+def credentials_for_entry(entry) -> tuple:
+	"""``(server_id, secret)`` an entry can back up with, or ``(None, None)``.
+
+	Two ways to hold one.  A **relay link** carries a server id and secret for
+	the tunnel, and backing up rides on that credential.  A **backup key** is
+	the standalone form, for an instance with no relay link to carry it — a
+	VomeHome-hosted VM has no tunnel to itself, so it holds no relay secret
+	and never gets one, and before the key existed its Home Assistant could
+	not authenticate to the backup agent at all.
+
+	The backup key wins where both are present: it is the narrower grant of
+	the two — that server's backup storage and nothing else — while the relay
+	secret also authenticates the tunnel that brokers calls into the home.  If
+	the narrow one works there is no reason to send the wide one.
+
+	Lives here rather than in ``backup.py`` for the reason that module's
+	docstring gives: importing it needs ``homeassistant.components.backup``,
+	which only exists on recent cores, so anything that can be tested without
+	one belongs on this side of the line.
+	"""
+	options = getattr(entry, "options", None) or {}
+
+	backup = options.get(CONF_BACKUP) or {}
+	secret = backup.get(CONF_BACKUP_SECRET)
+	server_id = backup_secret_server_id(secret)
+	if server_id and secret:
+		return server_id, secret
+
+	relay = options.get(CONF_RELAY) or {}
+	if relay.get(CONF_RELAY_SERVER_ID) and relay.get(CONF_RELAY_SECRET):
+		return relay[CONF_RELAY_SERVER_ID], relay[CONF_RELAY_SECRET]
+
+	return None, None
 
 
 class VomeBackupError(Exception):

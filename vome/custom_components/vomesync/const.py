@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.15"
+INTEGRATION_VERSION = "0.9.16"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -36,6 +36,18 @@ CONF_RELAY = "relay"  # options key holding the dict below
 CONF_RELAY_SERVER_ID = "server_id"
 CONF_RELAY_SECRET = "secret"  # noqa: S105 - dict key, not a secret value
 CONF_RELAY_WS_URL = "ws_url"
+# Backing up to Vome *without* a relay link.  A hosted VomeHome instance has
+# no relay tunnel to itself, so it has no relay secret and never gets one --
+# which meant its Home Assistant could not authenticate to the backup agent
+# at all.  The portal issues a separate, narrower credential for exactly this
+# (``portal/backup_agent_auth.py``): it grants that server's backup storage
+# and nothing else, and in particular cannot open a relay tunnel.  Stored
+# under its own options key so it is independent of any relay link.
+CONF_BACKUP = "backup"  # options key holding the dict below
+CONF_BACKUP_SECRET = "secret"  # noqa: S105 - dict key, not a secret value
+# The key embeds the server it belongs to, so the user pastes one value and
+# we derive the rest rather than asking them to copy an id as well.
+BACKUP_SECRET_PREFIX = "vbk_"
 CONF_RELAY_LOCAL_TOKEN = "local_token"  # noqa: S105 - optional non-supervised fallback
 CONF_RELAY_LOCAL_URL = "local_url"
 CONF_RELAY_ESPHOME_URL = "esphome_url"  # optional explicit ESPHome dashboard base URL
@@ -70,6 +82,21 @@ WEBHOOK_MAX = 32
 
 # The portal (account / device-authorisation) lives on vome.io; the relay
 # WebSocket lives on sync.vome.io.  The portal tells us the WS URL at link time.
+def backup_secret_server_id(secret):
+	"""The server id a Vome backup key belongs to, or None if malformed.
+
+	Mirrors ``portal.backup_agent_auth._server_id_from_secret``.  Parsed
+	rather than asked for separately: the id is already in the key, and a
+	second field is a second thing to get wrong.
+	"""
+	if not isinstance(secret, str) or not secret.startswith(BACKUP_SECRET_PREFIX):
+		return None
+	server_id, _, token = secret[len(BACKUP_SECRET_PREFIX):].partition(".")
+	if not server_id or not token:
+		return None
+	return server_id
+
+
 DEFAULT_PORTAL_URL = "https://vome.io"
 DEFAULT_RELAY_WS_URL = "wss://sync.vome.io/ws/relay"
 RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
@@ -110,6 +137,12 @@ RELAY_ALLOWED_METHODS = ("GET", "POST", "PUT", "DELETE")
 # injects no token; the user signs in to their Home Assistant as normal.
 RELAY_WS_MSG_HTTP_PROXY = "http_proxy"
 RELAY_WS_MSG_HTTP_PROXY_RESPONSE = "http_proxy_response"
+# A response whose body has not finished arriving goes back in pieces: the
+# head on the response above with ``streaming: true``, then chunks, then an
+# end.  Abort travels the other way, when the browser stops listening.
+RELAY_WS_MSG_HTTP_PROXY_CHUNK = "http_proxy_chunk"
+RELAY_WS_MSG_HTTP_PROXY_END = "http_proxy_end"
+RELAY_WS_MSG_HTTP_PROXY_ABORT = "http_proxy_abort"
 RELAY_WS_MSG_WS_OPEN = "ws_open"
 RELAY_WS_MSG_WS_OPEN_ACK = "ws_open_ack"
 RELAY_WS_MSG_WS_DATA = "ws_data"
@@ -129,6 +162,18 @@ LAN_TCP_TOKEN_MAX_TTL = 86400
 # than buffered unbounded; the frontend WebSocket carries small JSON frames.
 RELAY_FORWARD_HTTP_TIMEOUT = 60
 RELAY_FORWARD_MAX_BODY = 25 * 1024 * 1024
+# Some Home Assistant endpoints answer with a response that never ends --
+# /api/hassio/supervisor/logs/follow, anything Server-Sent Events, a camera
+# stream.  Forwarding buffers the whole body before replying, so those can
+# only ever run out the clock and surface as a blank 502 a minute later,
+# with nothing to say which of the two it was.
+#
+# Reading the body therefore gets its own budget, well under the overall
+# timeout, so the browser is told what happened instead of being left to hang
+# for a minute.  It still has to be generous enough for a legitimate body up
+# to the cap below: 20s for 25 MiB from a local Home Assistant is ample, and
+# the connect/response phases keep the remainder of the overall timeout.
+RELAY_FORWARD_BODY_TIMEOUT = 20
 # Exact path portions (query excluded) a browser WebSocket bridge may open.
 RELAY_FORWARD_WS_PATHS = ("/api/websocket",)
 # Hop-by-hop headers are connection-scoped and must not be forwarded across the

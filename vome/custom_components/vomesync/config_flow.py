@@ -42,6 +42,9 @@ from .const import (
 	CONF_CAPTCHA_TOKEN,
 	CONF_SWITCH_ADVANCED,
 	CONF_SHOW_SIGNING_KEY_AFTER,
+	CONF_BACKUP,
+	CONF_BACKUP_SECRET,
+	backup_secret_server_id,
 	FREE_TIER_MAX_SUBSCRIPTIONS,
 	SWITCH_CATEGORIES,
 	DEFAULT_SWITCH_NAME,
@@ -595,6 +598,7 @@ class VomeSyncOptionsFlow(
 		]
 		if self._relay_is_linked():
 			menu_options.append("relay_server")
+		menu_options.append("vome_backups")
 		menu_options.append("back")
 		return self.async_show_menu(step_id="more", menu_options=menu_options)
 
@@ -603,6 +607,65 @@ class VomeSyncOptionsFlow(
 	) -> FlowResult:
 		"""Return to the main options menu."""
 		return await self.async_step_init()
+
+	async def async_step_vome_backups(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Store Home Assistant backups in a Vome account.
+
+		Only needed where there is no relay link to carry the credential --
+		a VomeHome-hosted instance, which has no tunnel to itself.  A linked
+		home already has one and this step simply reports that.
+
+		The key embeds the server it belongs to, so one field is enough; an
+		empty submission clears it again.
+		"""
+		options = dict(self._config_entry.options or {})
+		current = (options.get(CONF_BACKUP) or {}).get(CONF_BACKUP_SECRET) or ""
+
+		if user_input is not None:
+			secret = (user_input.get(CONF_BACKUP_SECRET) or "").strip()
+			if not secret:
+				options.pop(CONF_BACKUP, None)
+				return self.async_create_entry(title="", data=options)
+			if not backup_secret_server_id(secret):
+				return self.async_show_form(
+					step_id="vome_backups",
+					data_schema=vol.Schema({
+						vol.Optional(CONF_BACKUP_SECRET, default=secret): str,
+					}),
+					errors={"base": "invalid_backup_key"},
+				)
+			options[CONF_BACKUP] = {CONF_BACKUP_SECRET: secret}
+			return self.async_create_entry(title="", data=options)
+
+		if current:
+			info = (
+				"Vome is set up as a backup location for "
+				f"`{backup_secret_server_id(current)}`.\n\n"
+				"Paste a new key to replace it, or clear the field to "
+				"disconnect. Backups already stored are kept either way."
+			)
+		elif self._relay_is_linked():
+			info = (
+				"This Home Assistant is linked to Vome, so it can already back "
+				"up there — you do not need a key.\n\nOnly paste one if Vome "
+				"asked you to."
+			)
+		else:
+			info = (
+				"Get a key from vome.io: open your server, then "
+				"**Back up from Home Assistant**.\n\nOnce it is in, Vome "
+				"appears under Settings → System → Backups."
+			)
+
+		return self.async_show_form(
+			step_id="vome_backups",
+			data_schema=vol.Schema({
+				vol.Optional(CONF_BACKUP_SECRET, default=current): str,
+			}),
+			description_placeholders={"info": info},
+		)
 
 	async def async_step_backup_signing_key(
 		self, user_input: Optional[Dict[str, Any]] = None
