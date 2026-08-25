@@ -1,19 +1,11 @@
-# Leftover working copies after the split to Vortitron/VomeSync-server.
-# Keep on disk so the live compose stack still runs until cutover.
+# One leftover working copy from the split to Vortitron/VomeSync-server.
+# The cutover is done -- every live and dev container now runs from
+# /var/www/VomeSync-server/docker -- so the rest of the copies have been
+# deleted.  This one stays because it is not purely a copy: it holds a
+# webserver/.env the server repo has no equivalent of, and 155 files under
+# webserver/media where the live vomesync_webserver_media volume has two.
+# Work out whether that media needs migrating before deleting this.
 /webserver/
-/website/
-/docker/
-/favicon/
-/tests/e2e/
-/test-backend.sh
-/docs/API.md
-/docs/ARCHITECTURE_SERVER.md
-/docs/ARCHITECTURE_WEBSITE.md
-/docs/OPERATIONS.md
-/docs/SETUP.md
-/jenkins/pipelines/Jenkinsfile.vomesync-ci
-/jenkins/pipelines/Jenkinsfile.vomesync-deploy
-/jenkins/pipelines/Jenkinsfile.vomesync-e2e
 node_modules
 venv
 .redisdata/

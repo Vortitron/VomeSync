@@ -277,7 +277,8 @@ Two reasons the pin has to stay:
 If you deliberately move the pin, bump `redis:7-alpine` with it.
 
 CI additionally sets `REDISMS_DOWNLOAD_DIR` to a path under `JENKINS_HOME`
-(`jenkins/pipelines/Jenkinsfile.vomesync-ci`), because the pipeline's `cleanWs()`
+(`jenkins/pipelines/Jenkinsfile.vomesync-ci` in Vortitron/VomeSync-server, where
+the server pipelines live), because the pipeline's `cleanWs()`
 deletes the in-workspace cache and every build would otherwise recompile Redis.
 
 ### Pytest Configuration
