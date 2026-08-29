@@ -132,6 +132,7 @@ pipeline {
                         hacs-addon/tests/test_lan_routes.py \
                         hacs-addon/tests/test_relay_client.py \
                         hacs-addon/tests/test_addon_packaging.py \
+                        hacs-addon/tests/test_panel_ui.py \
                         --tb=short -q \
                         --junitxml=junit-vome-addon.xml
                 '''

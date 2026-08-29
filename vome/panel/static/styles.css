@@ -160,6 +160,10 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .banner.err {
 	background: color-mix(in srgb, var(--danger) 22%, var(--panel));
 }
+.banner.info {
+	background: color-mix(in srgb, var(--accent) 16%, var(--panel));
+	border-color: var(--accent-dim);
+}
 .hidden { display: none !important; }
 .card {
 	background: var(--panel);
@@ -171,6 +175,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .card h2 { margin: 0 0 0.55rem; font-size: 1.05rem; }
 .card.warn-card { border-color: var(--warn); border-left-width: 3px; }
 .card.warn-card h2 { color: var(--warn); }
+.card.info-card { border-color: var(--accent); border-left-width: 3px; }
+.card.info-card h2 { color: var(--accent); }
 .card details { margin-top: 0.85rem; }
 .card details summary {
 	cursor: pointer;
