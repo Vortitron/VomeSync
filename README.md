@@ -22,10 +22,11 @@ This repository is the **Home Assistant** side of VomeSync (HACS custom reposito
 - **Installation**: Via HACS or manual installation
 
 ### Official Home Assistant Add-on (`/vome/` + root `repository.yaml`)
-- **Purpose**: Supervisor install path without HACS; ingress panel for remote access / LAN tunnels
+- **Purpose**: Supervisor path that installs the Vome integration, a sidebar panel for remote access / LAN tunnels, and virtual-switch sharing — without HACS. Same integration code as the HACS custom component.
 - **Add-on Store URL**: `https://github.com/Vortitron/VomeSync` (requires `repository.yaml` at repo root)
 - **Design**:
   - `vome/build.sh` syncs `custom_components/vomesync` → `vome/custom_components/vomesync` (committed; Supervisor build context cannot see the parent tree)
+  - Image is built on the user's Home Assistant from `vome/Dockerfile`. Base is Home Assistant `base-python` so the panel interpreter is already in the image — the build must not `apk add` (Alpine package indexes are a second network dependency and fail on EOL bases).
   - MCP: `ha_addon_install_vome` (+ `ha_supervisor_api`) on Supervised/HAOS targets
   - Jenkins: `VomeSync/vome-addon-ci` + `VomeSync/vome-addon-release`
 
@@ -101,7 +102,18 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
 
 ## Installation
 
-### Via HACS (Recommended)
+### Via the Home Assistant Add-on Store
+
+This is the path that does **not** need HACS. It installs the integration, starts a sidebar panel, and is what Vome Home instances use.
+
+1. **Settings** → **Add-ons** → **Add-on Store** → ⋮ → **Repositories**
+2. Paste `https://github.com/Vortitron/VomeSync` and add it
+3. Install **Vome**, start it, open the **Vome** sidebar panel
+4. Restart Home Assistant once, then **Settings** → **Devices & Services** → **Add Integration** → **Vome**
+
+Supervisor builds the add-on image on your machine. That build pulls Home Assistant's `base-python` image (which already includes `python3`) and does not run `apk add`. If a build fails talking to `dl-cdn.alpinelinux.org` / `python3 (no such package)`, you are on an add-on older than 0.3.18 — refresh the store and rebuild.
+
+### Via HACS
 
 [![Add to Home Assistant](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration)
 
@@ -122,7 +134,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
 
 ## User Flow
 1. **Install Integration**:
-   - User installs `VomeSync` via HACS or manually.
+   - User installs `VomeSync` via the Add-on Store, HACS, or manually.
    - Integration can run in:
      - Generates/stores a signing key locally and uses v2 signed endpoints.
 
@@ -179,7 +191,8 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
 ### For Users
 
 1. **Install VomeSync Integration:**
-   - Add via HACS: Settings → HACS → Integrations → Custom Repositories → Add `https://github.com/Vortitron/VomeSync`
+   - Add-on Store (no HACS): Settings → Add-ons → Add-on Store → ⋮ → Repositories → `https://github.com/Vortitron/VomeSync` → install **Vome**
+   - Or HACS: Settings → HACS → Integrations → Custom Repositories → Add `https://github.com/Vortitron/VomeSync`
    - Or download manually to `custom_components/vomesync/`
    - Restart Home Assistant
 

@@ -1,9 +1,7 @@
-# https://developers.home-assistant.io/docs/add-ons/configuration#add-on-dockerfile
+# Kept for Supervisors that still read build.yaml (pre-BuildKit migration).
+# The Dockerfile default FROM is the source of truth for Supervisor 2026.04+.
+# Must stay on base-python — a plain Alpine base has no interpreter, and we
+# no longer apk-add at build time.
 build_from:
-  aarch64: ghcr.io/home-assistant/aarch64-base:3.20
-  amd64: ghcr.io/home-assistant/amd64-base:3.20
-labels:
-  org.opencontainers.image.title: "Vome"
-  org.opencontainers.image.description: "Vome Home Assistant add-on (shared integration + companions)"
-  org.opencontainers.image.source: "https://github.com/Vortitron/VomeSync"
-  org.opencontainers.image.licenses: "MIT"
+  aarch64: ghcr.io/home-assistant/aarch64-base-python:3.13-alpine3.22
+  amd64: ghcr.io/home-assistant/amd64-base-python:3.13-alpine3.22

@@ -5,5 +5,10 @@ set -e
 export VOME_PANEL_PORT="${VOME_PANEL_PORT:-8099}"
 export VOME_PANEL_STATIC="/usr/share/vome/panel/static"
 
+if ! command -v python3 >/dev/null 2>&1; then
+	bashio::log.error "python3 is missing from this image. Rebuild the add-on (it must use the Home Assistant base-python image, not a plain Alpine base)."
+	exit 1
+fi
+
 bashio::log.info "Starting Vome control panel on :${VOME_PANEL_PORT}"
 exec python3 /usr/share/vome/panel/server.py
