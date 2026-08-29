@@ -28,7 +28,7 @@ def test_status_failure_polls_instead_of_dumping_diagnostics():
 
 
 def test_expected_ha_gaps_are_info_not_errors():
-	assert 'showBanner(kind.message, kind.waiting ? "info" : "err")' in PANEL_JS
+	assert 'showBanner(kind.message, (kind.waiting || kind.info) ? "info" : "err")' in PANEL_JS
 	assert "WAITING_RESTART" in PANEL_JS
 	assert "WAITING_HA" in PANEL_JS
 	assert "no need to click Refresh" in PANEL_JS
@@ -51,3 +51,10 @@ def test_502_and_400_classified_as_waiting():
 	assert "502" in PANEL_JS
 	assert "Bad Request" in PANEL_JS
 	assert "Invalid JSON" in PANEL_JS or "HTTP ${res.status}" in PANEL_JS
+
+
+def test_multiple_entries_error_is_plain_language():
+	assert "MULTI_ENTRY_MSG" in PANEL_JS
+	assert "More than one Vome integration" in PANEL_JS
+	assert "pass entry_id" in PANEL_JS
+	assert "extraEntriesCard" in PANEL_JS

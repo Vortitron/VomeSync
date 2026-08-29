@@ -57,8 +57,14 @@
 	const WAITING_HA =
 		"Home Assistant is starting. This page continues automatically — no need to click Refresh.";
 
+	const MULTI_ENTRY_MSG =
+		"This Home Assistant has more than one Vome integration — often from installing via HACS and adding it again. Keep one and delete the spare under Settings → Devices & Services, then connect here.";
+
 	function classifyHaError(err) {
 		const msg = String(err.message || err);
+		if (/Multiple Vome entries|Multiple linked entries|pass entry_id/i.test(msg)) {
+			return { waiting: false, info: true, message: MULTI_ENTRY_MSG };
+		}
 		if (/502|503|unreachable|Invalid JSON|Failed to fetch|NetworkError|Load failed|Network request failed/i.test(msg)) {
 			return { waiting: true, message: WAITING_HA };
 		}
@@ -70,7 +76,7 @@
 
 	function reportError(err) {
 		const kind = classifyHaError(err);
-		showBanner(kind.message, kind.waiting ? "info" : "err");
+		showBanner(kind.message, (kind.waiting || kind.info) ? "info" : "err");
 		if (kind.waiting) {
 			waitingForHa = true;
 			schedulePoll();
@@ -187,14 +193,16 @@
 			} else {
 				lastDiag = null;
 				stopPolling();
-				if (state.warning) showBanner(state.warning, true);
-				else showBanner("");
+				if (state.warning) {
+					const multi = /more than one Vome/i.test(state.warning);
+					showBanner(state.warning, multi ? "info" : true);
+				} else showBanner("");
 			}
 			render();
 		} catch (err) {
 			const kind = classifyHaError(err);
 			waitingForHa = kind.waiting;
-			showBanner(kind.message, kind.waiting ? "info" : "err");
+			showBanner(kind.message, (kind.waiting || kind.info) ? "info" : "err");
 			state = state || { linked: false, lan_routes: [], forward_ui: false };
 			if (err.data && typeof err.data === "object") {
 				state.installed_version = err.data.installed_version || state.installed_version;
@@ -262,6 +270,18 @@
 		return "";
 	}
 
+	function extraEntriesCard() {
+		const entries = (state && state.vome_entries) || [];
+		if (entries.length < 2) return "";
+		const chosen = entries.find((e) => e.entry_id === (state && state.entry_id)) || entries[0];
+		const names = entries.map((e) => e.title || "Vome").join(", ");
+		return `
+			<div class="card info-card">
+				<h2>More than one Vome integration</h2>
+				<p class="muted">This Home Assistant has ${entries.length} Vome integrations (${escapeHtml(names)}). That usually happens after installing from HACS and adding Vome again. Connecting here uses <strong>${escapeHtml(chosen.title || "Vome")}</strong>. Remove the spare under Settings → Devices & Services so Devices and this panel don't issue different codes.</p>
+			</div>`;
+	}
+
 	function renderOverview() {
 		const routes = (state && state.lan_routes) || [];
 		const enabled = routes.filter((r) => r.enabled !== false).length;
@@ -278,7 +298,7 @@
 				<p class="muted">This Home Assistant isn't linked to a Vome account yet, so remote access and LAN tunnels aren't available. Linking takes about a minute and opens no ports.</p>
 				<div class="row"><button type="button" class="primary" id="ov-connect">Connect to Vome</button></div>
 			</div>` : "";
-		viewEl.innerHTML = `${restartCard}${linkCard}${connectionWarningCard()}
+		viewEl.innerHTML = `${restartCard}${extraEntriesCard()}${linkCard}${connectionWarningCard()}
 			<div class="card">
 				<h2>Status</h2>
 				<p class="muted">Same settings as the HACS options menu, laid out as a tree so remote access and LAN tunnels are easier to find.</p>
@@ -989,7 +1009,7 @@
 			return;
 		}
 		if (!linkFlow) {
-			viewEl.innerHTML = `
+			viewEl.innerHTML = `${extraEntriesCard()}
 				<div class="card">
 					<h2>Connect this Home Assistant to Vome</h2>
 					<p class="muted">Linking lets you reach this home from vome.io — the Home Assistant UI, LAN devices and Remote Desktop — over one outbound, encrypted connection. It takes about a minute and opens no ports on your router.</p>
