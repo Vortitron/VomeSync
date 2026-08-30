@@ -56,11 +56,16 @@ def test_502_and_400_classified_as_waiting():
 def test_connect_is_on_overview_even_when_ha_is_not_ready():
 	overview = PANEL_JS.split("function renderOverview")[1].split("const fixExternal")[0]
 	assert 'id="ov-connect"' in overview
-	assert "const linkCard = (state && state.linked) ? \"\"" in overview.replace("\n", " ") or 'const linkCard = (state && state.linked) ? ""' in overview
-	assert "&& !haNotReady()" not in overview
+	# Hidden only when already linked *and* Home Assistant has loaded
+	# the current integration. A reboot/waiting card must not steal the CTA.
+	assert "const hideConnect = !!(state && state.linked) && !haNotReady();" in overview
 	assert "WAITING_HA" in overview
 	assert "WAITING_RESTART" in overview
 	assert 'setView("link")' in overview
+	assert 'class="primary" id="qa-rdp"' not in overview
+	assert 'id="qa-rdp" class="primary"' not in overview
+	assert 'id="qa-rdp"' in overview
+	assert 'class="primary" id="ov-connect"' in overview
 
 
 def test_connect_page_explains_the_flow_and_allows_staging_url():

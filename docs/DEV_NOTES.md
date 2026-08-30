@@ -26,6 +26,11 @@ and `vome/build.yaml`) so the panel interpreter is already in the image.
 Do not `apk add python3` — Alpine 3.20 went EOL in April 2026 and that is
 what failed Store installs on machines that were not pre-imaged with Vome.
 
+The overview panel keeps **Connect to Vome** visible while Home Assistant
+still needs a restart (version mismatch / 400 / 502). Hide it only once the
+home is linked *and* the current integration is loaded. Remote Desktop is a
+secondary action — do not mark that button `.primary` (yellow).
+
 Local check (no Supervisor):
 
 ```bash

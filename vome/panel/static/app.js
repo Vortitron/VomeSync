@@ -290,12 +290,13 @@
 				<h2>${waitingForHa && !restartNeeded() ? "Waiting for Home Assistant" : "Restart Home Assistant once"}</h2>
 				<p class="muted">${waitingForHa && !restartNeeded()
 					? "Home Assistant is starting or still loading Vome. This page checks automatically and will continue when it is ready — you do not need to click Refresh."
-					: `Vome ${escapeHtml(state.installed_version)} is ready. Home Assistant only loads integrations at startup, so it needs one restart (Settings → System → ⋮ → Restart). This page continues on its own afterwards.`}</p>
+					: `Vome ${escapeHtml((state && state.installed_version) || "")} is ready. Home Assistant only loads integrations at startup, so it needs one restart (Settings → System → ⋮ → Restart). This page continues on its own afterwards.`}</p>
 			</div>` : "";
-		// Always on the first page so "connect this home" is the obvious first
-		// step. Version / restart problems are explained if they click it —
-		// hiding the button made the panel look like a status dashboard.
-		const linkCard = (state && state.linked) ? "" : `
+		// First thing on the page even while a restart is pending. Hide only
+		// once the home is actually linked *and* Home Assistant has loaded
+		// the current integration — otherwise the reboot card stole the CTA.
+		const hideConnect = !!(state && state.linked) && !haNotReady();
+		const linkCard = hideConnect ? "" : `
 			<div class="card warn-card">
 				<h2>Connect to Vome to get started</h2>
 				<p class="muted">Link this Home Assistant to your Vome account. It takes about a minute, opens no ports, and is how remote access and LAN tunnels are turned on.</p>
@@ -315,7 +316,7 @@
 			<div class="card">
 				<h2>Quick actions</h2>
 				<div class="row">
-					<button type="button" class="primary" id="qa-rdp">Set up Remote Desktop</button>
+					<button type="button" id="qa-rdp">Set up Remote Desktop</button>
 					<button type="button" id="qa-lan">LAN tunnels</button>
 					<button type="button" id="qa-forward">Home Assistant UI</button>
 				</div>
