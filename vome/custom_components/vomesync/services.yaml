@@ -381,6 +381,25 @@ link_start:
       required: false
       selector:
         text:
+    device_code:
+      name: Prefetched device code
+      description: >
+        Optional. The add-on panel fetches the code from the configured Vome
+        site and passes it here so Home Assistant does not request a second
+        code from a different origin.
+      required: false
+      selector:
+        text:
+    user_code:
+      name: Prefetched user code
+      required: false
+      selector:
+        text:
+    verification_uri:
+      name: Prefetched approval URL
+      required: false
+      selector:
+        text:
 
 link_poll:
   name: Connect to Vome (check approval)

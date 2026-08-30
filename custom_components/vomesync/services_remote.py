@@ -697,18 +697,34 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
 		if ((entry.options or {}).get(CONF_RELAY) or {}).get(CONF_RELAY_SERVER_ID):
 			return {"status": "already_linked", "entry_id": entry.entry_id}
-		session = async_get_clientsession(hass)
 		portal_url = _normalise_portal_url(call.data.get("portal_url"))
-		started = await async_request_device_code(
-			session, portal_url, name=_link_display_name(hass)
-		)
-		pending = {
-			"device_code": started.get("device_code"),
-			"user_code": started.get("user_code"),
-			"portal_url": portal_url,
-			"verification_uri": started.get("verification_uri")
-			or (portal_url + "/account/link-ha"),
-		}
+		prefetched = str(call.data.get("device_code") or "").strip()
+		if prefetched:
+			# The add-on already talked to the configured Vome site. Store that
+			# code instead of fetching again (Core was still hitting production).
+			pending = {
+				"device_code": prefetched,
+				"user_code": str(call.data.get("user_code") or ""),
+				"portal_url": portal_url,
+				"verification_uri": str(call.data.get("verification_uri") or "").strip()
+				or (portal_url + "/account/link-ha"),
+			}
+			started = {
+				"interval": call.data.get("interval") or 5,
+				"expires_in": call.data.get("expires_in") or 900,
+			}
+		else:
+			session = async_get_clientsession(hass)
+			started = await async_request_device_code(
+				session, portal_url, name=_link_display_name(hass)
+			)
+			pending = {
+				"device_code": started.get("device_code"),
+				"user_code": started.get("user_code"),
+				"portal_url": portal_url,
+				"verification_uri": started.get("verification_uri")
+				or (portal_url + "/account/link-ha"),
+			}
 		if not pending["device_code"]:
 			raise ValueError("Vome did not return a device code — try again.")
 		hass.data.setdefault(DOMAIN, {}).setdefault(_PENDING_LINK_KEY, {})[entry.entry_id] = pending
@@ -717,6 +733,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			"entry_id": entry.entry_id,
 			"user_code": pending["user_code"] or "",
 			"verification_uri": pending["verification_uri"],
+			"portal_url": portal_url,
 			"interval": int(started.get("interval") or 5),
 			"expires_in": int(started.get("expires_in") or 900),
 		}
@@ -770,6 +787,11 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Optional("portal_url"): cv.string,
+			vol.Optional("device_code"): cv.string,
+			vol.Optional("user_code"): cv.string,
+			vol.Optional("verification_uri"): cv.string,
+			vol.Optional("interval"): vol.Coerce(int),
+			vol.Optional("expires_in"): vol.Coerce(int),
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)

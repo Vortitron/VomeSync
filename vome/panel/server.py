@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+DEFAULT_PORTAL_URL = "https://vome.io"
+RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
 PORT = int(os.environ.get("VOME_PANEL_PORT", "8099"))
 STATIC_DIR = Path(os.environ.get("VOME_PANEL_STATIC", "/usr/share/vome/panel/static"))
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -125,6 +127,118 @@ def addon_options(path: Optional[Path] = None) -> dict:
 def addon_portal_url(path: Optional[Path] = None) -> str:
 	raw = addon_options(path).get("portal_url")
 	return raw.strip() if isinstance(raw, str) else ""
+
+
+def normalise_portal_url(raw: Optional[str]) -> str:
+	"""Origin only; blank becomes production. Same rules as the integration."""
+	value = (raw or "").strip() or DEFAULT_PORTAL_URL
+	if "://" not in value:
+		value = "https://" + value
+	parsed = urlparse(value)
+	if parsed.scheme not in ("http", "https") or not parsed.hostname:
+		raise ValueError("Vome site URL must be http(s)")
+	netloc = parsed.hostname if parsed.port is None else f"{parsed.hostname}:{parsed.port}"
+	return f"{parsed.scheme}://{netloc}"
+
+
+def _portal_post_json(url: str, payload: dict) -> dict:
+	"""POST JSON to the Vome site. Used so Connect does not depend on Core's outbound HTTP."""
+	data = json.dumps(payload).encode("utf-8")
+	req = urllib.request.Request(
+		url,
+		data=data,
+		headers={"Content-Type": "application/json", "Accept": "application/json"},
+		method="POST",
+	)
+	try:
+		with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - operator-configured portal
+			raw = resp.read()
+			status = resp.status
+	except urllib.error.HTTPError as err:
+		raw = err.read()
+		status = err.code
+	except urllib.error.URLError as err:
+		raise RuntimeError(f"Could not reach {url}: {err}") from err
+	if not raw:
+		raise RuntimeError(f"Empty response from {url} (HTTP {status})")
+	try:
+		body = json.loads(raw.decode("utf-8"))
+	except (ValueError, UnicodeDecodeError) as err:
+		raise RuntimeError(f"Invalid JSON from {url} (HTTP {status})") from err
+	if not isinstance(body, dict):
+		raise RuntimeError(f"Unexpected response from {url}")
+	if status >= 400:
+		msg = body.get("error") or body.get("message") or f"HTTP {status}"
+		raise RuntimeError(f"{url}: {msg}")
+	return body
+
+
+def fetch_device_code(portal_url: str, name: str = "Home Assistant") -> dict:
+	url = portal_url.rstrip("/") + RELAY_DEVICE_CODE_PATH
+	LOG.info("Requesting Connect code from %s", url)
+	started = _portal_post_json(url, {"name": name})
+	if not started.get("device_code"):
+		raise RuntimeError("Vome did not return a device code — try again.")
+	return started
+
+
+def prepare_link_start(body: Optional[dict] = None) -> dict:
+	"""Force Connect onto the add-on Configuration URL, and fetch the code here.
+
+	Home Assistant Core was still posting to production even when the panel
+	asked for another site (empty ingress body, or an older link_start that
+	ignored portal_url). The add-on talks to the configured origin itself,
+	then hands Core the codes to store and poll.
+	"""
+	data = dict(body or {})
+	portal = normalise_portal_url(addon_portal_url() or data.get("portal_url"))
+	data["portal_url"] = portal
+	started = fetch_device_code(portal, str(data.get("name") or "Home Assistant"))
+	data["device_code"] = started.get("device_code")
+	data["user_code"] = started.get("user_code") or ""
+	data["verification_uri"] = (
+		started.get("verification_uri") or (portal + "/account/link-ha")
+	)
+	if started.get("interval") is not None:
+		data["interval"] = started["interval"]
+	if started.get("expires_in") is not None:
+		data["expires_in"] = started["expires_in"]
+	return data
+
+
+def link_start_mismatch_error(requested_portal: str, verification_uri: str) -> Optional[str]:
+	"""If Core fetched a code from a different origin than the add-on, say so."""
+	expected = urlparse(requested_portal or "").hostname
+	got = urlparse(verification_uri or "").hostname
+	if expected and got and expected != got:
+		return (
+			f"Home Assistant requested a code from {got}, not {expected}. "
+			"Restart Home Assistant so the updated Vome integration is loaded, then try again."
+		)
+	return None
+
+
+def finalise_link_start(status: int, body: Any, prepared: dict) -> tuple[int, Any]:
+	"""Rewrite Core errors that mean 'old integration still loaded'."""
+	if not isinstance(body, dict):
+		return status, body
+	err = str(body.get("error") or "")
+	if "extra keys" in err.lower():
+		return 409, {
+			"error": (
+				"Home Assistant is still running an older Vome integration. "
+				"Restart Home Assistant, then try Connect again."
+			)
+		}
+	mismatch = link_start_mismatch_error(
+		str(prepared.get("portal_url") or ""),
+		str(body.get("verification_uri") or ""),
+	)
+	if body.get("status") == "started" and mismatch:
+		return 409, {"error": mismatch}
+	if prepared.get("portal_url") and "portal_url" not in body:
+		body = {**body, "portal_url": prepared["portal_url"]}
+	return status, body
 
 
 def _config_root() -> str:
@@ -355,8 +469,18 @@ class PanelHandler(BaseHTTPRequestHandler):
 
 	def _route_post(self) -> None:
 		parsed = urlparse(self.path)
-		path = parsed.path or "/"
+		path = (parsed.path or "/").rstrip("/") or "/"
 		body = self._read_json()
+		if path == "/api/link/start":
+			try:
+				body = prepare_link_start(body)
+			except ValueError as err:
+				self._send_json(400, {"error": str(err)})
+				return
+			except RuntimeError as err:
+				LOG.warning("Connect prefetch failed: %s", err)
+				self._send_json(502, {"error": str(err)})
+				return
 		mapping = {
 			"/api/forward_ui": ("set_forward_ui", body),
 			"/api/local_url": ("set_local_url", body),
@@ -382,6 +506,8 @@ class PanelHandler(BaseHTTPRequestHandler):
 		service, data = mapping[path]
 		status, payload = call_service(service, data)
 		body = _unwrap(payload)
+		if path == "/api/link/start":
+			status, body = finalise_link_start(status, body, data)
 		if isinstance(body, dict) and body.get("error") and status < 400:
 			status = 400
 		self._send_json(status, body)

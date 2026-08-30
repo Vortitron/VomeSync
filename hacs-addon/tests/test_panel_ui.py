@@ -87,6 +87,8 @@ def test_connect_page_explains_the_flow_and_uses_addon_portal_url():
 	assert "dials out" in PANEL_JS
 	assert "addon_portal_url" in PANEL_JS
 	assert "configuredPortalUrl" in PANEL_JS
+	assert "only works on" in PANEL_JS
+	assert "addon_portal_url" in PANEL_JS.split("function renderAbout")[1]
 	assert "staging.vome.io" not in html
 	assert "#qa-rdp.primary" in PANEL_CSS
 

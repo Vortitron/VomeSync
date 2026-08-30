@@ -112,6 +112,7 @@ async def test_services_call_coordinator_methods(hass, config_entry):
 
 	link_start = [c for c in calls if c[0][1] == "link_start"][0]
 	assert "portal_url" in link_start[1]["schema"].schema
+	assert "device_code" in link_start[1]["schema"].schema
 
 	# The panel calls these switch services over REST with ?return_response,
 	# so (like get_remote_status/set_forward_ui) they must be ONLY, not

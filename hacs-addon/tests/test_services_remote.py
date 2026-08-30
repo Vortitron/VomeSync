@@ -174,6 +174,40 @@ def test_link_start_staging_portal_is_used_on_poll(monkeypatch):
 	assert poll.await_args.args[1] == "https://staging.vome.io"
 
 
+def test_link_start_uses_prefetched_device_code(monkeypatch):
+	"""Add-on-fetched codes must be stored as-is; Core must not request another."""
+	import asyncio
+	from types import SimpleNamespace
+	from unittest.mock import AsyncMock, MagicMock
+	import custom_components.vomesync.services_remote as sr
+
+	entry = SimpleNamespace(entry_id="e1", options={}, title="Vome")
+	hass = MagicMock()
+	hass.data = {}
+	hass.config_entries.async_entries.return_value = [entry]
+	hass.config.location_name = "Home"
+
+	request = AsyncMock(side_effect=AssertionError("must not fetch when prefetched"))
+	monkeypatch.setattr(sr, "async_get_clientsession", lambda h: MagicMock())
+	monkeypatch.setattr(sr, "async_request_device_code", request)
+
+	handlers = _register_and_capture(hass)
+	started = asyncio.run(handlers["link_start"](SimpleNamespace(data={
+		"portal_url": "https://staging.vome.io",
+		"device_code": "pre-1",
+		"user_code": "STAG-CODE",
+		"verification_uri": "https://staging.vome.io/account/link-ha",
+		"interval": 5,
+		"expires_in": 900,
+	})))
+	assert "error" not in started
+	assert started["status"] == "started"
+	assert started["user_code"] == "STAG-CODE"
+	assert started["portal_url"] == "https://staging.vome.io"
+	assert hass.data[sr.DOMAIN][sr._PENDING_LINK_KEY]["e1"]["device_code"] == "pre-1"
+	assert request.await_count == 0
+
+
 def test_normalise_portal_url_accepts_host_only_and_rejects_junk():
 	import pytest
 	from custom_components.vomesync.services_remote import _normalise_portal_url

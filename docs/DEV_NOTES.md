@@ -34,9 +34,13 @@ and must not be marked `.primary`. The header Connect button lives in
 `index.html` so an old cached `app.js` cannot remove it. Remote Desktop is
 forced off `.primary` in the HTML itself (`#qa-rdp.primary`) so a cached
 script cannot paint it yellow. The Vome site URL is only the add-on
-Configuration option `portal_url` (not the panel sidebar). Panel JS/CSS
+Configuration option `portal_url` (not the panel sidebar). Connect fetches
+the device code from that origin in the add-on process, then passes the
+codes into Home Assistant `link_start` — Core was still posting to
+production even when Configuration was staging. Panel JS/CSS
 URLs are stamped `?v=<addon version>` so ingress cannot keep a previous
-build.
+build. After updating the add-on, restart Home Assistant so it loads the
+bundled integration (0.9.20+) that accepts a prefetched `device_code`.
 
 Local check (no Supervisor):
 

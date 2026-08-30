@@ -826,10 +826,19 @@
 				await refresh();
 				return;
 			}
+			const uri = res.verification_uri || (portalUrl.replace(/\/$/, "") + "/account/link-ha");
+			const expectedHost = portalHostFromUrl(portalUrl);
+			const gotHost = portalHostFromUrl(uri);
+			if (expectedHost && gotHost && expectedHost !== gotHost) {
+				throw new Error(
+					"Home Assistant asked for a code from " + gotHost + ", not " + expectedHost +
+					". Restart Home Assistant, then try Connect again."
+				);
+			}
 			linkFlow = {
 				userCode: res.user_code || "",
-				uri: res.verification_uri || (portalUrl.replace(/\/$/, "") + "/account/link-ha"),
-				interval: Math.max(3, Number(res.interval) || 5),
+				uri: uri,
+				interval: Math.max(3, Number(res.interval) or 5),
 				message: "",
 			};
 			render();
@@ -1103,6 +1112,7 @@
 					</li>
 					<li><span class="pill warn">Waiting for approval…</span> This page updates itself the moment you approve — leave it open.</li>
 				</ol>
+				<p class="muted small">This code only works on <code>${escapeHtml(host)}</code> — not on a different Vome site.</p>
 				${linkFlow.message ? `<p class="muted small">Still trying… (${escapeHtml(linkFlow.message)})</p>` : ""}
 				<div class="row"><button type="button" id="link-cancel">Cancel</button></div>
 			</div>`;
@@ -1128,7 +1138,8 @@
 				<h2>Versions</h2>
 				<p class="muted">Integration running in Home Assistant: <code>${escapeHtml(running)}</code><br>
 				Integration installed on disk: <code>${escapeHtml(installed)}</code><br>
-				This panel: <code>${escapeHtml((state && state.addon_version) || "unknown")}</code></p>
+				This panel: <code>${escapeHtml((state && state.addon_version) || "unknown")}</code><br>
+				Vome site: <code>${escapeHtml((state && state.addon_portal_url) || "https://vome.io")}</code></p>
 				${running !== installed ? `<p class="muted">Home Assistant will load the installed version after one restart. This page continues automatically once that happens.</p>` : ""}
 			</div>
 			<div class="card">
