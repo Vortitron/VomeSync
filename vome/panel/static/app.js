@@ -292,13 +292,16 @@
 					? "Home Assistant is starting or still loading Vome. This page checks automatically and will continue when it is ready — you do not need to click Refresh."
 					: `Vome ${escapeHtml(state.installed_version)} is ready. Home Assistant only loads integrations at startup, so it needs one restart (Settings → System → ⋮ → Restart). This page continues on its own afterwards.`}</p>
 			</div>` : "";
-		const linkCard = (state && !state.linked && !haNotReady()) ? `
+		// Always on the first page so "connect this home" is the obvious first
+		// step. Version / restart problems are explained if they click it —
+		// hiding the button made the panel look like a status dashboard.
+		const linkCard = (state && state.linked) ? "" : `
 			<div class="card warn-card">
 				<h2>Connect to Vome to get started</h2>
-				<p class="muted">This Home Assistant isn't linked to a Vome account yet, so remote access and LAN tunnels aren't available. Linking takes about a minute and opens no ports.</p>
+				<p class="muted">Link this Home Assistant to your Vome account. It takes about a minute, opens no ports, and is how remote access and LAN tunnels are turned on.</p>
 				<div class="row"><button type="button" class="primary" id="ov-connect">Connect to Vome</button></div>
-			</div>` : "";
-		viewEl.innerHTML = `${restartCard}${extraEntriesCard()}${linkCard}${connectionWarningCard()}
+			</div>`;
+		viewEl.innerHTML = `${linkCard}${restartCard}${extraEntriesCard()}${connectionWarningCard()}
 			<div class="card">
 				<h2>Status</h2>
 				<p class="muted">Same settings as the HACS options menu, laid out as a tree so remote access and LAN tunnels are easier to find.</p>
@@ -326,7 +329,16 @@
 			if (preset) preset.click();
 		};
 		const connectBtn = document.getElementById("ov-connect");
-		if (connectBtn) connectBtn.onclick = () => setView("link");
+		if (connectBtn) connectBtn.onclick = () => {
+			if (haNotReady()) {
+				showBanner(
+					waitingForHa && !restartNeeded() ? WAITING_HA : WAITING_RESTART,
+					"info",
+				);
+				return;
+			}
+			setView("link");
+		};
 		// Only present while the external-URL warning is showing.
 		const fixExternal = document.getElementById("fix-external-url");
 		if (fixExternal) fixExternal.onclick = async () => {
@@ -741,23 +753,74 @@
 	}
 
 	function linkDiagram() {
+		const host = portalHostFromUrl(portalUrlInputValue());
+		const safe = escapeHtml(host);
 		return `
+			<ol class="steps">
+				<li>This Home Assistant asks <strong data-portal-host>${safe}</strong> for a short code.</li>
+				<li>You sign in on that site (new tab) and type the code to approve <em>this</em> home.</li>
+				<li>Home Assistant then <strong>dials out</strong> to Vome and keeps that link — nothing is opened on your router.</li>
+			</ol>
 			<div class="tunnel-diagram">
-				<svg viewBox="0 0 640 92" role="img" aria-label="This Home Assistant dials outward to Vome; nothing is opened on your router.">
-					<g class="node"><rect x="8" y="24" width="150" height="48" rx="10"/><text x="83" y="45">You · vome.io</text><text x="83" y="61" class="sub">sign in here</text></g>
-					<line class="flow" x1="158" y1="48" x2="238" y2="48"/><text x="198" y="39" class="lbl">https</text>
-					<g class="node"><rect x="238" y="24" width="150" height="48" rx="10"/><text x="313" y="45">Vome relay</text><text x="313" y="61" class="sub">vome.io</text></g>
-					<line class="flow" x1="388" y1="48" x2="468" y2="48"/><text x="428" y="39" class="lbl">dials out</text>
-					<g class="node target"><rect x="468" y="24" width="164" height="48" rx="10"/><text x="550" y="45">Home Assistant</text><text x="550" y="61" class="sub">this box</text></g>
+				<svg viewBox="0 0 640 100" role="img" aria-label="You approve on the Vome site; this Home Assistant dials out. No inbound ports.">
+					<g class="node"><rect x="8" y="24" width="150" height="52" rx="10"/><text x="83" y="46">You</text><text x="83" y="62" class="sub">sign in &amp; approve</text></g>
+					<line class="flow" x1="158" y1="50" x2="230" y2="50"/><text x="194" y="40" class="lbl">code</text>
+					<g class="node"><rect x="230" y="24" width="180" height="52" rx="10"/><text x="320" y="46">Vome account</text><text x="320" y="62" class="sub" data-portal-host>${safe}</text></g>
+					<line class="flow" x1="500" y1="50" x2="410" y2="50"/><text x="455" y="40" class="lbl">dials out</text>
+					<g class="node target"><rect x="500" y="24" width="132" height="52" rx="10"/><text x="566" y="46">This HA</text><text x="566" y="62" class="sub">no open ports</text></g>
 				</svg>
-				<p class="muted small">Your Home Assistant makes the connection <em>outward</em> to Vome — no ports are opened on your router, and Vome never reaches in uninvited.</p>
 			</div>`;
+	}
+
+	const DEFAULT_PORTAL = "https://vome.io";
+	const PORTAL_STORE = "vome-portal-url";
+
+	function savedPortalUrl() {
+		try { return localStorage.getItem(PORTAL_STORE) || ""; } catch (_err) { return ""; }
+	}
+
+	function rememberPortalUrl(url) {
+		try {
+			const normalised = (url || "").trim();
+			if (normalised && normalised !== DEFAULT_PORTAL) localStorage.setItem(PORTAL_STORE, normalised);
+			else localStorage.removeItem(PORTAL_STORE);
+		} catch (_err) { /* private mode */ }
+	}
+
+	function portalUrlInputValue() {
+		const el = document.getElementById("portal-url");
+		if (el && el.value.trim()) return el.value.trim();
+		return savedPortalUrl() || (state && state.default_portal_url) || DEFAULT_PORTAL;
+	}
+
+	function portalHostFromUrl(raw) {
+		try {
+			const value = (raw || "").trim();
+			return new URL(value.includes("://") ? value : "https://" + value).host || "vome.io";
+		} catch (_err) {
+			return "vome.io";
+		}
+	}
+
+	function bindPortalPreview() {
+		const input = document.getElementById("portal-url");
+		if (!input) return;
+		const apply = () => {
+			const host = portalHostFromUrl(input.value.trim() || DEFAULT_PORTAL);
+			document.querySelectorAll("[data-portal-host]").forEach((node) => {
+				node.textContent = host;
+			});
+		};
+		input.addEventListener("input", apply);
+		apply();
 	}
 
 	async function startLink() {
 		try {
+			const portalUrl = portalUrlInputValue();
+			rememberPortalUrl(portalUrl);
 			const res = await api("/api/link/start", {
-				method: "POST", body: JSON.stringify(withEntry({})),
+				method: "POST", body: JSON.stringify(withEntry({ portal_url: portalUrl })),
 			});
 			if (res.status === "already_linked") {
 				await refresh();
@@ -1009,14 +1072,22 @@
 			return;
 		}
 		if (!linkFlow) {
+			const portalValue = escapeHtml(portalUrlInputValue());
+			const customPortal = !!(savedPortalUrl() && savedPortalUrl() !== DEFAULT_PORTAL);
 			viewEl.innerHTML = `${extraEntriesCard()}
 				<div class="card">
 					<h2>Connect this Home Assistant to Vome</h2>
-					<p class="muted">Linking lets you reach this home from vome.io — the Home Assistant UI, LAN devices and Remote Desktop — over one outbound, encrypted connection. It takes about a minute and opens no ports on your router.</p>
+					<p class="muted">This is how remote access starts: you approve <em>this</em> home in your Vome account, then Home Assistant keeps an outbound connection. About a minute; no router ports.</p>
 					${linkDiagram()}
+					<details${customPortal ? " open" : ""}>
+						<summary>Use a different Vome site (staging)</summary>
+						<label class="field">Vome site URL<input id="portal-url" value="${portalValue}" placeholder="https://vome.io" autocomplete="url"></label>
+						<p class="muted small">Production is <code>https://vome.io</code>. Staging is <code>https://staging.vome.io</code>.</p>
+					</details>
 					<div class="row"><button type="button" class="primary" id="link-start">Connect to Vome</button></div>
 					<p class="muted small">You'll sign in to Vome in a new tab and approve a short code shown here.</p>
 				</div>`;
+			bindPortalPreview();
 			document.getElementById("link-start").onclick = startLink;
 			return;
 		}

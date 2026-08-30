@@ -204,6 +204,35 @@ def _link_display_name(hass: HomeAssistant) -> str:
 	return "My Home Assistant"
 
 
+def _normalise_portal_url(raw: Optional[str]) -> str:
+	"""Origin of the Vome site used for device-authorisation (prod or staging).
+
+	Blank means production. Host-only values get https://. Paths and trailing
+	slashes are dropped so ``https://staging.vome.io/`` and ``staging.vome.io``
+	both work.
+	"""
+	value = (raw or "").strip() or DEFAULT_PORTAL_URL
+	if "://" not in value:
+		value = "https://" + value
+	parsed = urlparse(value)
+	if parsed.scheme not in ("http", "https"):
+		raise ValueError(
+			"Vome site URL must be http(s), for example https://staging.vome.io"
+		)
+	try:
+		host = parsed.hostname
+		port = parsed.port
+	except ValueError:
+		host = None
+		port = None
+	if not host:
+		raise ValueError(
+			"Vome site URL must be http(s), for example https://staging.vome.io"
+		)
+	netloc = host if port is None else f"{host}:{port}"
+	return f"{parsed.scheme}://{netloc}"
+
+
 async def _save_relay(hass: HomeAssistant, entry: ConfigEntry, relay: dict) -> None:
 	options = dict(entry.options or {})
 	options[CONF_RELAY] = relay
@@ -292,6 +321,7 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 		"external_url": _external_url_check(
 			hass, bool(relay.get(CONF_RELAY_FORWARD_UI))
 		),
+		"default_portal_url": DEFAULT_PORTAL_URL,
 	}
 
 
@@ -334,6 +364,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 				"local_url_override": "",
 				"external_url": _external_url_check(hass, False),
 				"vome_entries": _entries_public(all_entries),
+				"default_portal_url": DEFAULT_PORTAL_URL,
 			}
 			if len(all_entries) > 1:
 				payload["warning"] = MULTI_ENTRY_HINT
@@ -658,14 +689,16 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		if ((entry.options or {}).get(CONF_RELAY) or {}).get(CONF_RELAY_SERVER_ID):
 			return {"status": "already_linked", "entry_id": entry.entry_id}
 		session = async_get_clientsession(hass)
+		portal_url = _normalise_portal_url(call.data.get("portal_url"))
 		started = await async_request_device_code(
-			session, DEFAULT_PORTAL_URL, name=_link_display_name(hass)
+			session, portal_url, name=_link_display_name(hass)
 		)
 		pending = {
 			"device_code": started.get("device_code"),
 			"user_code": started.get("user_code"),
+			"portal_url": portal_url,
 			"verification_uri": started.get("verification_uri")
-			or (DEFAULT_PORTAL_URL + "/account/link-ha"),
+			or (portal_url + "/account/link-ha"),
 		}
 		if not pending["device_code"]:
 			raise ValueError("Vome did not return a device code — try again.")
@@ -685,8 +718,9 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		if not pending or not pending.get("device_code"):
 			return {"status": "no_pending"}
 		session = async_get_clientsession(hass)
+		portal_url = pending.get("portal_url") or DEFAULT_PORTAL_URL
 		result = await async_poll_device_token(
-			session, DEFAULT_PORTAL_URL, pending["device_code"]
+			session, portal_url, pending["device_code"]
 		)
 		status = result.get("status")
 		if status == "approved":
@@ -722,14 +756,21 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		hass.data.get(DOMAIN, {}).get(_PENDING_LINK_KEY, {}).pop(entry.entry_id, None)
 		return {"status": "unlinked", "was_linked": was_linked}
 
-	_link_schema = vol.Schema({vol.Optional("entry_id"): cv.string})
+	hass.services.async_register(
+		DOMAIN, "link_start", _guard(_link_start),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Optional("portal_url"): cv.string,
+		}),
+		supports_response=SupportsResponse.ONLY,
+	)
+	_link_follow_schema = vol.Schema({vol.Optional("entry_id"): cv.string})
 	for _name, _handler in (
-		("link_start", _link_start),
 		("link_poll", _link_poll),
 		("unlink", _unlink),
 	):
 		hass.services.async_register(
 			DOMAIN, _name, _guard(_handler),
-			schema=_link_schema, supports_response=SupportsResponse.ONLY,
+			schema=_link_follow_schema, supports_response=SupportsResponse.ONLY,
 		)
 	_LOGGER.debug("Registered Vome remote-access services")

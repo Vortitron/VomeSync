@@ -139,6 +139,52 @@ def test_link_start_with_two_unlinked_entries_picks_one(monkeypatch):
 	assert hass.data[sr.DOMAIN][sr._PENDING_LINK_KEY]["e1"]["device_code"] == "dev-123"
 
 
+def test_link_start_staging_portal_is_used_on_poll(monkeypatch):
+	"""Connect to staging.vome.io must poll that origin, not production."""
+	import asyncio
+	from types import SimpleNamespace
+	from unittest.mock import AsyncMock, MagicMock
+	import custom_components.vomesync.services_remote as sr
+
+	entry = SimpleNamespace(entry_id="e1", options={}, title="Vome")
+	hass = MagicMock()
+	hass.data = {}
+	hass.config_entries.async_entries.return_value = [entry]
+	hass.config.location_name = "Home"
+
+	request = AsyncMock(return_value={
+		"device_code": "dev-123", "user_code": "WXYZ-1234",
+		"verification_uri": "https://staging.vome.io/account/link-ha",
+		"interval": 5, "expires_in": 900,
+	})
+	poll = AsyncMock(return_value={"status": "pending"})
+	monkeypatch.setattr(sr, "async_get_clientsession", lambda h: MagicMock())
+	monkeypatch.setattr(sr, "async_request_device_code", request)
+	monkeypatch.setattr(sr, "async_poll_device_token", poll)
+
+	handlers = _register_and_capture(hass)
+	started = asyncio.run(handlers["link_start"](
+		SimpleNamespace(data={"portal_url": "https://staging.vome.io/"})
+	))
+	assert "error" not in started
+	assert request.await_args.args[1] == "https://staging.vome.io"
+	assert started["verification_uri"].startswith("https://staging.vome.io")
+
+	asyncio.run(handlers["link_poll"](SimpleNamespace(data={})))
+	assert poll.await_args.args[1] == "https://staging.vome.io"
+
+
+def test_normalise_portal_url_accepts_host_only_and_rejects_junk():
+	import pytest
+	from custom_components.vomesync.services_remote import _normalise_portal_url
+
+	assert _normalise_portal_url("") == "https://vome.io"
+	assert _normalise_portal_url("staging.vome.io") == "https://staging.vome.io"
+	assert _normalise_portal_url("https://staging.vome.io/account") == "https://staging.vome.io"
+	with pytest.raises(ValueError, match="http"):
+		_normalise_portal_url("javascript:alert(1)")
+
+
 def test_preferred_entry_picks_the_linked_one():
 	from types import SimpleNamespace
 	from custom_components.vomesync.services_remote import _preferred_vome_entry

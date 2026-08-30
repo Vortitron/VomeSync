@@ -53,6 +53,24 @@ def test_502_and_400_classified_as_waiting():
 	assert "Invalid JSON" in PANEL_JS or "HTTP ${res.status}" in PANEL_JS
 
 
+def test_connect_is_on_overview_even_when_ha_is_not_ready():
+	overview = PANEL_JS.split("function renderOverview")[1].split("const fixExternal")[0]
+	assert 'id="ov-connect"' in overview
+	assert "const linkCard = (state && state.linked) ? \"\"" in overview.replace("\n", " ") or 'const linkCard = (state && state.linked) ? ""' in overview
+	assert "&& !haNotReady()" not in overview
+	assert "WAITING_HA" in overview
+	assert "WAITING_RESTART" in overview
+	assert 'setView("link")' in overview
+
+
+def test_connect_page_explains_the_flow_and_allows_staging_url():
+	assert "dials out" in PANEL_JS
+	assert "staging.vome.io" in PANEL_JS
+	assert "portal_url" in PANEL_JS
+	assert 'id="portal-url"' in PANEL_JS
+	assert "Use a different Vome site" in PANEL_JS
+
+
 def test_multiple_entries_error_is_plain_language():
 	assert "MULTI_ENTRY_MSG" in PANEL_JS
 	assert "More than one Vome integration" in PANEL_JS

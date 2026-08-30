@@ -373,6 +373,14 @@ link_start:
       required: false
       selector:
         text:
+    portal_url:
+      name: Vome site URL
+      description: >-
+        Portal to approve the link at. Production is https://vome.io; staging
+        is https://staging.vome.io. Blank uses production.
+      required: false
+      selector:
+        text:
 
 link_poll:
   name: Connect to Vome (check approval)
