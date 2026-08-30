@@ -72,8 +72,9 @@ def test_connect_lives_in_the_page_chrome():
 	html = (ROOT / "vome" / "panel" / "static" / "index.html").read_text(encoding="utf-8")
 	assert 'id="header-connect"' in html
 	assert 'id="nav-link-label">Connect to Vome' in html
-	assert 'id="portal-url"' in html
-	assert 'id="portal-staging"' in html
+	assert 'id="portal-url"' not in html
+	assert 'id="portal-staging"' not in html
+	assert "site-switch" not in html
 	assert "#qa-rdp.primary" in html
 	assert "function syncChrome" in PANEL_JS
 	assert "header-connect" in PANEL_JS
@@ -81,13 +82,12 @@ def test_connect_lives_in_the_page_chrome():
 	assert "Vome Home" in PANEL_JS
 
 
-def test_connect_page_explains_the_flow_and_allows_staging_url():
+def test_connect_page_explains_the_flow_and_uses_addon_portal_url():
 	html = (ROOT / "vome" / "panel" / "static" / "index.html").read_text(encoding="utf-8")
 	assert "dials out" in PANEL_JS
-	assert "staging.vome.io" in PANEL_JS
-	assert "staging.vome.io" in html
 	assert "addon_portal_url" in PANEL_JS
-	assert 'id="portal-url"' in html
+	assert "configuredPortalUrl" in PANEL_JS
+	assert "staging.vome.io" not in html
 	assert "#qa-rdp.primary" in PANEL_CSS
 
 

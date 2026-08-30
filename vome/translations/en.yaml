@@ -2,6 +2,5 @@ configuration:
   portal_url:
     name: Vome site URL
     description: >
-      Which Vome this Home Assistant connects to. Production is
-      https://vome.io. Staging is https://staging.vome.io. The panel
-      reads this when you open Connect to Vome.
+      Which Vome this Home Assistant connects to when you use Connect
+      to Vome. Leave the default unless you were given a different address.

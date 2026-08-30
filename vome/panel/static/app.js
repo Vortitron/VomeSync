@@ -780,7 +780,7 @@
 	}
 
 	function linkDiagram() {
-		const host = portalHostFromUrl(portalUrlInputValue());
+		const host = portalHostFromUrl(configuredPortalUrl());
 		const safe = escapeHtml(host);
 		return `
 			<ol class="steps">
@@ -800,65 +800,9 @@
 	}
 
 	const DEFAULT_PORTAL = "https://vome.io";
-	const PORTAL_STORE = "vome-portal-url";
 
-	function savedPortalUrl() {
-		try { return localStorage.getItem(PORTAL_STORE) || ""; } catch (_err) { return ""; }
-	}
-
-	function rememberPortalUrl(url) {
-		try {
-			const normalised = (url || "").trim();
-			if (normalised && normalised !== DEFAULT_PORTAL) localStorage.setItem(PORTAL_STORE, normalised);
-			else localStorage.removeItem(PORTAL_STORE);
-		} catch (_err) { /* private mode */ }
-	}
-
-	function portalUrlInputValue() {
-		const el = document.getElementById("portal-url");
-		if (el && el.value.trim()) return el.value.trim();
-		return savedPortalUrl()
-			|| (state && state.addon_portal_url)
-			|| (state && state.default_portal_url)
-			|| DEFAULT_PORTAL;
-	}
-
-	function syncPortalChrome() {
-		const el = document.getElementById("portal-url");
-		if (!el || el.dataset.touched === "1") return;
-		const saved = savedPortalUrl();
-		const addon = (state && state.addon_portal_url) || "";
-		if (saved) el.value = saved;
-		else if (addon) el.value = addon;
-	}
-
-	function bindPortalSite() {
-		const input = document.getElementById("portal-url");
-		const prod = document.getElementById("portal-prod");
-		const staging = document.getElementById("portal-staging");
-		const mark = () => { if (input) input.dataset.touched = "1"; };
-		if (input) {
-			input.addEventListener("input", () => {
-				mark();
-				rememberPortalUrl(input.value);
-				bindPortalPreview();
-			});
-		}
-		if (prod) prod.onclick = () => {
-			if (!input) return;
-			input.value = DEFAULT_PORTAL;
-			mark();
-			rememberPortalUrl(input.value);
-			bindPortalPreview();
-		};
-		if (staging) staging.onclick = () => {
-			if (!input) return;
-			input.value = "https://staging.vome.io";
-			mark();
-			rememberPortalUrl(input.value);
-			bindPortalPreview();
-		};
-		bindPortalPreview();
+	function configuredPortalUrl() {
+		return (state && state.addon_portal_url) || DEFAULT_PORTAL;
 	}
 
 	function portalHostFromUrl(raw) {
@@ -870,23 +814,11 @@
 		}
 	}
 
-	function bindPortalPreview() {
-		const input = document.getElementById("portal-url");
-		if (!input) return;
-		const apply = () => {
-			const host = portalHostFromUrl(input.value.trim() || DEFAULT_PORTAL);
-			document.querySelectorAll("[data-portal-host]").forEach((node) => {
-				node.textContent = host;
-			});
-		};
-		input.addEventListener("input", apply);
-		apply();
-	}
-
 	async function startLink() {
+		const btn = document.getElementById("link-start");
+		if (btn) btn.disabled = true;
 		try {
-			const portalUrl = portalUrlInputValue();
-			rememberPortalUrl(portalUrl);
+			const portalUrl = configuredPortalUrl();
 			const res = await api("/api/link/start", {
 				method: "POST", body: JSON.stringify(withEntry({ portal_url: portalUrl })),
 			});
@@ -896,7 +828,7 @@
 			}
 			linkFlow = {
 				userCode: res.user_code || "",
-				uri: res.verification_uri || "https://vome.io/account/link-ha",
+				uri: res.verification_uri || (portalUrl.replace(/\/$/, "") + "/account/link-ha"),
 				interval: Math.max(3, Number(res.interval) || 5),
 				message: "",
 			};
@@ -904,6 +836,7 @@
 			scheduleLinkPoll();
 		} catch (err) {
 			reportError(err);
+			if (btn) btn.disabled = false;
 		}
 	}
 
@@ -1145,17 +1078,16 @@
 					<h2>${waitingForHa && !restartNeeded() ? "Waiting for Home Assistant" : "Restart Home Assistant once"}</h2>
 					<p class="muted">${waitingForHa && !restartNeeded() ? WAITING_HA : WAITING_RESTART} You can still start connecting; if it fails, finish the restart and try again.</p>
 				</div>` : "";
-			const host = escapeHtml(portalHostFromUrl(portalUrlInputValue()));
+			const host = escapeHtml(portalHostFromUrl(configuredPortalUrl()));
 			viewEl.innerHTML = `${waitNote}${extraEntriesCard()}
 				<div class="card">
 					<h2>Connect this Home Assistant to Vome</h2>
 					<p class="muted">This is how remote access starts: you approve <em>this</em> home in your Vome account, then Home Assistant keeps an outbound connection. About a minute; no router ports.</p>
 					${linkDiagram()}
-					<p class="muted small">Connecting to <code>${host}</code>. Change the Vome site in the sidebar, or under this add-on's Configuration tab (staging is <code>https://staging.vome.io</code>).</p>
+					<p class="muted small">Connecting to <code>${host}</code>. A different site is set on this add-on's Configuration tab.</p>
 					<div class="row"><button type="button" class="primary" id="link-start">Connect to Vome</button></div>
 					<p class="muted small">You'll sign in to Vome in a new tab and approve a short code shown here.</p>
 				</div>`;
-			bindPortalPreview();
 			document.getElementById("link-start").onclick = startLink;
 			return;
 		}
@@ -1223,7 +1155,6 @@
 			viewEl.insertAdjacentHTML("afterbegin", diagCard());
 		}
 		syncChrome();
-		syncPortalChrome();
 	}
 
 	function escapeHtml(value) {
@@ -1253,6 +1184,5 @@
 			refresh({ quiet: true });
 		}
 	});
-	bindPortalSite();
 	refresh();
 })();
