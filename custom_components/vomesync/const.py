@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.18"
+INTEGRATION_VERSION = "0.9.19"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -153,6 +153,14 @@ RELAY_WS_MSG_WS_CLOSE = "ws_close"
 # byte-pumping itself; these two are only for the component to request a
 # short-lived bearer token a local CLI tunnel client can present to the
 # backend's /ws/tcp endpoint (see services_remote.mint_lan_tcp_token).
+# Failed logins this home saw for itself, reported so its owner can read them
+# next to what Vome's edge saw (see login_watch.py).  Fire-and-forget: there is
+# no response, and a home whose relay is down simply reports nothing.
+RELAY_WS_MSG_ACCESS_EVENTS = "access_events"
+# Cap on one batch of reported events.  The backend caps again on its side;
+# this one stops a home flooding its own socket during an attack.
+ACCESS_EVENTS_MAX_BATCH = 100
+
 RELAY_WS_MSG_MINT_LAN_TCP_TOKEN = "mint_lan_tcp_token"
 RELAY_WS_MSG_MINT_LAN_TCP_TOKEN_RESPONSE = "mint_lan_tcp_token_response"
 RELAY_MINT_TOKEN_TIMEOUT = 10

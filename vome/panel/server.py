@@ -74,6 +74,39 @@ def _manifest_version(path: str) -> str:
 		return ""
 
 
+def addon_version() -> str:
+	"""Add-on version from config.yaml (image or local tree)."""
+	candidates = (
+		Path("/usr/share/vome/config.yaml"),
+		Path(__file__).resolve().parent.parent / "config.yaml",
+	)
+	for path in candidates:
+		if not path.is_file():
+			continue
+		try:
+			for line in path.read_text(encoding="utf-8").splitlines():
+				if line.startswith("version:"):
+					return line.split(":", 1)[1].strip().strip("\"'")
+		except OSError:
+			continue
+	return "dev"
+
+
+def stamp_static_html(html: str, version: str) -> str:
+	"""Pin script/style URLs to this add-on build so ingress cannot keep an old app.js."""
+	ver = version or "dev"
+	html = html.replace("static/app.js", f"static/app.js?v={ver}", 1)
+	html = html.replace("static/styles.css", f"static/styles.css?v={ver}", 1)
+	marker = '<meta charset="utf-8">'
+	if marker in html:
+		html = html.replace(
+			marker,
+			f'{marker}\n\t<meta name="vome-addon-version" content="{ver}">',
+			1,
+		)
+	return html
+
+
 def _config_root() -> str:
 	"""HA config mount inside this container ('' if not mounted).
 
@@ -103,6 +136,7 @@ def installed_versions() -> dict:
 		"bundled_version": _manifest_version(
 			"/usr/share/vome/custom_components/vomesync/manifest.json"
 		),
+		"addon_version": addon_version(),
 	}
 
 
@@ -338,7 +372,12 @@ class PanelHandler(BaseHTTPRequestHandler):
 		if not target.is_file():
 			self._send_json(404, {"error": f"missing static file: {safe}"})
 			return
-		self._send(200, target.read_bytes(), content_type)
+		data = target.read_bytes()
+		if safe == "index.html":
+			data = stamp_static_html(
+				data.decode("utf-8"), addon_version()
+			).encode("utf-8")
+		self._send(200, data, content_type)
 
 
 def main() -> None:

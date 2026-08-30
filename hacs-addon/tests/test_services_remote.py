@@ -189,11 +189,34 @@ def test_preferred_entry_picks_the_linked_one():
 	from types import SimpleNamespace
 	from custom_components.vomesync.services_remote import _preferred_vome_entry
 
-	unlinked = SimpleNamespace(entry_id="e1", options={}, title="old")
+	unlinked = SimpleNamespace(entry_id="e1", options={}, title="old", disabled_by=None)
 	linked = SimpleNamespace(
 		entry_id="e2", options={"relay": {"server_id": "rly-1"}}, title="live",
+		disabled_by=None,
 	)
 	assert _preferred_vome_entry([unlinked, linked]).entry_id == "e2"
+
+
+def test_preferred_entry_skips_disabled_leftovers():
+	from types import SimpleNamespace
+	from custom_components.vomesync.services_remote import (
+		_entries_public,
+		_preferred_vome_entry,
+	)
+
+	disabled = SimpleNamespace(
+		entry_id="dead", options={"relay": {"server_id": "old"}},
+		title="VomeSync (old)", disabled_by="user",
+	)
+	enabled = SimpleNamespace(
+		entry_id="live", options={}, title="VomeSync (new)", disabled_by=None,
+	)
+	assert _preferred_vome_entry([disabled, enabled]).entry_id == "live"
+	public = _entries_public([disabled, enabled])
+	assert public[0]["disabled"] is True
+	assert public[1]["disabled"] is False
+	assert public[0]["linked"] is True
+	assert public[1]["linked"] is False
 
 
 def test_pick_vome_entry_empty_is_a_plain_language_error():

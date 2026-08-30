@@ -13,6 +13,7 @@ FROM ${BUILD_FROM}
 # custom_components/vomesync is synced from the repo root by build.sh / CI and
 # must be present in git — Supervisor builds with this folder as the context.
 COPY rootfs /
+COPY config.yaml /usr/share/vome/config.yaml
 COPY custom_components/vomesync/ /usr/share/vome/custom_components/vomesync/
 COPY panel/ /usr/share/vome/panel/
 

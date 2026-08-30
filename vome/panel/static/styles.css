@@ -107,6 +107,12 @@ body {
 	color: var(--muted);
 }
 .tree-item.active svg { opacity: 1; }
+.tree-item.needs-action {
+	border-left-color: var(--accent);
+	color: var(--accent);
+	font-weight: 600;
+}
+.tree-item.needs-action svg { opacity: 1; }
 main { padding: 1.4rem 1.6rem 2.5rem; }
 .top {
 	display: flex;
@@ -116,6 +122,12 @@ main { padding: 1.4rem 1.6rem 2.5rem; }
 	margin-bottom: 1rem;
 }
 .top h1 { margin: 0; font-size: 1.45rem; font-weight: 600; }
+.top-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	align-items: center;
+}
 .ghost, .primary, .danger, button {
 	border-radius: 8px;
 	border: 1px solid var(--line);

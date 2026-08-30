@@ -96,6 +96,23 @@
 		return waitingForHa || restartNeeded();
 	}
 
+	// Relay / Vome Home link — not the leftover VomeSync switch-sync entries.
+	function vomeHomeLinked() {
+		return !!(state && state.linked);
+	}
+
+	function syncChrome() {
+		const linked = vomeHomeLinked();
+		const header = document.getElementById("header-connect");
+		if (header) header.classList.toggle("hidden", linked);
+		const nav = document.querySelector(".tree-item[data-view=\"link\"]");
+		if (nav) nav.classList.toggle("needs-action", !linked);
+		const label = document.getElementById("nav-link-label");
+		if (label) label.textContent = linked ? "Vome account" : "Connect to Vome";
+		titles.link = linked ? "Vome account" : "Connect to Vome";
+		if (current === "link" && titleEl) titleEl.textContent = titles.link;
+	}
+
 	// Echo the shown entry's id back on writes so they target the same Home
 	// Assistant even when several Vome integrations are linked (which would
 	// otherwise make the write ambiguous and fail).
@@ -273,12 +290,26 @@
 	function extraEntriesCard() {
 		const entries = (state && state.vome_entries) || [];
 		if (entries.length < 2) return "";
-		const chosen = entries.find((e) => e.entry_id === (state && state.entry_id)) || entries[0];
-		const names = entries.map((e) => e.title || "Vome").join(", ");
+		const disabled = entries.filter((e) => e.disabled);
+		const enabled = entries.filter((e) => !e.disabled);
+		const pool = enabled.length ? enabled : entries;
+		const chosen = pool.find((e) => e.entry_id === (state && state.entry_id)) || pool[0];
+		const names = pool.map((e) => e.title || "Vome").join(", ");
+		const disabledNote = disabled.length
+			? ` ${disabled.length} extra ${disabled.length === 1 ? "row is" : "rows are"} disabled and can be deleted.`
+			: "";
+		const leftover = "Those VomeSync rows are switch-sync leftovers — they are not a Vome Home remote-access link.";
+		if (enabled.length <= 1 && disabled.length) {
+			return `
+			<div class="card info-card">
+				<h2>Old VomeSync rows</h2>
+				<p class="muted">${leftover}${disabledNote} Connect to Vome to attach this home. Delete the spares under Settings → Devices & Services when you are ready.</p>
+			</div>`;
+		}
 		return `
 			<div class="card info-card">
 				<h2>More than one Vome integration</h2>
-				<p class="muted">This Home Assistant has ${entries.length} Vome integrations (${escapeHtml(names)}). That usually happens after installing from HACS and adding Vome again. Connecting here uses <strong>${escapeHtml(chosen.title || "Vome")}</strong>. Remove the spare under Settings → Devices & Services so Devices and this panel don't issue different codes.</p>
+				<p class="muted">This Home Assistant has ${pool.length} VomeSync integrations (${escapeHtml(names)}). ${leftover} Connecting here uses <strong>${escapeHtml((chosen && chosen.title) || "Vome")}</strong>.${disabledNote} Remove the spare under Settings → Devices & Services so Devices and this panel don't issue different codes.</p>
 			</div>`;
 	}
 
@@ -292,14 +323,14 @@
 					? "Home Assistant is starting or still loading Vome. This page checks automatically and will continue when it is ready — you do not need to click Refresh."
 					: `Vome ${escapeHtml((state && state.installed_version) || "")} is ready. Home Assistant only loads integrations at startup, so it needs one restart (Settings → System → ⋮ → Restart). This page continues on its own afterwards.`}</p>
 			</div>` : "";
-		// First thing on the page even while a restart is pending. Hide only
-		// once the home is actually linked *and* Home Assistant has loaded
-		// the current integration — otherwise the reboot card stole the CTA.
-		const hideConnect = !!(state && state.linked) && !haNotReady();
+		// VomeSync config entries (switch sync) are not a Vome Home link.
+		// Never hide this card because a restart is pending — that made Remote
+		// Desktop look like the next step.
+		const hideConnect = vomeHomeLinked();
 		const linkCard = hideConnect ? "" : `
 			<div class="card warn-card">
 				<h2>Connect to Vome to get started</h2>
-				<p class="muted">Link this Home Assistant to your Vome account. It takes about a minute, opens no ports, and is how remote access and LAN tunnels are turned on.</p>
+				<p class="muted">Link this Home Assistant to your Vome account. It takes about a minute, opens no ports, and is how remote access and LAN tunnels are turned on. Existing VomeSync rows in Devices & Services are leftover switch-sync installs, not this link.</p>
 				<div class="row"><button type="button" class="primary" id="ov-connect">Connect to Vome</button></div>
 			</div>`;
 		viewEl.innerHTML = `${linkCard}${restartCard}${extraEntriesCard()}${connectionWarningCard()}
@@ -307,7 +338,7 @@
 				<h2>Status</h2>
 				<p class="muted">Same settings as the HACS options menu, laid out as a tree so remote access and LAN tunnels are easier to find.</p>
 				<div class="row">
-					${pill(!!(state && state.linked), "Linked to Vome", "Not linked")}
+					${pill(vomeHomeLinked(), "Linked to Vome", "Not linked")}
 					${pill(!!(state && state.forward_ui), "HA UI forwarding on", "HA UI forwarding off")}
 					${pill(enabled > 0, `${enabled} LAN tunnel${enabled === 1 ? "" : "s"} on`, "No LAN tunnels")}
 					${pill(!!(state && state.addon_marker), "Add-on install", "HACS-only install")}
@@ -316,6 +347,7 @@
 			<div class="card">
 				<h2>Quick actions</h2>
 				<div class="row">
+					${hideConnect ? "" : `<button type="button" class="primary" id="qa-connect">Connect to Vome</button>`}
 					<button type="button" id="qa-rdp">Set up Remote Desktop</button>
 					<button type="button" id="qa-lan">LAN tunnels</button>
 					<button type="button" id="qa-forward">Home Assistant UI</button>
@@ -329,17 +361,11 @@
 			const preset = document.getElementById("preset-rdp");
 			if (preset) preset.click();
 		};
+		const goConnect = () => setView("link");
 		const connectBtn = document.getElementById("ov-connect");
-		if (connectBtn) connectBtn.onclick = () => {
-			if (haNotReady()) {
-				showBanner(
-					waitingForHa && !restartNeeded() ? WAITING_HA : WAITING_RESTART,
-					"info",
-				);
-				return;
-			}
-			setView("link");
-		};
+		if (connectBtn) connectBtn.onclick = goConnect;
+		const qaConnect = document.getElementById("qa-connect");
+		if (qaConnect) qaConnect.onclick = goConnect;
 		// Only present while the external-URL warning is showing.
 		const fixExternal = document.getElementById("fix-external-url");
 		if (fixExternal) fixExternal.onclick = async () => {
@@ -1075,7 +1101,12 @@
 		if (!linkFlow) {
 			const portalValue = escapeHtml(portalUrlInputValue());
 			const customPortal = !!(savedPortalUrl() && savedPortalUrl() !== DEFAULT_PORTAL);
-			viewEl.innerHTML = `${extraEntriesCard()}
+			const waitNote = haNotReady() ? `
+				<div class="card info-card">
+					<h2>${waitingForHa && !restartNeeded() ? "Waiting for Home Assistant" : "Restart Home Assistant once"}</h2>
+					<p class="muted">${waitingForHa && !restartNeeded() ? WAITING_HA : WAITING_RESTART} You can still start connecting; if it fails, finish the restart and try again.</p>
+				</div>` : "";
+			viewEl.innerHTML = `${waitNote}${extraEntriesCard()}
 				<div class="card">
 					<h2>Connect this Home Assistant to Vome</h2>
 					<p class="muted">This is how remote access starts: you approve <em>this</em> home in your Vome account, then Home Assistant keeps an outbound connection. About a minute; no router ports.</p>
@@ -1128,7 +1159,8 @@
 			<div class="card">
 				<h2>Versions</h2>
 				<p class="muted">Integration running in Home Assistant: <code>${escapeHtml(running)}</code><br>
-				Integration installed on disk: <code>${escapeHtml(installed)}</code></p>
+				Integration installed on disk: <code>${escapeHtml(installed)}</code><br>
+				This panel: <code>${escapeHtml((state && state.addon_version) || "unknown")}</code></p>
 				${running !== installed ? `<p class="muted">Home Assistant will load the installed version after one restart. This page continues automatically once that happens.</p>` : ""}
 			</div>
 			<div class="card">
@@ -1154,6 +1186,7 @@
 		if (lastDiag && current === "about") {
 			viewEl.insertAdjacentHTML("afterbegin", diagCard());
 		}
+		syncChrome();
 	}
 
 	function escapeHtml(value) {

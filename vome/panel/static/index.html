@@ -41,8 +41,8 @@
 			</details>
 			<details open>
 				<summary>Account</summary>
-				<button type="button" class="tree-item" data-view="link">
-					<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-link"/></svg>Vome account
+				<button type="button" class="tree-item needs-action" data-view="link">
+					<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-link"/></svg><span id="nav-link-label">Connect to Vome</span>
 				</button>
 				<button type="button" class="tree-item" data-view="switches">
 					<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-switch"/></svg>Switches
@@ -56,9 +56,13 @@
 	<main>
 		<header class="top">
 			<h1 id="view-title">Overview</h1>
-			<button type="button" id="btn-refresh" class="ghost">
-				<svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh
-			</button>
+			<div class="top-actions">
+				<button type="button" class="primary" id="header-connect"
+					onclick="document.querySelector('[data-view=link]').click()">Connect to Vome</button>
+				<button type="button" id="btn-refresh" class="ghost">
+					<svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh
+				</button>
+			</div>
 		</header>
 		<p id="banner" class="banner hidden" role="status"></p>
 		<section id="view" class="view"></section>

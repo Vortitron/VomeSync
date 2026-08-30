@@ -28,8 +28,11 @@ what failed Store installs on machines that were not pre-imaged with Vome.
 
 The overview panel keeps **Connect to Vome** visible while Home Assistant
 still needs a restart (version mismatch / 400 / 502). Hide it only once the
-home is linked *and* the current integration is loaded. Remote Desktop is a
-secondary action — do not mark that button `.primary` (yellow).
+home has a Vome Home relay link (`state.linked`) — leftover VomeSync
+switch-sync entries are not that link. Remote Desktop is a secondary action
+and must not be marked `.primary`. The header Connect button lives in
+`index.html` so an old cached `app.js` cannot remove it. Panel JS/CSS URLs
+are stamped `?v=<addon version>` so ingress cannot keep a previous build.
 
 Local check (no Supervisor):
 

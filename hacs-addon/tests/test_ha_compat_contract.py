@@ -106,3 +106,77 @@ class TestIpBanIsNotUsableOverTheRelay:
 		# request.remote is the loopback address the component dialled from, so
 		# Core cannot tell one remote visitor from another.
 		assert "request.remote" in source
+
+
+class TestLoginFailureLogLine:
+	"""The home reports its own failed logins by reading Core's log line.
+
+	``custom_components/vomesync/login_watch.py`` exists because
+	``process_wrong_login`` fires **no event** — it writes a warning and raises
+	a persistent notification, and that is all.  So the watcher listens for
+	``system_log_event`` and parses the sentence Core builds.
+
+	That is a coupling to a message rather than an API, which is exactly what
+	this file is for.  If Core rewords the line, the owner's access log quietly
+	stops showing attempts that never reached Vome's edge — the ones from a
+	device on their own network, which nothing else can see.  Better to fail
+	here.
+	"""
+
+	def test_the_failure_line_still_carries_host_address_url_and_agent(self):
+		from homeassistant.components.http import ban
+
+		source = inspect.getsource(ban.process_wrong_login)
+		assert "Login attempt or request with invalid authentication from" in source, (
+			"Core reworded its failed-login warning. Update the regex in "
+			"custom_components/vomesync/login_watch.py to match."
+		)
+		assert "Requested URL:" in source, (
+			"Core dropped the requested URL from its failed-login warning; the "
+			"access log will stop showing which endpoint was tried."
+		)
+		assert "user_agent" in source, (
+			"Core dropped the user agent from its failed-login warning; the "
+			"access log will stop showing what was knocking."
+		)
+
+	def test_the_watcher_parses_the_line_core_actually_builds(self):
+		"""Build the line the way Core does, then parse it as the watcher will."""
+		from ipaddress import ip_address
+
+		from custom_components.vomesync import login_watch
+
+		# Reproduced from ban.process_wrong_login: same f-strings, same order.
+		remote_host, remote_addr = "somebox.lan", ip_address("10.0.0.5")
+		base_msg = (
+			"Login attempt or request with invalid authentication from"
+			f" {remote_host} ({remote_addr})."
+		)
+		log_msg = f"{base_msg} Requested URL: '/auth/token'. (Mozilla/5.0)"
+
+		parsed = login_watch.parse_record(login_watch.BAN_LOGGER, log_msg)
+		assert parsed is not None, "The watcher no longer recognises Core's line"
+		assert parsed["client_ip"] == "10.0.0.5"
+		assert parsed["path"] == "/auth/token"
+		assert parsed["user_agent"] == "Mozilla/5.0"
+
+	def test_the_ban_line_is_recognised_too(self):
+		from custom_components.vomesync import login_watch
+
+		parsed = login_watch.parse_record(
+			login_watch.BAN_LOGGER, "Banned IP 10.0.0.5 for too many login attempts")
+		assert parsed["event"] == login_watch.EVENT_LOGIN_BLOCKED
+		assert parsed["client_ip"] == "10.0.0.5"
+
+	def test_the_logger_name_the_watcher_filters_on_is_real(self):
+		from homeassistant.components.http import ban
+
+		# The watcher keeps only records from this logger; every other warning
+		# in a busy home is none of the owner's access log.
+		assert ban._LOGGER.name == login_watch_ban_logger()
+
+
+def login_watch_ban_logger():
+	from custom_components.vomesync import login_watch
+
+	return login_watch.BAN_LOGGER

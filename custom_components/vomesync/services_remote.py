@@ -121,6 +121,10 @@ def _vome_entries(hass: HomeAssistant) -> list[ConfigEntry]:
 	return list(hass.config_entries.async_entries(DOMAIN))
 
 
+def _entry_is_disabled(entry: ConfigEntry) -> bool:
+	return getattr(entry, "disabled_by", None) is not None
+
+
 def _entry_is_linked(entry: ConfigEntry) -> bool:
 	relay = (entry.options or {}).get(CONF_RELAY) or {}
 	return bool(relay.get(CONF_RELAY_SERVER_ID))
@@ -133,7 +137,12 @@ def _entry_title(entry: ConfigEntry) -> str:
 
 def _entries_public(entries: list[ConfigEntry]) -> list[dict[str, Any]]:
 	return [
-		{"entry_id": e.entry_id, "title": _entry_title(e), "linked": _entry_is_linked(e)}
+		{
+			"entry_id": e.entry_id,
+			"title": _entry_title(e),
+			"linked": _entry_is_linked(e),
+			"disabled": _entry_is_disabled(e),
+		}
 		for e in entries
 	]
 
@@ -144,20 +153,20 @@ def _preferred_vome_entry(entries: list[ConfigEntry]) -> ConfigEntry:
 	A HACS install plus adding the integration again leaves two unlinked
 	entries; refusing that with 'pass entry_id' made the add-on panel look
 	broken while Devices (which is bound to one entry) still worked. Prefer a
-	single linked relay; otherwise the first entry, which the panel then
-	echoes back on writes.
+	single 	linked relay; otherwise the first enabled entry, which the panel then
+	echoes back on writes. Disabled leftovers (HACS rows turned off) are
+	skipped so they do not steal Connect.
 	"""
 	if not entries:
 		raise ValueError(
 			"The Vome integration isn't set up in Home Assistant yet. "
 			"Add it under Settings → Devices & Services, then come back here."
 		)
-	linked = [e for e in entries if _entry_is_linked(e)]
-	if len(linked) == 1:
-		return linked[0]
+	enabled = [e for e in entries if not _entry_is_disabled(e)] or list(entries)
+	linked = [e for e in enabled if _entry_is_linked(e)]
 	if linked:
 		return linked[0]
-	return entries[0]
+	return enabled[0]
 
 
 def _pick_entry(hass: HomeAssistant, entry_id: Optional[str]) -> ConfigEntry:

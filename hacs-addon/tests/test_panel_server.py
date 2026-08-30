@@ -136,3 +136,16 @@ def test_panel_exposes_the_local_url_route():
 	# The address Vome dials HA on became user-settable in 2026.8; the panel is
 	# the only place a non-technical user can correct a bad detection.
 	assert "set_local_url" in _panel_post_services()
+
+
+def test_addon_version_reads_config_yaml():
+	assert server.addon_version() == "0.3.24"
+
+
+def test_stamp_static_html_cache_busts_assets():
+	html = (ROOT / "vome" / "panel" / "static" / "index.html").read_text(encoding="utf-8")
+	stamped = server.stamp_static_html(html, "0.3.24")
+	assert "static/app.js?v=0.3.24" in stamped
+	assert "static/styles.css?v=0.3.24" in stamped
+	assert 'name="vome-addon-version" content="0.3.24"' in stamped
+	assert "header-connect" in stamped

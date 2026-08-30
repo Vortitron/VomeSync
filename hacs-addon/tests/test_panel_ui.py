@@ -56,16 +56,26 @@ def test_502_and_400_classified_as_waiting():
 def test_connect_is_on_overview_even_when_ha_is_not_ready():
 	overview = PANEL_JS.split("function renderOverview")[1].split("const fixExternal")[0]
 	assert 'id="ov-connect"' in overview
-	# Hidden only when already linked *and* Home Assistant has loaded
-	# the current integration. A reboot/waiting card must not steal the CTA.
-	assert "const hideConnect = !!(state && state.linked) && !haNotReady();" in overview
-	assert "WAITING_HA" in overview
-	assert "WAITING_RESTART" in overview
+	assert "vomeHomeLinked()" in overview
+	assert "const hideConnect = vomeHomeLinked();" in overview
+	assert "Restart Home Assistant once" in overview
 	assert 'setView("link")' in overview
+	assert "const goConnect = () => setView(\"link\");" in overview
 	assert 'class="primary" id="qa-rdp"' not in overview
 	assert 'id="qa-rdp" class="primary"' not in overview
 	assert 'id="qa-rdp"' in overview
 	assert 'class="primary" id="ov-connect"' in overview
+	assert 'id="qa-connect"' in overview
+
+
+def test_connect_lives_in_the_page_chrome():
+	html = (ROOT / "vome" / "panel" / "static" / "index.html").read_text(encoding="utf-8")
+	assert 'id="header-connect"' in html
+	assert 'id="nav-link-label">Connect to Vome' in html
+	assert "function syncChrome" in PANEL_JS
+	assert "header-connect" in PANEL_JS
+	assert "switch-sync leftovers" in PANEL_JS
+	assert "Vome Home" in PANEL_JS
 
 
 def test_connect_page_explains_the_flow_and_allows_staging_url():

@@ -89,6 +89,8 @@ from .const import (
 	RELAY_WS_MSG_HTTP_PROXY_ABORT,
 	RELAY_WS_MSG_HTTP_PROXY_CHUNK,
 	RELAY_WS_MSG_HTTP_PROXY_END,
+	ACCESS_EVENTS_MAX_BATCH,
+	RELAY_WS_MSG_ACCESS_EVENTS,
 	RELAY_WS_MSG_MINT_LAN_TCP_TOKEN,
 	RELAY_WS_MSG_MINT_LAN_TCP_TOKEN_RESPONSE,
 	RELAY_WS_MSG_PING,
@@ -101,6 +103,7 @@ from .const import (
 	SUPERVISOR_ADDONS_URL,
 	SUPERVISOR_TOKEN_ENV,
 )
+from .login_watch import LoginWatcher
 from .webhooks import is_forwardable_webhook, normalise_webhooks
 from .lan_routes import (
 	ROUTE_HOST,
@@ -551,6 +554,8 @@ class RelayClient:
 		# socket (the reverse direction of ha_rpc/http_proxy/ws_open, which are
 		# all backend-initiated) — currently only mint_lan_tcp_token.
 		self._pending_requests: dict[str, asyncio.Future] = {}
+		# Reports Core's own failed logins up the relay (see login_watch.py).
+		self._login_watcher: Optional[LoginWatcher] = None
 		# Streaming forwards in flight, so an abort from the backend can find
 		# the read it needs to stop: requestId -> _StreamSink.
 		self._streaming: dict[Any, "_StreamSink"] = {}
@@ -581,10 +586,18 @@ class RelayClient:
 			return
 		self._closing = False
 		self._task = self._hass.loop.create_task(self._run())
+		# Core's own failed-login records go up the same socket, so the owner
+		# can see attempts that never reached Vome's edge at all — a device on
+		# their own network with a stale token, say.  See login_watch.py.
+		if self._login_watcher is None:
+			self._login_watcher = LoginWatcher(self._hass, self.send_access_events)
+		self._login_watcher.start()
 
 	async def stop(self) -> None:
 		"""Stop the relay loop and close the socket."""
 		self._closing = True
+		if self._login_watcher is not None:
+			self._login_watcher.stop()
 		if self._ws is not None:
 			with suppress(Exception):
 				await self._ws.close()
@@ -1097,6 +1110,23 @@ class RelayClient:
 		if not token:
 			return None, "Vome did not return a tunnel token."
 		return str(token), None
+
+	async def send_access_events(self, events: list) -> None:
+		"""Report this home's own access events to Vome (fire and forget).
+
+		Silently does nothing while the relay is down: these are a convenience
+		for the owner's log, and a home that cannot reach Vome has more
+		pressing problems than a missing log line.  Nothing waits on a reply —
+		there is none.
+		"""
+		ws = self._ws
+		if ws is None or not events:
+			return
+		with suppress(Exception):
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_ACCESS_EVENTS,
+				"events": list(events)[:ACCESS_EVENTS_MAX_BATCH],
+			})
 
 	async def _handle_ws_data(self, data: dict) -> None:
 		"""Forward one frame down to the local HA socket or TCP connection."""

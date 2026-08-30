@@ -45,7 +45,8 @@ def test_dockerfile_defaults_build_from_to_base_python():
 	assert "FROM ${BUILD_FROM}" in DOCKERFILE or "FROM $BUILD_FROM" in DOCKERFILE
 
 
-def test_dockerfile_does_not_apk_add():
+def test_dockerfile_copies_addon_config_for_panel_version():
+	assert "COPY config.yaml /usr/share/vome/config.yaml" in DOCKERFILE
 	assert "apk add" not in DOCKERFILE, (
 		"Store builds must not apk-add — Alpine indexes are a second network "
 		"dependency and fail on EOL bases. Use base-python instead."
