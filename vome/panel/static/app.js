@@ -817,7 +817,48 @@
 	function portalUrlInputValue() {
 		const el = document.getElementById("portal-url");
 		if (el && el.value.trim()) return el.value.trim();
-		return savedPortalUrl() || (state && state.default_portal_url) || DEFAULT_PORTAL;
+		return savedPortalUrl()
+			|| (state && state.addon_portal_url)
+			|| (state && state.default_portal_url)
+			|| DEFAULT_PORTAL;
+	}
+
+	function syncPortalChrome() {
+		const el = document.getElementById("portal-url");
+		if (!el || el.dataset.touched === "1") return;
+		const saved = savedPortalUrl();
+		const addon = (state && state.addon_portal_url) || "";
+		if (saved) el.value = saved;
+		else if (addon) el.value = addon;
+	}
+
+	function bindPortalSite() {
+		const input = document.getElementById("portal-url");
+		const prod = document.getElementById("portal-prod");
+		const staging = document.getElementById("portal-staging");
+		const mark = () => { if (input) input.dataset.touched = "1"; };
+		if (input) {
+			input.addEventListener("input", () => {
+				mark();
+				rememberPortalUrl(input.value);
+				bindPortalPreview();
+			});
+		}
+		if (prod) prod.onclick = () => {
+			if (!input) return;
+			input.value = DEFAULT_PORTAL;
+			mark();
+			rememberPortalUrl(input.value);
+			bindPortalPreview();
+		};
+		if (staging) staging.onclick = () => {
+			if (!input) return;
+			input.value = "https://staging.vome.io";
+			mark();
+			rememberPortalUrl(input.value);
+			bindPortalPreview();
+		};
+		bindPortalPreview();
 	}
 
 	function portalHostFromUrl(raw) {
@@ -1099,23 +1140,18 @@
 			return;
 		}
 		if (!linkFlow) {
-			const portalValue = escapeHtml(portalUrlInputValue());
-			const customPortal = !!(savedPortalUrl() && savedPortalUrl() !== DEFAULT_PORTAL);
 			const waitNote = haNotReady() ? `
 				<div class="card info-card">
 					<h2>${waitingForHa && !restartNeeded() ? "Waiting for Home Assistant" : "Restart Home Assistant once"}</h2>
 					<p class="muted">${waitingForHa && !restartNeeded() ? WAITING_HA : WAITING_RESTART} You can still start connecting; if it fails, finish the restart and try again.</p>
 				</div>` : "";
+			const host = escapeHtml(portalHostFromUrl(portalUrlInputValue()));
 			viewEl.innerHTML = `${waitNote}${extraEntriesCard()}
 				<div class="card">
 					<h2>Connect this Home Assistant to Vome</h2>
 					<p class="muted">This is how remote access starts: you approve <em>this</em> home in your Vome account, then Home Assistant keeps an outbound connection. About a minute; no router ports.</p>
 					${linkDiagram()}
-					<details${customPortal ? " open" : ""}>
-						<summary>Use a different Vome site (staging)</summary>
-						<label class="field">Vome site URL<input id="portal-url" value="${portalValue}" placeholder="https://vome.io" autocomplete="url"></label>
-						<p class="muted small">Production is <code>https://vome.io</code>. Staging is <code>https://staging.vome.io</code>.</p>
-					</details>
+					<p class="muted small">Connecting to <code>${host}</code>. Change the Vome site in the sidebar, or under this add-on's Configuration tab (staging is <code>https://staging.vome.io</code>).</p>
 					<div class="row"><button type="button" class="primary" id="link-start">Connect to Vome</button></div>
 					<p class="muted small">You'll sign in to Vome in a new tab and approve a short code shown here.</p>
 				</div>`;
@@ -1187,6 +1223,7 @@
 			viewEl.insertAdjacentHTML("afterbegin", diagCard());
 		}
 		syncChrome();
+		syncPortalChrome();
 	}
 
 	function escapeHtml(value) {
@@ -1216,5 +1253,6 @@
 			refresh({ quiet: true });
 		}
 	});
+	bindPortalSite();
 	refresh();
 })();

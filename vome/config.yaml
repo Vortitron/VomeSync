@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome
-version: "0.3.24"
+version: "0.3.25"
 slug: vome
 description: >
   Share virtual switches between Home Assistant homes, connect this instance
@@ -27,7 +27,9 @@ ingress_port: 8099
 ingress_stream: true
 panel_icon: mdi:home-analytics
 panel_title: Vome
-options: {}
-schema: {}
+options:
+  portal_url: "https://vome.io"
+schema:
+  portal_url: str
 # Built from the Dockerfile in this folder (Supervisor local build).
 # Do not set `image:` — the Store clones this repo and builds here.

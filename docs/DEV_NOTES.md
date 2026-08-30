@@ -31,8 +31,12 @@ still needs a restart (version mismatch / 400 / 502). Hide it only once the
 home has a Vome Home relay link (`state.linked`) — leftover VomeSync
 switch-sync entries are not that link. Remote Desktop is a secondary action
 and must not be marked `.primary`. The header Connect button lives in
-`index.html` so an old cached `app.js` cannot remove it. Panel JS/CSS URLs
-are stamped `?v=<addon version>` so ingress cannot keep a previous build.
+`index.html` so an old cached `app.js` cannot remove it. Remote Desktop is
+forced off `.primary` in the HTML itself (`#qa-rdp.primary`) so a cached
+script cannot paint it yellow. The Vome site URL lives in the sidebar and
+in the add-on Configuration tab (`portal_url`; staging is
+`https://staging.vome.io`). Panel JS/CSS URLs are stamped `?v=<addon version>`
+so ingress cannot keep a previous build.
 
 Local check (no Supervisor):
 

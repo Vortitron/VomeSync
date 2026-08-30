@@ -4,7 +4,15 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>Vome</title>
-	<link rel="stylesheet" href="static/styles.css">
+	<link rel="stylesheet" href="static/styles.css?v=0.3.25">
+	<style>
+		/* Old cached app.js marks Remote Desktop as .primary. It is not the next step. */
+		#qa-rdp, #qa-rdp.primary {
+			background: #14161c !important;
+			color: #eceff4 !important;
+			border-color: #262b36 !important;
+		}
+	</style>
 </head>
 <body>
 	<!-- Icons are inline SVG: the panel is served from the add-on with no
@@ -23,6 +31,16 @@
 
 	<aside class="tree" aria-label="Vome navigation">
 		<div class="brand">Vome<span class="brand-sub">control panel</span></div>
+		<div class="site-switch">
+			<label class="field">Vome site
+				<input id="portal-url" value="https://vome.io" placeholder="https://vome.io" autocomplete="url">
+			</label>
+			<div class="row site-switch-actions">
+				<button type="button" id="portal-prod">vome.io</button>
+				<button type="button" id="portal-staging">staging.vome.io</button>
+			</div>
+			<p class="muted small">Used when you Connect. Same setting as the add-on Configuration tab.</p>
+		</div>
 		<nav>
 			<button type="button" class="tree-item active" data-view="overview">
 				<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-grid"/></svg>Overview
@@ -67,6 +85,15 @@
 		<p id="banner" class="banner hidden" role="status"></p>
 		<section id="view" class="view"></section>
 	</main>
-	<script src="static/app.js"></script>
+	<script>
+		(function () {
+			var input = document.getElementById("portal-url");
+			var prod = document.getElementById("portal-prod");
+			var staging = document.getElementById("portal-staging");
+			if (prod) prod.onclick = function () { input.value = "https://vome.io"; };
+			if (staging) staging.onclick = function () { input.value = "https://staging.vome.io"; };
+		})();
+	</script>
+	<script src="static/app.js?v=0.3.25"></script>
 </body>
 </html>

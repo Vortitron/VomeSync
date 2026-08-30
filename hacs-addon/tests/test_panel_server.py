@@ -139,13 +139,23 @@ def test_panel_exposes_the_local_url_route():
 
 
 def test_addon_version_reads_config_yaml():
-	assert server.addon_version() == "0.3.24"
+	assert server.addon_version() == "0.3.25"
 
 
 def test_stamp_static_html_cache_busts_assets():
 	html = (ROOT / "vome" / "panel" / "static" / "index.html").read_text(encoding="utf-8")
-	stamped = server.stamp_static_html(html, "0.3.24")
-	assert "static/app.js?v=0.3.24" in stamped
-	assert "static/styles.css?v=0.3.24" in stamped
-	assert 'name="vome-addon-version" content="0.3.24"' in stamped
+	stamped = server.stamp_static_html(html, "0.3.25")
+	assert "static/app.js?v=0.3.25" in stamped
+	assert "static/styles.css?v=0.3.25" in stamped
+	assert 'name="vome-addon-version" content="0.3.25"' in stamped
 	assert "header-connect" in stamped
+	assert "?v=0.3.25?v=" not in stamped
+	again = server.stamp_static_html(stamped, "0.3.25")
+	assert again.count("static/app.js?v=0.3.25") == 1
+
+
+def test_addon_portal_url_reads_options_json(tmp_path):
+	options = tmp_path / "options.json"
+	options.write_text('{"portal_url": "https://staging.vome.io"}', encoding="utf-8")
+	assert server.addon_portal_url(options) == "https://staging.vome.io"
+	assert server.addon_portal_url(tmp_path / "missing.json") == ""

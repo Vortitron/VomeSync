@@ -73,3 +73,9 @@ def test_addon_version_is_quoted_semver():
 	match = re.search(r'^version:\s*"([^"]+)"', CONFIG, re.M)
 	assert match, "config.yaml version must be a quoted string"
 	assert re.fullmatch(r"\d+\.\d+\.\d+", match.group(1)), match.group(1)
+
+
+def test_addon_exposes_portal_url_config():
+	assert "portal_url:" in CONFIG
+	trans = (ADDON / "translations" / "en.yaml").read_text(encoding="utf-8")
+	assert "staging.vome.io" in trans

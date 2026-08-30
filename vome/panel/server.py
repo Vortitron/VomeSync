@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -95,16 +96,35 @@ def addon_version() -> str:
 def stamp_static_html(html: str, version: str) -> str:
 	"""Pin script/style URLs to this add-on build so ingress cannot keep an old app.js."""
 	ver = version or "dev"
-	html = html.replace("static/app.js", f"static/app.js?v={ver}", 1)
-	html = html.replace("static/styles.css", f"static/styles.css?v={ver}", 1)
+	html = re.sub(r"static/app\.js(\?v=[^\"]*)?", f"static/app.js?v={ver}", html, count=1)
+	html = re.sub(
+		r"static/styles\.css(\?v=[^\"]*)?", f"static/styles.css?v={ver}", html, count=1
+	)
 	marker = '<meta charset="utf-8">'
-	if marker in html:
+	if marker in html and 'name="vome-addon-version"' not in html:
 		html = html.replace(
 			marker,
 			f'{marker}\n\t<meta name="vome-addon-version" content="{ver}">',
 			1,
 		)
 	return html
+
+
+def addon_options(path: Optional[Path] = None) -> dict:
+	"""Supervisor writes add-on options to /data/options.json."""
+	target = path or Path(os.environ.get("VOME_ADDON_OPTIONS", "/data/options.json"))
+	if not target.is_file():
+		return {}
+	try:
+		data = json.loads(target.read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		return {}
+	return data if isinstance(data, dict) else {}
+
+
+def addon_portal_url(path: Optional[Path] = None) -> str:
+	raw = addon_options(path).get("portal_url")
+	return raw.strip() if isinstance(raw, str) else ""
 
 
 def _config_root() -> str:
@@ -137,6 +157,7 @@ def installed_versions() -> dict:
 			"/usr/share/vome/custom_components/vomesync/manifest.json"
 		),
 		"addon_version": addon_version(),
+		"addon_portal_url": addon_portal_url(),
 	}
 
 
