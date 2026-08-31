@@ -27,6 +27,7 @@ from .const import (
 	CONF_RELAY_WS_URL,
 	DEFAULT_PORTAL_URL,
 	DEFAULT_RELAY_WS_URL,
+	relay_ws_url_for_portal,
 	DOMAIN,
 	FORWARD_HOST_KEY,
 	INTEGRATION_VERSION,
@@ -753,7 +754,9 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			relay = {
 				CONF_RELAY_SERVER_ID: result.get("server_id"),
 				CONF_RELAY_SECRET: result.get("relay_secret"),
-				CONF_RELAY_WS_URL: result.get("relay_ws_url") or DEFAULT_RELAY_WS_URL,
+				CONF_RELAY_WS_URL: relay_ws_url_for_portal(
+					portal_url, result.get("relay_ws_url")
+				),
 			}
 			options = dict(entry.options or {})
 			options[CONF_RELAY] = relay

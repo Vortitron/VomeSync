@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.20"
+INTEGRATION_VERSION = "0.9.21"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -99,8 +99,30 @@ def backup_secret_server_id(secret):
 
 DEFAULT_PORTAL_URL = "https://vome.io"
 DEFAULT_RELAY_WS_URL = "wss://sync.vome.io/ws/relay"
+STAGING_RELAY_WS_URL = "wss://dev.sync.vome.io/ws/relay"
 RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
 RELAY_DEVICE_TOKEN_PATH = "/api/v1/relay/device/token"
+
+
+def relay_ws_url_for_portal(portal_url: str, offered: str | None = None) -> str:
+	"""WebSocket this Home Assistant should dial for the given Vome site.
+
+	Staging used to hand out production ``sync.vome.io``. Never follow that
+	when the portal itself is staging — the house looks linked, staging never
+	sees the socket.
+	"""
+	from urllib.parse import urlparse
+
+	raw = (portal_url or "").strip()
+	if raw and "://" not in raw:
+		raw = "https://" + raw
+	host = (urlparse(raw).hostname or "").lower() if raw else ""
+	offered = (offered or "").strip()
+	if host.startswith("staging.") or ".staging." in host:
+		if "dev.sync.vome.io" in offered:
+			return offered
+		return STAGING_RELAY_WS_URL
+	return offered or DEFAULT_RELAY_WS_URL
 
 # Local Home Assistant core API for executing relayed calls.  Supervisor token
 # first (HAOS / Supervised); a configured long-lived token is the fallback.

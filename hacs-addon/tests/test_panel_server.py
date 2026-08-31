@@ -139,19 +139,19 @@ def test_panel_exposes_the_local_url_route():
 
 
 def test_addon_version_reads_config_yaml():
-	assert server.addon_version() == "0.3.27"
+	assert server.addon_version() == "0.3.28"
 
 
 def test_stamp_static_html_cache_busts_assets():
 	html = (ROOT / "vome" / "panel" / "static" / "index.html").read_text(encoding="utf-8")
-	stamped = server.stamp_static_html(html, "0.3.27")
-	assert "static/app.js?v=0.3.27" in stamped
-	assert "static/styles.css?v=0.3.27" in stamped
-	assert 'name="vome-addon-version" content="0.3.27"' in stamped
+	stamped = server.stamp_static_html(html, "0.3.28")
+	assert "static/app.js?v=0.3.28" in stamped
+	assert "static/styles.css?v=0.3.28" in stamped
+	assert 'name="vome-addon-version" content="0.3.28"' in stamped
 	assert "header-connect" in stamped
-	assert "?v=0.3.27?v=" not in stamped
-	again = server.stamp_static_html(stamped, "0.3.27")
-	assert again.count("static/app.js?v=0.3.27") == 1
+	assert "?v=0.3.28?v=" not in stamped
+	again = server.stamp_static_html(stamped, "0.3.28")
+	assert again.count("static/app.js?v=0.3.28") == 1
 
 
 def test_addon_portal_url_reads_options_json(tmp_path):

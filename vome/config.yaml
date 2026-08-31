@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome
-version: "0.3.27"
+version: "0.3.28"
 slug: vome
 description: >
   Share virtual switches between Home Assistant homes, connect this instance

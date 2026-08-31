@@ -219,6 +219,22 @@ def test_normalise_portal_url_accepts_host_only_and_rejects_junk():
 		_normalise_portal_url("javascript:alert(1)")
 
 
+def test_relay_ws_url_for_staging_portal_never_follows_production_sync():
+	from custom_components.vomesync.const import (
+		DEFAULT_RELAY_WS_URL,
+		STAGING_RELAY_WS_URL,
+		relay_ws_url_for_portal,
+	)
+
+	assert relay_ws_url_for_portal("https://staging.vome.io", DEFAULT_RELAY_WS_URL) == STAGING_RELAY_WS_URL
+	assert relay_ws_url_for_portal("https://staging.vome.io", "") == STAGING_RELAY_WS_URL
+	assert relay_ws_url_for_portal(
+		"https://staging.vome.io", "wss://dev.sync.vome.io/ws/relay"
+	) == "wss://dev.sync.vome.io/ws/relay"
+	assert relay_ws_url_for_portal("https://vome.io", DEFAULT_RELAY_WS_URL) == DEFAULT_RELAY_WS_URL
+	assert relay_ws_url_for_portal("", None) == DEFAULT_RELAY_WS_URL
+
+
 def test_preferred_entry_picks_the_linked_one():
 	from types import SimpleNamespace
 	from custom_components.vomesync.services_remote import _preferred_vome_entry

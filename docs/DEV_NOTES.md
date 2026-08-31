@@ -40,7 +40,9 @@ codes into Home Assistant `link_start` — Core was still posting to
 production even when Configuration was staging. Panel JS/CSS
 URLs are stamped `?v=<addon version>` so ingress cannot keep a previous
 build. After updating the add-on, restart Home Assistant so it loads the
-bundled integration (0.9.20+) that accepts a prefetched `device_code`.
+bundled integration (0.9.21+) that accepts a prefetched `device_code`
+and dials `dev.sync.vome.io` when the portal is staging (never production
+`sync.vome.io`).
 
 Local check (no Supervisor):
 

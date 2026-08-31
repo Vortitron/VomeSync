@@ -30,6 +30,7 @@ from .const import (
 	CONF_RELAY_WS_URL,
 	DEFAULT_PORTAL_URL,
 	DEFAULT_RELAY_WS_URL,
+	relay_ws_url_for_portal,
 )
 from .relay_client import (
 	async_poll_device_token,
@@ -119,7 +120,9 @@ class VomeSyncOptionsFlowRelayMixin:
 			relay = {
 				CONF_RELAY_SERVER_ID: result.get("server_id"),
 				CONF_RELAY_SECRET: result.get("relay_secret"),
-				CONF_RELAY_WS_URL: result.get("relay_ws_url"),
+				CONF_RELAY_WS_URL: relay_ws_url_for_portal(
+					self._relay_portal_url(), result.get("relay_ws_url")
+				),
 			}
 			local_token = (user_input.get("local_token") or "").strip()
 			if local_token:
