@@ -15,10 +15,12 @@
 		about: "About",
 	};
 
-	function showBanner(msg, isErr) {
+	function showBanner(msg, kind) {
 		bannerEl.textContent = msg;
 		bannerEl.classList.toggle("hidden", !msg);
-		bannerEl.classList.toggle("err", !!isErr);
+		const err = kind === true || kind === "err";
+		bannerEl.classList.toggle("err", err);
+		bannerEl.classList.toggle("info", kind === "info" && !err);
 	}
 
 	// API calls must be RELATIVE to the current document. The panel is served
@@ -39,7 +41,7 @@
 		try {
 			data = await res.json();
 		} catch (_err) {
-			data = { error: "Invalid JSON from panel API" };
+			data = { error: res.ok ? "Invalid JSON from panel API" : `HTTP ${res.status}` };
 		}
 		if (!res.ok) {
 			const msg = data.error || data.message || `HTTP ${res.status}`;
@@ -50,16 +52,36 @@
 		return data;
 	}
 
-	// "400: Bad Request" with no detail is Home Assistant's answer when the
-	// vomesync services don't exist at all — the integration isn't running.
-	function friendlyStatusError(err) {
+	const WAITING_RESTART =
+		"Vome is installed. Restart Home Assistant once (Settings → System → ⋮ → Restart) so it can load — this page continues on its own afterwards.";
+	const WAITING_HA =
+		"Home Assistant is starting. This page continues automatically — no need to click Refresh.";
+
+	const MULTI_ENTRY_MSG =
+		"This Home Assistant has more than one Vome integration — often from installing via HACS and adding it again. Keep one and delete the spare under Settings → Devices & Services, then connect here.";
+
+	function classifyHaError(err) {
 		const msg = String(err.message || err);
-		if (/^400\b|Bad Request/i.test(msg)) {
-			return "The Vome integration isn't running inside Home Assistant. " +
-				"Restart Home Assistant (Settings → System → ⋮ → Restart) to load it. " +
-				"If this comes back after a restart, open Settings → System → Logs and search for “vomesync” — the error there is the real cause.";
+		if (/Multiple Vome entries|Multiple linked entries|pass entry_id/i.test(msg)) {
+			return { waiting: false, info: true, message: MULTI_ENTRY_MSG };
 		}
-		return msg;
+		if (/502|503|unreachable|Invalid JSON|Failed to fetch|NetworkError|Load failed|Network request failed/i.test(msg)) {
+			return { waiting: true, message: WAITING_HA };
+		}
+		if (/^400\b|Bad Request/i.test(msg)) {
+			return { waiting: true, message: WAITING_RESTART };
+		}
+		return { waiting: false, message: msg };
+	}
+
+	function reportError(err) {
+		const kind = classifyHaError(err);
+		showBanner(kind.message, (kind.waiting || kind.info) ? "info" : "err");
+		if (kind.waiting) {
+			waitingForHa = true;
+			schedulePoll();
+			render();
+		}
 	}
 
 	function restartNeeded() {
@@ -70,6 +92,27 @@
 		return state.integration_version !== state.installed_version;
 	}
 
+	function haNotReady() {
+		return waitingForHa || restartNeeded();
+	}
+
+	// Relay / Vome Home link — not the leftover VomeSync switch-sync entries.
+	function vomeHomeLinked() {
+		return !!(state && state.linked);
+	}
+
+	function syncChrome() {
+		const linked = vomeHomeLinked();
+		const header = document.getElementById("header-connect");
+		if (header) header.classList.toggle("hidden", linked);
+		const nav = document.querySelector(".tree-item[data-view=\"link\"]");
+		if (nav) nav.classList.toggle("needs-action", !linked);
+		const label = document.getElementById("nav-link-label");
+		if (label) label.textContent = linked ? "Vome account" : "Connect to Vome";
+		titles.link = linked ? "Vome account" : "Connect to Vome";
+		if (current === "link" && titleEl) titleEl.textContent = titles.link;
+	}
+
 	// Echo the shown entry's id back on writes so they target the same Home
 	// Assistant even when several Vome integrations are linked (which would
 	// otherwise make the write ambiguous and fail).
@@ -78,9 +121,32 @@
 		return id ? { ...obj, entry_id: id } : obj;
 	}
 
-	// Filled by /api/diag whenever the status call fails (or on demand from
-	// About) — turns raw failures into a plain-language verdict.
+	// Filled only from About → Run diagnostics. Status failures used to dump
+	// this on every page (HTTP 502, version mismatch, service lists) which
+	// made a normal first-load look broken. Keep it opt-in.
 	let lastDiag = null;
+	let waitingForHa = false;
+	let pollTimer = null;
+	let pollAttempts = 0;
+	let refreshInFlight = false;
+	const POLL_MS = 4000;
+	const POLL_MAX = 90;
+
+	function stopPolling() {
+		if (pollTimer) {
+			clearTimeout(pollTimer);
+			pollTimer = null;
+		}
+	}
+
+	function schedulePoll() {
+		stopPolling();
+		if (pollAttempts >= POLL_MAX) return;
+		pollTimer = setTimeout(() => {
+			pollAttempts += 1;
+			refresh({ quiet: true });
+		}, POLL_MS);
+	}
 
 	function diagVerdict(d) {
 		if (!d.config_mounted) {
@@ -90,7 +156,7 @@
 			return "The integration isn't installed on disk. Restart the Vome app (it installs on every start), then check the app's Log tab for install errors.";
 		}
 		if (!d.vomesync_services || d.vomesync_services.length === 0) {
-			return `Integration ${d.installed_version || "?"} is on disk but Home Assistant hasn't loaded it. Restart Home Assistant; if this persists, open Settings → System → Logs and search “vomesync”.`;
+			return `Vome ${d.installed_version || "?"} is on disk but Home Assistant has not loaded it yet. Restart Home Assistant once; this page continues automatically.`;
 		}
 		if (!d.vomesync_services.includes("mint_lan_tcp_token")) {
 			return `Home Assistant is running an OLD Vome integration (it lacks the tunnel services). Version ${d.installed_version || "?"} is installed on disk — restart Home Assistant to load it.`;
@@ -98,7 +164,7 @@
 		// Disk vs running mismatch is the decisive tell: writes fail because HA
 		// is executing stale code even though the new files are on disk.
 		if (d.installed_version && d.running_version !== d.installed_version) {
-			return `Home Assistant is running Vome ${d.running_version || "an older, version-less build"}, but ${d.installed_version} is installed on disk — that mismatch is exactly why writes fail. Restart Home Assistant (Settings → System → ⋮ → Restart) to load ${d.installed_version}.`;
+			return `Home Assistant is still running Vome ${d.running_version || "an older build"}; ${d.installed_version} is on disk. Restart Home Assistant once to finish the update.`;
 		}
 		if (typeof d.write_probe_status === "number" && d.write_probe_status >= 400) {
 			return `A test write was rejected by Home Assistant with a bare HTTP ${d.write_probe_status} (“${d.write_probe_body}”) even though running and installed match (${d.installed_version}) on HA ${d.ha_version || "?"}. That's Home Assistant rejecting the call before our code runs — send this whole card and I'll pin it.`;
@@ -111,10 +177,13 @@
 		const d = lastDiag;
 		const svc = (d.vomesync_services || []).join(", ") || "none";
 		return `
-			<div class="card warn-card">
+			<div class="card info-card">
 				<h2>Diagnostics</h2>
 				<p class="muted"><strong>${escapeHtml(diagVerdict(d))}</strong></p>
-				<p class="muted small mono">running in HA: ${escapeHtml(d.running_version || "unknown (old build)")} · on disk: ${d.integration_on_disk ? (d.installed_version || "yes") : "NO"} · app bundles: ${escapeHtml(d.bundled_version || "?")} · HA ${escapeHtml(d.ha_version || "?")}<br>config mount: ${escapeHtml(String(d.config_root))} · Core API: ${escapeHtml(String(d.core_api))}<br>write probe: HTTP ${escapeHtml(String(d.write_probe_status))} — ${escapeHtml(String(d.write_probe_body || ""))}<br>vomesync services loaded: ${escapeHtml(svc)}</p>
+				<details>
+					<summary>Technical details</summary>
+					<p class="muted small mono">running in HA: ${escapeHtml(d.running_version || "unknown (old build)")} · on disk: ${d.integration_on_disk ? (d.installed_version || "yes") : "NO"} · app bundles: ${escapeHtml(d.bundled_version || "?")} · HA ${escapeHtml(d.ha_version || "?")}<br>config mount: ${escapeHtml(String(d.config_root))} · Core API: ${escapeHtml(String(d.core_api))}<br>write probe: HTTP ${escapeHtml(String(d.write_probe_status))} — ${escapeHtml(String(d.write_probe_body || ""))}<br>vomesync services loaded: ${escapeHtml(svc)}</p>
+				</details>
 			</div>`;
 	}
 
@@ -126,25 +195,40 @@
 		}
 	}
 
-	async function refresh() {
-		showBanner("");
+	async function refresh(opts) {
+		const quiet = !!(opts && opts.quiet);
+		if (refreshInFlight) return;
+		refreshInFlight = true;
+		if (!quiet) showBanner("");
 		try {
 			state = await api("/api/status");
-			lastDiag = null;
+			waitingForHa = false;
+			pollAttempts = 0;
 			if (restartNeeded()) {
-				showBanner(`Vome ${state.installed_version} is installed but Home Assistant is still running ${state.integration_version}. Restart Home Assistant (Settings → System → ⋮ → Restart) to finish the update.`, true);
-			} else if (state.warning) {
-				showBanner(state.warning, true);
+				showBanner(WAITING_RESTART, "info");
+				schedulePoll();
+			} else {
+				lastDiag = null;
+				stopPolling();
+				if (state.warning) {
+					const multi = /more than one Vome/i.test(state.warning);
+					showBanner(state.warning, multi ? "info" : true);
+				} else showBanner("");
 			}
 			render();
 		} catch (err) {
-			showBanner(friendlyStatusError(err), true);
+			const kind = classifyHaError(err);
+			waitingForHa = kind.waiting;
+			showBanner(kind.message, (kind.waiting || kind.info) ? "info" : "err");
 			state = state || { linked: false, lan_routes: [], forward_ui: false };
 			if (err.data && typeof err.data === "object") {
 				state.installed_version = err.data.installed_version || state.installed_version;
 			}
-			await runDiagnostics();
+			if (kind.waiting) schedulePoll();
+			else stopPolling();
 			render();
+		} finally {
+			refreshInFlight = false;
 		}
 	}
 
@@ -203,27 +287,58 @@
 		return "";
 	}
 
+	function extraEntriesCard() {
+		const entries = (state && state.vome_entries) || [];
+		if (entries.length < 2) return "";
+		const disabled = entries.filter((e) => e.disabled);
+		const enabled = entries.filter((e) => !e.disabled);
+		const pool = enabled.length ? enabled : entries;
+		const chosen = pool.find((e) => e.entry_id === (state && state.entry_id)) || pool[0];
+		const names = pool.map((e) => e.title || "Vome").join(", ");
+		const disabledNote = disabled.length
+			? ` ${disabled.length} extra ${disabled.length === 1 ? "row is" : "rows are"} disabled and can be deleted.`
+			: "";
+		const leftover = "Those VomeSync rows are switch-sync leftovers — they are not a Vome Home remote-access link.";
+		if (enabled.length <= 1 && disabled.length) {
+			return `
+			<div class="card info-card">
+				<h2>Old VomeSync rows</h2>
+				<p class="muted">${leftover}${disabledNote} Connect to Vome to attach this home. Delete the spares under Settings → Devices & Services when you are ready.</p>
+			</div>`;
+		}
+		return `
+			<div class="card info-card">
+				<h2>More than one Vome integration</h2>
+				<p class="muted">This Home Assistant has ${pool.length} VomeSync integrations (${escapeHtml(names)}). ${leftover} Connecting here uses <strong>${escapeHtml((chosen && chosen.title) || "Vome")}</strong>.${disabledNote} Remove the spare under Settings → Devices & Services so Devices and this panel don't issue different codes.</p>
+			</div>`;
+	}
+
 	function renderOverview() {
 		const routes = (state && state.lan_routes) || [];
 		const enabled = routes.filter((r) => r.enabled !== false).length;
-		const restartCard = restartNeeded() ? `
-			<div class="card warn-card">
-				<h2>Restart needed to finish updating</h2>
-				<p class="muted">The app installed Vome integration <strong>${escapeHtml(state.installed_version)}</strong>, but Home Assistant is still running <strong>${escapeHtml(state.integration_version)}</strong>. Home Assistant only loads integration code at startup.</p>
-				<p class="muted">Go to <strong>Settings → System → ⋮ (top right) → Restart Home Assistant</strong>, then come back here.</p>
+		const restartCard = haNotReady() ? `
+			<div class="card info-card">
+				<h2>${waitingForHa && !restartNeeded() ? "Waiting for Home Assistant" : "Restart Home Assistant once"}</h2>
+				<p class="muted">${waitingForHa && !restartNeeded()
+					? "Home Assistant is starting or still loading Vome. This page checks automatically and will continue when it is ready — you do not need to click Refresh."
+					: `Vome ${escapeHtml((state && state.installed_version) || "")} is ready. Home Assistant only loads integrations at startup, so it needs one restart (Settings → System → ⋮ → Restart). This page continues on its own afterwards.`}</p>
 			</div>` : "";
-		const linkCard = (state && !state.linked && !restartNeeded()) ? `
+		// VomeSync config entries (switch sync) are not a Vome Home link.
+		// Never hide this card because a restart is pending — that made Remote
+		// Desktop look like the next step.
+		const hideConnect = vomeHomeLinked();
+		const linkCard = hideConnect ? "" : `
 			<div class="card warn-card">
 				<h2>Connect to Vome to get started</h2>
-				<p class="muted">This Home Assistant isn't linked to a Vome account yet, so remote access and LAN tunnels aren't available. Linking takes about a minute and opens no ports.</p>
+				<p class="muted">Link this Home Assistant to your Vome account. It takes about a minute, opens no ports, and is how remote access and LAN tunnels are turned on. Existing VomeSync rows in Devices & Services are leftover switch-sync installs, not this link.</p>
 				<div class="row"><button type="button" class="primary" id="ov-connect">Connect to Vome</button></div>
-			</div>` : "";
-		viewEl.innerHTML = `${restartCard}${linkCard}${connectionWarningCard()}
+			</div>`;
+		viewEl.innerHTML = `${linkCard}${restartCard}${extraEntriesCard()}${connectionWarningCard()}
 			<div class="card">
 				<h2>Status</h2>
 				<p class="muted">Same settings as the HACS options menu, laid out as a tree so remote access and LAN tunnels are easier to find.</p>
 				<div class="row">
-					${pill(!!(state && state.linked), "Linked to Vome", "Not linked")}
+					${pill(vomeHomeLinked(), "Linked to Vome", "Not linked")}
 					${pill(!!(state && state.forward_ui), "HA UI forwarding on", "HA UI forwarding off")}
 					${pill(enabled > 0, `${enabled} LAN tunnel${enabled === 1 ? "" : "s"} on`, "No LAN tunnels")}
 					${pill(!!(state && state.addon_marker), "Add-on install", "HACS-only install")}
@@ -232,7 +347,8 @@
 			<div class="card">
 				<h2>Quick actions</h2>
 				<div class="row">
-					<button type="button" class="primary" id="qa-rdp">Set up Remote Desktop</button>
+					${hideConnect ? "" : `<button type="button" class="primary" id="qa-connect">Connect to Vome</button>`}
+					<button type="button" id="qa-rdp">Set up Remote Desktop</button>
 					<button type="button" id="qa-lan">LAN tunnels</button>
 					<button type="button" id="qa-forward">Home Assistant UI</button>
 				</div>
@@ -245,8 +361,11 @@
 			const preset = document.getElementById("preset-rdp");
 			if (preset) preset.click();
 		};
+		const goConnect = () => setView("link");
 		const connectBtn = document.getElementById("ov-connect");
-		if (connectBtn) connectBtn.onclick = () => setView("link");
+		if (connectBtn) connectBtn.onclick = goConnect;
+		const qaConnect = document.getElementById("qa-connect");
+		if (qaConnect) qaConnect.onclick = goConnect;
 		// Only present while the external-URL warning is showing.
 		const fixExternal = document.getElementById("fix-external-url");
 		if (fixExternal) fixExternal.onclick = async () => {
@@ -260,7 +379,7 @@
 				render();
 			} catch (err) {
 				fixExternal.disabled = false;
-				showBanner(String(err.message || err), true);
+				reportError(err);
 			}
 		};
 	}
@@ -312,7 +431,7 @@
 				showBanner(`Published ${value}.`);
 				render();
 			} catch (err) {
-				showBanner(String(err.message || err), true);
+				reportError(err);
 			}
 		};
 		viewEl.querySelectorAll("[data-unpub]").forEach((btn) => {
@@ -325,7 +444,7 @@
 					showBanner("Unpublished — it can no longer be called from the internet.");
 					render();
 				} catch (err) {
-					showBanner(String(err.message || err), true);
+					reportError(err);
 				}
 			};
 		});
@@ -367,7 +486,7 @@
 					: "Back to detecting the address automatically.");
 				render();
 			} catch (err) {
-				showBanner(String(err.message || err), true);
+				reportError(err);
 			}
 		};
 		document.getElementById("save-fwd").onclick = async () => {
@@ -380,7 +499,7 @@
 				showBanner(enabled ? "Full-UI forwarding enabled." : "Full-UI forwarding disabled.");
 				render();
 			} catch (err) {
-				showBanner(String(err.message || err), true);
+				reportError(err);
 			}
 		};
 	}
@@ -520,7 +639,7 @@
 					showBanner(`Removed /t/${btn.dataset.remove}/`);
 					render();
 				} catch (err) {
-					showBanner(String(err.message || err), true);
+					reportError(err);
 				}
 			};
 		});
@@ -547,7 +666,7 @@
 				} catch (err) {
 					btn.disabled = false;
 					btn.textContent = "Get tunnel token";
-					showBanner(String(err.message || err), true);
+					reportError(err);
 				}
 			};
 		});
@@ -644,12 +763,7 @@
 			} catch (err) {
 				btn.disabled = false;
 				btn.textContent = "Add route";
-				showBanner(String(err.message || err), true);
-				// A bare 400 here means HA rejected the write pre-handler — run
-				// diagnostics so the panel shows WHY (usually a stale running
-				// version) instead of the opaque error.
-				await runDiagnostics();
-				render();
+				reportError(err);
 			}
 		};
 	}
@@ -666,38 +780,72 @@
 	}
 
 	function linkDiagram() {
+		const host = portalHostFromUrl(configuredPortalUrl());
+		const safe = escapeHtml(host);
 		return `
+			<ol class="steps">
+				<li>This Home Assistant asks <strong data-portal-host>${safe}</strong> for a short code.</li>
+				<li>You sign in on that site (new tab) and type the code to approve <em>this</em> home.</li>
+				<li>Home Assistant then <strong>dials out</strong> to Vome and keeps that link — nothing is opened on your router.</li>
+			</ol>
 			<div class="tunnel-diagram">
-				<svg viewBox="0 0 640 92" role="img" aria-label="This Home Assistant dials outward to Vome; nothing is opened on your router.">
-					<g class="node"><rect x="8" y="24" width="150" height="48" rx="10"/><text x="83" y="45">You · vome.io</text><text x="83" y="61" class="sub">sign in here</text></g>
-					<line class="flow" x1="158" y1="48" x2="238" y2="48"/><text x="198" y="39" class="lbl">https</text>
-					<g class="node"><rect x="238" y="24" width="150" height="48" rx="10"/><text x="313" y="45">Vome relay</text><text x="313" y="61" class="sub">vome.io</text></g>
-					<line class="flow" x1="388" y1="48" x2="468" y2="48"/><text x="428" y="39" class="lbl">dials out</text>
-					<g class="node target"><rect x="468" y="24" width="164" height="48" rx="10"/><text x="550" y="45">Home Assistant</text><text x="550" y="61" class="sub">this box</text></g>
+				<svg viewBox="0 0 640 100" role="img" aria-label="You approve on the Vome site; this Home Assistant dials out. No inbound ports.">
+					<g class="node"><rect x="8" y="24" width="150" height="52" rx="10"/><text x="83" y="46">You</text><text x="83" y="62" class="sub">sign in &amp; approve</text></g>
+					<line class="flow" x1="158" y1="50" x2="230" y2="50"/><text x="194" y="40" class="lbl">code</text>
+					<g class="node"><rect x="230" y="24" width="180" height="52" rx="10"/><text x="320" y="46">Vome account</text><text x="320" y="62" class="sub" data-portal-host>${safe}</text></g>
+					<line class="flow" x1="500" y1="50" x2="410" y2="50"/><text x="455" y="40" class="lbl">dials out</text>
+					<g class="node target"><rect x="500" y="24" width="132" height="52" rx="10"/><text x="566" y="46">This HA</text><text x="566" y="62" class="sub">no open ports</text></g>
 				</svg>
-				<p class="muted small">Your Home Assistant makes the connection <em>outward</em> to Vome — no ports are opened on your router, and Vome never reaches in uninvited.</p>
 			</div>`;
 	}
 
-	async function startLink() {
+	const DEFAULT_PORTAL = "https://vome.io";
+
+	function configuredPortalUrl() {
+		return (state && state.addon_portal_url) || DEFAULT_PORTAL;
+	}
+
+	function portalHostFromUrl(raw) {
 		try {
+			const value = (raw || "").trim();
+			return new URL(value.includes("://") ? value : "https://" + value).host || "vome.io";
+		} catch (_err) {
+			return "vome.io";
+		}
+	}
+
+	async function startLink() {
+		const btn = document.getElementById("link-start");
+		if (btn) btn.disabled = true;
+		try {
+			const portalUrl = configuredPortalUrl();
 			const res = await api("/api/link/start", {
-				method: "POST", body: JSON.stringify(withEntry({})),
+				method: "POST", body: JSON.stringify(withEntry({ portal_url: portalUrl })),
 			});
 			if (res.status === "already_linked") {
 				await refresh();
 				return;
 			}
+			const uri = res.verification_uri || (portalUrl.replace(/\/$/, "") + "/account/link-ha");
+			const expectedHost = portalHostFromUrl(portalUrl);
+			const gotHost = portalHostFromUrl(uri);
+			if (expectedHost && gotHost && expectedHost !== gotHost) {
+				throw new Error(
+					"Home Assistant asked for a code from " + gotHost + ", not " + expectedHost +
+					". Restart Home Assistant, then try Connect again."
+				);
+			}
 			linkFlow = {
 				userCode: res.user_code || "",
-				uri: res.verification_uri || "https://vome.io/account/link-ha",
-				interval: Math.max(3, Number(res.interval) || 5),
+				uri: uri,
+				interval: Math.max(3, Number(res.interval) or 5),
 				message: "",
 			};
 			render();
 			scheduleLinkPoll();
 		} catch (err) {
-			showBanner(String(err.message || err), true);
+			reportError(err);
+			if (btn) btn.disabled = false;
 		}
 	}
 
@@ -755,7 +903,7 @@
 			showBanner("Disconnected from Vome.");
 			await refresh();
 		} catch (err) {
-			showBanner(String(err.message || err), true);
+			reportError(err);
 		}
 	}
 
@@ -769,7 +917,7 @@
 			const result = await api("/api/switches");
 			switchesData = result.switches || {};
 		} catch (err) {
-			showBanner(String(err.message || err), true);
+			reportError(err);
 			switchesData = switchesData || {};
 		}
 		if (current === "switches") render();
@@ -851,7 +999,7 @@
 					switchesData = null;
 					await loadSwitches();
 				} catch (err) {
-					showBanner(String(err.message || err), true);
+					reportError(err);
 				}
 			};
 		});
@@ -866,7 +1014,7 @@
 					switchesData = null;
 					await loadSwitches();
 				} catch (err) {
-					showBanner(String(err.message || err), true);
+					reportError(err);
 				}
 			};
 		});
@@ -895,7 +1043,7 @@
 				switchesData = null;
 				await loadSwitches();
 			} catch (err) {
-				showBanner(String(err.message || err), true);
+				reportError(err);
 			}
 		};
 
@@ -913,7 +1061,7 @@
 				switchesData = null;
 				await loadSwitches();
 			} catch (err) {
-				showBanner(String(err.message || err), true);
+				reportError(err);
 			}
 		};
 	}
@@ -934,11 +1082,18 @@
 			return;
 		}
 		if (!linkFlow) {
-			viewEl.innerHTML = `
+			const waitNote = haNotReady() ? `
+				<div class="card info-card">
+					<h2>${waitingForHa && !restartNeeded() ? "Waiting for Home Assistant" : "Restart Home Assistant once"}</h2>
+					<p class="muted">${waitingForHa && !restartNeeded() ? WAITING_HA : WAITING_RESTART} You can still start connecting; if it fails, finish the restart and try again.</p>
+				</div>` : "";
+			const host = escapeHtml(portalHostFromUrl(configuredPortalUrl()));
+			viewEl.innerHTML = `${waitNote}${extraEntriesCard()}
 				<div class="card">
 					<h2>Connect this Home Assistant to Vome</h2>
-					<p class="muted">Linking lets you reach this home from vome.io — the Home Assistant UI, LAN devices and Remote Desktop — over one outbound, encrypted connection. It takes about a minute and opens no ports on your router.</p>
+					<p class="muted">This is how remote access starts: you approve <em>this</em> home in your Vome account, then Home Assistant keeps an outbound connection. About a minute; no router ports.</p>
 					${linkDiagram()}
+					<p class="muted small">Connecting to <code>${host}</code>. A different site is set on this add-on's Configuration tab.</p>
 					<div class="row"><button type="button" class="primary" id="link-start">Connect to Vome</button></div>
 					<p class="muted small">You'll sign in to Vome in a new tab and approve a short code shown here.</p>
 				</div>`;
@@ -957,6 +1112,7 @@
 					</li>
 					<li><span class="pill warn">Waiting for approval…</span> This page updates itself the moment you approve — leave it open.</li>
 				</ol>
+				<p class="muted small">This code only works on <code>${escapeHtml(host)}</code> — not on a different Vome site.</p>
 				${linkFlow.message ? `<p class="muted small">Still trying… (${escapeHtml(linkFlow.message)})</p>` : ""}
 				<div class="row"><button type="button" id="link-cancel">Cancel</button></div>
 			</div>`;
@@ -981,8 +1137,10 @@
 			<div class="card">
 				<h2>Versions</h2>
 				<p class="muted">Integration running in Home Assistant: <code>${escapeHtml(running)}</code><br>
-				Integration installed on disk: <code>${escapeHtml(installed)}</code></p>
-				${running !== installed ? `<p class="muted"><strong>They differ — restart Home Assistant to load the installed version.</strong></p>` : ""}
+				Integration installed on disk: <code>${escapeHtml(installed)}</code><br>
+				This panel: <code>${escapeHtml((state && state.addon_version) || "unknown")}</code><br>
+				Vome site: <code>${escapeHtml((state && state.addon_portal_url) || "https://vome.io")}</code></p>
+				${running !== installed ? `<p class="muted">Home Assistant will load the installed version after one restart. This page continues automatically once that happens.</p>` : ""}
 			</div>
 			<div class="card">
 				<h2>How the app and HACS relate</h2>
@@ -1004,9 +1162,10 @@
 		else if (current === "link") renderLink();
 		else if (current === "switches") renderSwitches();
 		else renderAbout();
-		if (lastDiag) {
+		if (lastDiag && current === "about") {
 			viewEl.insertAdjacentHTML("afterbegin", diagCard());
 		}
+		syncChrome();
 	}
 
 	function escapeHtml(value) {
@@ -1020,6 +1179,21 @@
 	document.querySelectorAll(".tree-item").forEach((btn) => {
 		btn.addEventListener("click", () => setView(btn.dataset.view));
 	});
-	document.getElementById("btn-refresh").addEventListener("click", refresh);
+	document.getElementById("btn-refresh").addEventListener("click", () => {
+		pollAttempts = 0;
+		refresh();
+	});
+	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "visible" && haNotReady()) {
+			pollAttempts = 0;
+			refresh({ quiet: true });
+		}
+	});
+	window.addEventListener("pageshow", () => {
+		if (haNotReady()) {
+			pollAttempts = 0;
+			refresh({ quiet: true });
+		}
+	});
 	refresh();
 })();

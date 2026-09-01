@@ -136,3 +136,91 @@ def test_panel_exposes_the_local_url_route():
 	# The address Vome dials HA on became user-settable in 2026.8; the panel is
 	# the only place a non-technical user can correct a bad detection.
 	assert "set_local_url" in _panel_post_services()
+
+
+def test_addon_version_reads_config_yaml():
+	assert server.addon_version() == "0.3.28"
+
+
+def test_stamp_static_html_cache_busts_assets():
+	html = (ROOT / "vome" / "panel" / "static" / "index.html").read_text(encoding="utf-8")
+	stamped = server.stamp_static_html(html, "0.3.28")
+	assert "static/app.js?v=0.3.28" in stamped
+	assert "static/styles.css?v=0.3.28" in stamped
+	assert 'name="vome-addon-version" content="0.3.28"' in stamped
+	assert "header-connect" in stamped
+	assert "?v=0.3.28?v=" not in stamped
+	again = server.stamp_static_html(stamped, "0.3.28")
+	assert again.count("static/app.js?v=0.3.28") == 1
+
+
+def test_addon_portal_url_reads_options_json(tmp_path):
+	options = tmp_path / "options.json"
+	options.write_text('{"portal_url": "https://staging.vome.io"}', encoding="utf-8")
+	assert server.addon_portal_url(options) == "https://staging.vome.io"
+	assert server.addon_portal_url(tmp_path / "missing.json") == ""
+
+
+def test_prepare_link_start_uses_addon_options_and_fetches(monkeypatch):
+	"""Connect must hit the add-on Configuration origin, not whatever Core would."""
+	monkeypatch.setattr(server, "addon_portal_url", lambda path=None: "https://staging.vome.io")
+
+	def fake_post(url, payload):
+		assert url == "https://staging.vome.io/api/v1/relay/device/code"
+		assert payload["name"] == "Home Assistant"
+		return {
+			"device_code": "secret-dev",
+			"user_code": "AB12-CD34",
+			"verification_uri": "https://staging.vome.io/account/link-ha",
+			"interval": 5,
+			"expires_in": 900,
+		}
+
+	monkeypatch.setattr(server, "_portal_post_json", fake_post)
+	out = server.prepare_link_start({"portal_url": "https://vome.io", "name": "Home Assistant"})
+	assert out["portal_url"] == "https://staging.vome.io"
+	assert out["user_code"] == "AB12-CD34"
+	assert out["device_code"] == "secret-dev"
+	assert out["verification_uri"] == "https://staging.vome.io/account/link-ha"
+
+
+def test_prepare_link_start_falls_back_to_body_portal(monkeypatch):
+	monkeypatch.setattr(server, "addon_portal_url", lambda path=None: "")
+	monkeypatch.setattr(
+		server,
+		"_portal_post_json",
+		lambda url, payload: {
+			"device_code": "x",
+			"user_code": "YY",
+			"verification_uri": url.replace("/api/v1/relay/device/code", "/account/link-ha"),
+		},
+	)
+	out = server.prepare_link_start({"portal_url": "staging.vome.io"})
+	assert out["portal_url"] == "https://staging.vome.io"
+	assert out["verification_uri"].startswith("https://staging.vome.io")
+
+
+def test_finalise_link_start_rewrites_extra_keys_and_host_mismatch():
+	status, body = server.finalise_link_start(
+		400, {"error": "extra keys not allowed @ data['device_code']"},
+		{"portal_url": "https://staging.vome.io"},
+	)
+	assert status == 409
+	assert "older Vome integration" in body["error"]
+
+	status, body = server.finalise_link_start(
+		200,
+		{"status": "started", "verification_uri": "https://vome.io/account/link-ha"},
+		{"portal_url": "https://staging.vome.io"},
+	)
+	assert status == 409
+	assert "vome.io" in body["error"]
+	assert "staging.vome.io" in body["error"]
+
+	status, body = server.finalise_link_start(
+		200,
+		{"status": "started", "verification_uri": "https://staging.vome.io/account/link-ha"},
+		{"portal_url": "https://staging.vome.io"},
+	)
+	assert status == 200
+	assert body["portal_url"] == "https://staging.vome.io"

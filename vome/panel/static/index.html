@@ -4,7 +4,15 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>Vome</title>
-	<link rel="stylesheet" href="static/styles.css">
+	<link rel="stylesheet" href="static/styles.css?v=0.3.28">
+	<style>
+		/* Old cached app.js marks Remote Desktop as .primary. It is not the next step. */
+		#qa-rdp, #qa-rdp.primary {
+			background: #14161c !important;
+			color: #eceff4 !important;
+			border-color: #262b36 !important;
+		}
+	</style>
 </head>
 <body>
 	<!-- Icons are inline SVG: the panel is served from the add-on with no
@@ -41,8 +49,8 @@
 			</details>
 			<details open>
 				<summary>Account</summary>
-				<button type="button" class="tree-item" data-view="link">
-					<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-link"/></svg>Vome account
+				<button type="button" class="tree-item needs-action" data-view="link">
+					<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-link"/></svg><span id="nav-link-label">Connect to Vome</span>
 				</button>
 				<button type="button" class="tree-item" data-view="switches">
 					<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-switch"/></svg>Switches
@@ -56,13 +64,17 @@
 	<main>
 		<header class="top">
 			<h1 id="view-title">Overview</h1>
-			<button type="button" id="btn-refresh" class="ghost">
-				<svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh
-			</button>
+			<div class="top-actions">
+				<button type="button" class="primary" id="header-connect"
+					onclick="document.querySelector('[data-view=link]').click()">Connect to Vome</button>
+				<button type="button" id="btn-refresh" class="ghost">
+					<svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh
+				</button>
+			</div>
 		</header>
 		<p id="banner" class="banner hidden" role="status"></p>
 		<section id="view" class="view"></section>
 	</main>
-	<script src="static/app.js"></script>
+	<script src="static/app.js?v=0.3.28"></script>
 </body>
 </html>

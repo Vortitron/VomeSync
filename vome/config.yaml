@@ -1,11 +1,12 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome
-version: "0.3.17"
+version: "0.3.28"
 slug: vome
 description: >
-  Installs the shared Vome integration (same code as HACS) and serves a tree-view
-  control panel for remote access and LAN tunnels. Future companions (browser RDP)
-  land here too.
+  Share virtual switches between Home Assistant homes, connect this instance
+  to Vome for remote access without port-forwarding, and manage LAN tunnels
+  from a sidebar panel. Bundles the Vome integration (the same code as the
+  HACS custom component), so you do not need HACS.
 url: https://github.com/Vortitron/VomeSync
 arch:
   - aarch64
@@ -26,7 +27,9 @@ ingress_port: 8099
 ingress_stream: true
 panel_icon: mdi:home-analytics
 panel_title: Vome
-options: {}
-schema: {}
+options:
+  portal_url: "https://vome.io"
+schema:
+  portal_url: str
 # Built from the Dockerfile in this folder (Supervisor local build).
 # Do not set `image:` — the Store clones this repo and builds here.

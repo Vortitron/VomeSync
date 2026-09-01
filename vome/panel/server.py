@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,8 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+DEFAULT_PORTAL_URL = "https://vome.io"
+RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
 PORT = int(os.environ.get("VOME_PANEL_PORT", "8099"))
 STATIC_DIR = Path(os.environ.get("VOME_PANEL_STATIC", "/usr/share/vome/panel/static"))
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -74,6 +77,170 @@ def _manifest_version(path: str) -> str:
 		return ""
 
 
+def addon_version() -> str:
+	"""Add-on version from config.yaml (image or local tree)."""
+	candidates = (
+		Path("/usr/share/vome/config.yaml"),
+		Path(__file__).resolve().parent.parent / "config.yaml",
+	)
+	for path in candidates:
+		if not path.is_file():
+			continue
+		try:
+			for line in path.read_text(encoding="utf-8").splitlines():
+				if line.startswith("version:"):
+					return line.split(":", 1)[1].strip().strip("\"'")
+		except OSError:
+			continue
+	return "dev"
+
+
+def stamp_static_html(html: str, version: str) -> str:
+	"""Pin script/style URLs to this add-on build so ingress cannot keep an old app.js."""
+	ver = version or "dev"
+	html = re.sub(r"static/app\.js(\?v=[^\"]*)?", f"static/app.js?v={ver}", html, count=1)
+	html = re.sub(
+		r"static/styles\.css(\?v=[^\"]*)?", f"static/styles.css?v={ver}", html, count=1
+	)
+	marker = '<meta charset="utf-8">'
+	if marker in html and 'name="vome-addon-version"' not in html:
+		html = html.replace(
+			marker,
+			f'{marker}\n\t<meta name="vome-addon-version" content="{ver}">',
+			1,
+		)
+	return html
+
+
+def addon_options(path: Optional[Path] = None) -> dict:
+	"""Supervisor writes add-on options to /data/options.json."""
+	target = path or Path(os.environ.get("VOME_ADDON_OPTIONS", "/data/options.json"))
+	if not target.is_file():
+		return {}
+	try:
+		data = json.loads(target.read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		return {}
+	return data if isinstance(data, dict) else {}
+
+
+def addon_portal_url(path: Optional[Path] = None) -> str:
+	raw = addon_options(path).get("portal_url")
+	return raw.strip() if isinstance(raw, str) else ""
+
+
+def normalise_portal_url(raw: Optional[str]) -> str:
+	"""Origin only; blank becomes production. Same rules as the integration."""
+	value = (raw or "").strip() or DEFAULT_PORTAL_URL
+	if "://" not in value:
+		value = "https://" + value
+	parsed = urlparse(value)
+	if parsed.scheme not in ("http", "https") or not parsed.hostname:
+		raise ValueError("Vome site URL must be http(s)")
+	netloc = parsed.hostname if parsed.port is None else f"{parsed.hostname}:{parsed.port}"
+	return f"{parsed.scheme}://{netloc}"
+
+
+def _portal_post_json(url: str, payload: dict) -> dict:
+	"""POST JSON to the Vome site. Used so Connect does not depend on Core's outbound HTTP."""
+	data = json.dumps(payload).encode("utf-8")
+	req = urllib.request.Request(
+		url,
+		data=data,
+		headers={"Content-Type": "application/json", "Accept": "application/json"},
+		method="POST",
+	)
+	try:
+		with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - operator-configured portal
+			raw = resp.read()
+			status = resp.status
+	except urllib.error.HTTPError as err:
+		raw = err.read()
+		status = err.code
+	except urllib.error.URLError as err:
+		raise RuntimeError(f"Could not reach {url}: {err}") from err
+	if not raw:
+		raise RuntimeError(f"Empty response from {url} (HTTP {status})")
+	try:
+		body = json.loads(raw.decode("utf-8"))
+	except (ValueError, UnicodeDecodeError) as err:
+		raise RuntimeError(f"Invalid JSON from {url} (HTTP {status})") from err
+	if not isinstance(body, dict):
+		raise RuntimeError(f"Unexpected response from {url}")
+	if status >= 400:
+		msg = body.get("error") or body.get("message") or f"HTTP {status}"
+		raise RuntimeError(f"{url}: {msg}")
+	return body
+
+
+def fetch_device_code(portal_url: str, name: str = "Home Assistant") -> dict:
+	url = portal_url.rstrip("/") + RELAY_DEVICE_CODE_PATH
+	LOG.info("Requesting Connect code from %s", url)
+	started = _portal_post_json(url, {"name": name})
+	if not started.get("device_code"):
+		raise RuntimeError("Vome did not return a device code — try again.")
+	return started
+
+
+def prepare_link_start(body: Optional[dict] = None) -> dict:
+	"""Force Connect onto the add-on Configuration URL, and fetch the code here.
+
+	Home Assistant Core was still posting to production even when the panel
+	asked for another site (empty ingress body, or an older link_start that
+	ignored portal_url). The add-on talks to the configured origin itself,
+	then hands Core the codes to store and poll.
+	"""
+	data = dict(body or {})
+	portal = normalise_portal_url(addon_portal_url() or data.get("portal_url"))
+	data["portal_url"] = portal
+	started = fetch_device_code(portal, str(data.get("name") or "Home Assistant"))
+	data["device_code"] = started.get("device_code")
+	data["user_code"] = started.get("user_code") or ""
+	data["verification_uri"] = (
+		started.get("verification_uri") or (portal + "/account/link-ha")
+	)
+	if started.get("interval") is not None:
+		data["interval"] = started["interval"]
+	if started.get("expires_in") is not None:
+		data["expires_in"] = started["expires_in"]
+	return data
+
+
+def link_start_mismatch_error(requested_portal: str, verification_uri: str) -> Optional[str]:
+	"""If Core fetched a code from a different origin than the add-on, say so."""
+	expected = urlparse(requested_portal or "").hostname
+	got = urlparse(verification_uri or "").hostname
+	if expected and got and expected != got:
+		return (
+			f"Home Assistant requested a code from {got}, not {expected}. "
+			"Restart Home Assistant so the updated Vome integration is loaded, then try again."
+		)
+	return None
+
+
+def finalise_link_start(status: int, body: Any, prepared: dict) -> tuple[int, Any]:
+	"""Rewrite Core errors that mean 'old integration still loaded'."""
+	if not isinstance(body, dict):
+		return status, body
+	err = str(body.get("error") or "")
+	if "extra keys" in err.lower():
+		return 409, {
+			"error": (
+				"Home Assistant is still running an older Vome integration. "
+				"Restart Home Assistant, then try Connect again."
+			)
+		}
+	mismatch = link_start_mismatch_error(
+		str(prepared.get("portal_url") or ""),
+		str(body.get("verification_uri") or ""),
+	)
+	if body.get("status") == "started" and mismatch:
+		return 409, {"error": mismatch}
+	if prepared.get("portal_url") and "portal_url" not in body:
+		body = {**body, "portal_url": prepared["portal_url"]}
+	return status, body
+
+
 def _config_root() -> str:
 	"""HA config mount inside this container ('' if not mounted).
 
@@ -103,6 +270,8 @@ def installed_versions() -> dict:
 		"bundled_version": _manifest_version(
 			"/usr/share/vome/custom_components/vomesync/manifest.json"
 		),
+		"addon_version": addon_version(),
+		"addon_portal_url": addon_portal_url(),
 	}
 
 
@@ -300,8 +469,18 @@ class PanelHandler(BaseHTTPRequestHandler):
 
 	def _route_post(self) -> None:
 		parsed = urlparse(self.path)
-		path = parsed.path or "/"
+		path = (parsed.path or "/").rstrip("/") or "/"
 		body = self._read_json()
+		if path == "/api/link/start":
+			try:
+				body = prepare_link_start(body)
+			except ValueError as err:
+				self._send_json(400, {"error": str(err)})
+				return
+			except RuntimeError as err:
+				LOG.warning("Connect prefetch failed: %s", err)
+				self._send_json(502, {"error": str(err)})
+				return
 		mapping = {
 			"/api/forward_ui": ("set_forward_ui", body),
 			"/api/local_url": ("set_local_url", body),
@@ -327,6 +506,8 @@ class PanelHandler(BaseHTTPRequestHandler):
 		service, data = mapping[path]
 		status, payload = call_service(service, data)
 		body = _unwrap(payload)
+		if path == "/api/link/start":
+			status, body = finalise_link_start(status, body, data)
 		if isinstance(body, dict) and body.get("error") and status < 400:
 			status = 400
 		self._send_json(status, body)
@@ -338,7 +519,12 @@ class PanelHandler(BaseHTTPRequestHandler):
 		if not target.is_file():
 			self._send_json(404, {"error": f"missing static file: {safe}"})
 			return
-		self._send(200, target.read_bytes(), content_type)
+		data = target.read_bytes()
+		if safe == "index.html":
+			data = stamp_static_html(
+				data.decode("utf-8"), addon_version()
+			).encode("utf-8")
+		self._send(200, data, content_type)
 
 
 def main() -> None:

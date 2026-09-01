@@ -95,6 +95,12 @@ pipeline {
                     python3 -m py_compile vome/panel/server.py
                     python3 -m py_compile vome/custom_components/vomesync/lan_routes.py
                     python3 -m py_compile vome/package_release.py
+                    # Store builds must not apk-add; python comes from base-python.
+                    if grep -q 'apk add' vome/Dockerfile; then
+                        echo "Dockerfile must not apk-add (Alpine indexes break Store installs)" >&2
+                        exit 1
+                    fi
+                    grep -q 'ARG BUILD_FROM=ghcr.io/home-assistant/base-python:' vome/Dockerfile
                     echo "── vendored integration file count ──"
                     find vome/custom_components/vomesync -type f | wc -l
                 '''
@@ -125,6 +131,8 @@ pipeline {
                     python -m pytest \
                         hacs-addon/tests/test_lan_routes.py \
                         hacs-addon/tests/test_relay_client.py \
+                        hacs-addon/tests/test_addon_packaging.py \
+                        hacs-addon/tests/test_panel_ui.py \
                         --tb=short -q \
                         --junitxml=junit-vome-addon.xml
                 '''

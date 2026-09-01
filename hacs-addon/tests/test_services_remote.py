@@ -86,6 +86,200 @@ def test_in_app_link_flow(monkeypatch):
 	assert "relay" not in entry.options
 
 
+def test_two_unlinked_entries_status_returns_an_id():
+	"""HACS + adding the integration again left a blank entry_id, so the panel
+	Connect button failed with 'pass entry_id' while Devices still worked."""
+	import asyncio
+	from types import SimpleNamespace
+	from unittest.mock import MagicMock
+	import custom_components.vomesync.services_remote as sr
+
+	e1 = SimpleNamespace(entry_id="e1", options={}, title="Vome (keypair abcd...)")
+	e2 = SimpleNamespace(entry_id="e2", options={}, title="Vome (keypair efgh...)")
+	hass = MagicMock()
+	hass.data = {}
+	hass.config_entries.async_entries.return_value = [e1, e2]
+	fake = _hass_on(port=80)
+	hass.http = fake.http
+	hass.config = fake.config
+
+	handlers = _register_and_capture(hass)
+	status = asyncio.run(handlers["get_remote_status"](SimpleNamespace(data={})))
+	assert "error" not in status
+	assert status["entry_id"] == "e1"
+	assert status["linked"] is False
+	assert len(status["vome_entries"]) == 2
+	assert "more than one Vome" in status["warning"]
+
+
+def test_link_start_with_two_unlinked_entries_picks_one(monkeypatch):
+	import asyncio
+	from types import SimpleNamespace
+	from unittest.mock import AsyncMock, MagicMock
+	import custom_components.vomesync.services_remote as sr
+
+	e1 = SimpleNamespace(entry_id="e1", options={}, title="Vome")
+	e2 = SimpleNamespace(entry_id="e2", options={}, title="Vome 2")
+	hass = MagicMock()
+	hass.data = {}
+	hass.config_entries.async_entries.return_value = [e1, e2]
+	hass.config.location_name = "Home"
+
+	monkeypatch.setattr(sr, "async_get_clientsession", lambda h: MagicMock())
+	monkeypatch.setattr(sr, "async_request_device_code", AsyncMock(return_value={
+		"device_code": "dev-123", "user_code": "WXYZ-1234",
+		"verification_uri": "https://vome.io/account/link-ha", "interval": 5, "expires_in": 900,
+	}))
+
+	handlers = _register_and_capture(hass)
+	started = asyncio.run(handlers["link_start"](SimpleNamespace(data={})))
+	assert "error" not in started
+	assert started["status"] == "started"
+	assert started["entry_id"] == "e1"
+	assert hass.data[sr.DOMAIN][sr._PENDING_LINK_KEY]["e1"]["device_code"] == "dev-123"
+
+
+def test_link_start_staging_portal_is_used_on_poll(monkeypatch):
+	"""Connect to staging.vome.io must poll that origin, not production."""
+	import asyncio
+	from types import SimpleNamespace
+	from unittest.mock import AsyncMock, MagicMock
+	import custom_components.vomesync.services_remote as sr
+
+	entry = SimpleNamespace(entry_id="e1", options={}, title="Vome")
+	hass = MagicMock()
+	hass.data = {}
+	hass.config_entries.async_entries.return_value = [entry]
+	hass.config.location_name = "Home"
+
+	request = AsyncMock(return_value={
+		"device_code": "dev-123", "user_code": "WXYZ-1234",
+		"verification_uri": "https://staging.vome.io/account/link-ha",
+		"interval": 5, "expires_in": 900,
+	})
+	poll = AsyncMock(return_value={"status": "pending"})
+	monkeypatch.setattr(sr, "async_get_clientsession", lambda h: MagicMock())
+	monkeypatch.setattr(sr, "async_request_device_code", request)
+	monkeypatch.setattr(sr, "async_poll_device_token", poll)
+
+	handlers = _register_and_capture(hass)
+	started = asyncio.run(handlers["link_start"](
+		SimpleNamespace(data={"portal_url": "https://staging.vome.io/"})
+	))
+	assert "error" not in started
+	assert request.await_args.args[1] == "https://staging.vome.io"
+	assert started["verification_uri"].startswith("https://staging.vome.io")
+
+	asyncio.run(handlers["link_poll"](SimpleNamespace(data={})))
+	assert poll.await_args.args[1] == "https://staging.vome.io"
+
+
+def test_link_start_uses_prefetched_device_code(monkeypatch):
+	"""Add-on-fetched codes must be stored as-is; Core must not request another."""
+	import asyncio
+	from types import SimpleNamespace
+	from unittest.mock import AsyncMock, MagicMock
+	import custom_components.vomesync.services_remote as sr
+
+	entry = SimpleNamespace(entry_id="e1", options={}, title="Vome")
+	hass = MagicMock()
+	hass.data = {}
+	hass.config_entries.async_entries.return_value = [entry]
+	hass.config.location_name = "Home"
+
+	request = AsyncMock(side_effect=AssertionError("must not fetch when prefetched"))
+	monkeypatch.setattr(sr, "async_get_clientsession", lambda h: MagicMock())
+	monkeypatch.setattr(sr, "async_request_device_code", request)
+
+	handlers = _register_and_capture(hass)
+	started = asyncio.run(handlers["link_start"](SimpleNamespace(data={
+		"portal_url": "https://staging.vome.io",
+		"device_code": "pre-1",
+		"user_code": "STAG-CODE",
+		"verification_uri": "https://staging.vome.io/account/link-ha",
+		"interval": 5,
+		"expires_in": 900,
+	})))
+	assert "error" not in started
+	assert started["status"] == "started"
+	assert started["user_code"] == "STAG-CODE"
+	assert started["portal_url"] == "https://staging.vome.io"
+	assert hass.data[sr.DOMAIN][sr._PENDING_LINK_KEY]["e1"]["device_code"] == "pre-1"
+	assert request.await_count == 0
+
+
+def test_normalise_portal_url_accepts_host_only_and_rejects_junk():
+	import pytest
+	from custom_components.vomesync.services_remote import _normalise_portal_url
+
+	assert _normalise_portal_url("") == "https://vome.io"
+	assert _normalise_portal_url("staging.vome.io") == "https://staging.vome.io"
+	assert _normalise_portal_url("https://staging.vome.io/account") == "https://staging.vome.io"
+	with pytest.raises(ValueError, match="http"):
+		_normalise_portal_url("javascript:alert(1)")
+
+
+def test_relay_ws_url_for_staging_portal_never_follows_production_sync():
+	from custom_components.vomesync.const import (
+		DEFAULT_RELAY_WS_URL,
+		STAGING_RELAY_WS_URL,
+		relay_ws_url_for_portal,
+	)
+
+	assert relay_ws_url_for_portal("https://staging.vome.io", DEFAULT_RELAY_WS_URL) == STAGING_RELAY_WS_URL
+	assert relay_ws_url_for_portal("https://staging.vome.io", "") == STAGING_RELAY_WS_URL
+	assert relay_ws_url_for_portal(
+		"https://staging.vome.io", "wss://dev.sync.vome.io/ws/relay"
+	) == "wss://dev.sync.vome.io/ws/relay"
+	assert relay_ws_url_for_portal("https://vome.io", DEFAULT_RELAY_WS_URL) == DEFAULT_RELAY_WS_URL
+	assert relay_ws_url_for_portal("", None) == DEFAULT_RELAY_WS_URL
+
+
+def test_preferred_entry_picks_the_linked_one():
+	from types import SimpleNamespace
+	from custom_components.vomesync.services_remote import _preferred_vome_entry
+
+	unlinked = SimpleNamespace(entry_id="e1", options={}, title="old", disabled_by=None)
+	linked = SimpleNamespace(
+		entry_id="e2", options={"relay": {"server_id": "rly-1"}}, title="live",
+		disabled_by=None,
+	)
+	assert _preferred_vome_entry([unlinked, linked]).entry_id == "e2"
+
+
+def test_preferred_entry_skips_disabled_leftovers():
+	from types import SimpleNamespace
+	from custom_components.vomesync.services_remote import (
+		_entries_public,
+		_preferred_vome_entry,
+	)
+
+	disabled = SimpleNamespace(
+		entry_id="dead", options={"relay": {"server_id": "old"}},
+		title="VomeSync (old)", disabled_by="user",
+	)
+	enabled = SimpleNamespace(
+		entry_id="live", options={}, title="VomeSync (new)", disabled_by=None,
+	)
+	assert _preferred_vome_entry([disabled, enabled]).entry_id == "live"
+	public = _entries_public([disabled, enabled])
+	assert public[0]["disabled"] is True
+	assert public[1]["disabled"] is False
+	assert public[0]["linked"] is True
+	assert public[1]["linked"] is False
+
+
+def test_pick_vome_entry_empty_is_a_plain_language_error():
+	from unittest.mock import MagicMock
+	import pytest
+	from custom_components.vomesync.services_remote import _pick_vome_entry
+
+	hass = MagicMock()
+	hass.config_entries.async_entries.return_value = []
+	with pytest.raises(ValueError, match="isn't set up"):
+		_pick_vome_entry(hass, None)
+
+
 def _hass_on(port=None, trusted=None, internal_url=None, external_url=None,
 			 forward_host=None):
 	"""Fake hass exposing just what the status diagnostics read."""

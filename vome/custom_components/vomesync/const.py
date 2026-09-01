@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.16"
+INTEGRATION_VERSION = "0.9.21"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -99,8 +99,30 @@ def backup_secret_server_id(secret):
 
 DEFAULT_PORTAL_URL = "https://vome.io"
 DEFAULT_RELAY_WS_URL = "wss://sync.vome.io/ws/relay"
+STAGING_RELAY_WS_URL = "wss://dev.sync.vome.io/ws/relay"
 RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
 RELAY_DEVICE_TOKEN_PATH = "/api/v1/relay/device/token"
+
+
+def relay_ws_url_for_portal(portal_url: str, offered: str | None = None) -> str:
+	"""WebSocket this Home Assistant should dial for the given Vome site.
+
+	Staging used to hand out production ``sync.vome.io``. Never follow that
+	when the portal itself is staging — the house looks linked, staging never
+	sees the socket.
+	"""
+	from urllib.parse import urlparse
+
+	raw = (portal_url or "").strip()
+	if raw and "://" not in raw:
+		raw = "https://" + raw
+	host = (urlparse(raw).hostname or "").lower() if raw else ""
+	offered = (offered or "").strip()
+	if host.startswith("staging.") or ".staging." in host:
+		if "dev.sync.vome.io" in offered:
+			return offered
+		return STAGING_RELAY_WS_URL
+	return offered or DEFAULT_RELAY_WS_URL
 
 # Local Home Assistant core API for executing relayed calls.  Supervisor token
 # first (HAOS / Supervised); a configured long-lived token is the fallback.
@@ -153,6 +175,14 @@ RELAY_WS_MSG_WS_CLOSE = "ws_close"
 # byte-pumping itself; these two are only for the component to request a
 # short-lived bearer token a local CLI tunnel client can present to the
 # backend's /ws/tcp endpoint (see services_remote.mint_lan_tcp_token).
+# Failed logins this home saw for itself, reported so its owner can read them
+# next to what Vome's edge saw (see login_watch.py).  Fire-and-forget: there is
+# no response, and a home whose relay is down simply reports nothing.
+RELAY_WS_MSG_ACCESS_EVENTS = "access_events"
+# Cap on one batch of reported events.  The backend caps again on its side;
+# this one stops a home flooding its own socket during an attack.
+ACCESS_EVENTS_MAX_BATCH = 100
+
 RELAY_WS_MSG_MINT_LAN_TCP_TOKEN = "mint_lan_tcp_token"
 RELAY_WS_MSG_MINT_LAN_TCP_TOKEN_RESPONSE = "mint_lan_tcp_token_response"
 RELAY_MINT_TOKEN_TIMEOUT = 10

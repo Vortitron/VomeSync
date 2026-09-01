@@ -107,6 +107,24 @@ body {
 	color: var(--muted);
 }
 .tree-item.active svg { opacity: 1; }
+.tree-item.needs-action {
+	border-left-color: var(--accent);
+	color: var(--accent);
+	font-weight: 600;
+}
+.tree-item.needs-action svg { opacity: 1; }
+/* Cached app.js used to mark this .primary; it is not the next step. */
+#qa-rdp,
+#qa-rdp.primary {
+	background: var(--panel);
+	color: var(--text);
+	border-color: var(--line);
+}
+#qa-rdp.primary:hover {
+	background: var(--panel);
+	color: var(--text);
+	border-color: var(--accent);
+}
 main { padding: 1.4rem 1.6rem 2.5rem; }
 .top {
 	display: flex;
@@ -116,6 +134,12 @@ main { padding: 1.4rem 1.6rem 2.5rem; }
 	margin-bottom: 1rem;
 }
 .top h1 { margin: 0; font-size: 1.45rem; font-weight: 600; }
+.top-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	align-items: center;
+}
 .ghost, .primary, .danger, button {
 	border-radius: 8px;
 	border: 1px solid var(--line);
@@ -160,6 +184,10 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .banner.err {
 	background: color-mix(in srgb, var(--danger) 22%, var(--panel));
 }
+.banner.info {
+	background: color-mix(in srgb, var(--accent) 16%, var(--panel));
+	border-color: var(--accent-dim);
+}
 .hidden { display: none !important; }
 .card {
 	background: var(--panel);
@@ -171,6 +199,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .card h2 { margin: 0 0 0.55rem; font-size: 1.05rem; }
 .card.warn-card { border-color: var(--warn); border-left-width: 3px; }
 .card.warn-card h2 { color: var(--warn); }
+.card.info-card { border-color: var(--accent); border-left-width: 3px; }
+.card.info-card h2 { color: var(--accent); }
 .card details { margin-top: 0.85rem; }
 .card details summary {
 	cursor: pointer;

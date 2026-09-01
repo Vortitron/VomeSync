@@ -1,8 +1,24 @@
 # Vome Home Assistant Add-on
 
-Supervisor add-on that installs the **same** `custom_components/vomesync` tree
-HACS uses, and serves a **tree-view control panel** (ingress) for remote access
-and LAN tunnels.
+Supervisor add-on that installs the Vome integration, serves a **sidebar
+control panel** for remote access and LAN tunnels, and lets this Home Assistant
+share virtual switches with other homes — without HACS, a public IP, or
+port-forwarding.
+
+The integration code is the **same** `custom_components/vomesync` tree HACS
+installs. Use this add-on *or* HACS, not both, unless you know you want one
+to overwrite the other.
+
+## What it does
+
+- **Virtual switches** — create switches other Home Assistant homes can watch
+  or toggle (public directory at [sync.vome.io](https://sync.vome.io))
+- **Remote access** — outbound relay to Vome so this instance can be reached
+  without opening router ports
+- **LAN tunnels** — expose selected LAN devices as `/t/<slug>/` on your Vome
+  domain
+- **Sidebar panel** — tree-view UI over the same options the integration menu
+  exposes
 
 ## Add-on Store install
 
@@ -23,6 +39,12 @@ vome/
   custom_components/vomesync/   # vendored copy of the HACS integration
   ...
 ```
+
+The Store **builds the image on your Home Assistant**. That build must not
+talk to Alpine's package index: the Dockerfile uses Home Assistant's
+`base-python` image so `python3` is already present. If install fails with
+`apk` / `python3 (no such package)`, you are on an old add-on version —
+check for updates and rebuild.
 
 ## HACS vs add-on
 
@@ -58,13 +80,14 @@ git). Work around with `ha jobs options --ignore-conditions internet_host`
 install again. MCP’s `ha_addon_install_vome` applies that ignore automatically
 when it hits the same error.
 
-The panel needs `python3` in the add-on image (Dockerfile). If logs show
-`exec: python3: not found`, update/rebuild the add-on to ≥0.2.3.
+The panel needs `python3` in the add-on image (supplied by `base-python`). If
+logs show `exec: python3: not found`, update/rebuild the add-on to ≥0.3.18.
 
 ## Building locally
 
 ```bash
 ./vome/build.sh
 # then Supervisor local build, or:
-# docker build --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.20 -t vome ./vome
+# docker build -t vome ./vome
+# (Dockerfile defaults BUILD_FROM to ghcr.io/home-assistant/base-python:3.13-alpine3.22)
 ```

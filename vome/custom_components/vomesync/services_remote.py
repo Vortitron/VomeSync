@@ -27,6 +27,7 @@ from .const import (
 	CONF_RELAY_WS_URL,
 	DEFAULT_PORTAL_URL,
 	DEFAULT_RELAY_WS_URL,
+	relay_ws_url_for_portal,
 	DOMAIN,
 	FORWARD_HOST_KEY,
 	INTEGRATION_VERSION,
@@ -81,6 +82,15 @@ def _notify_backup_agents_changed(hass: HomeAssistant) -> None:
 # in its own step data).
 _PENDING_LINK_KEY = "_pending_link"
 
+# Shown when HA has two Vome config entries (HACS + adding the integration
+# again is the usual cause). The panel also renders this as an info card.
+MULTI_ENTRY_HINT = (
+	"This Home Assistant has more than one Vome integration. That usually "
+	"happens after installing from HACS and adding Vome again. Keep one and "
+	"delete the spare under Settings → Devices & Services so Connect and "
+	"Devices stay in sync."
+)
+
 
 def _guard(handler):
 	"""Wrap a panel-facing service so its real error reaches the UI.
@@ -108,18 +118,74 @@ def _relay_entries(hass: HomeAssistant) -> list[ConfigEntry]:
 	]
 
 
+def _vome_entries(hass: HomeAssistant) -> list[ConfigEntry]:
+	return list(hass.config_entries.async_entries(DOMAIN))
+
+
+def _entry_is_disabled(entry: ConfigEntry) -> bool:
+	return getattr(entry, "disabled_by", None) is not None
+
+
+def _entry_is_linked(entry: ConfigEntry) -> bool:
+	relay = (entry.options or {}).get(CONF_RELAY) or {}
+	return bool(relay.get(CONF_RELAY_SERVER_ID))
+
+
+def _entry_title(entry: ConfigEntry) -> str:
+	title = getattr(entry, "title", None) or "Vome"
+	return title.strip() if isinstance(title, str) and title.strip() else "Vome"
+
+
+def _entries_public(entries: list[ConfigEntry]) -> list[dict[str, Any]]:
+	return [
+		{
+			"entry_id": e.entry_id,
+			"title": _entry_title(e),
+			"linked": _entry_is_linked(e),
+			"disabled": _entry_is_disabled(e),
+		}
+		for e in entries
+	]
+
+
+def _preferred_vome_entry(entries: list[ConfigEntry]) -> ConfigEntry:
+	"""Choose one config entry when the caller did not pass entry_id.
+
+	A HACS install plus adding the integration again leaves two unlinked
+	entries; refusing that with 'pass entry_id' made the add-on panel look
+	broken while Devices (which is bound to one entry) still worked. Prefer a
+	single 	linked relay; otherwise the first enabled entry, which the panel then
+	echoes back on writes. Disabled leftovers (HACS rows turned off) are
+	skipped so they do not steal Connect.
+	"""
+	if not entries:
+		raise ValueError(
+			"The Vome integration isn't set up in Home Assistant yet. "
+			"Add it under Settings → Devices & Services, then come back here."
+		)
+	enabled = [e for e in entries if not _entry_is_disabled(e)] or list(entries)
+	linked = [e for e in enabled if _entry_is_linked(e)]
+	if linked:
+		return linked[0]
+	return enabled[0]
+
+
 def _pick_entry(hass: HomeAssistant, entry_id: Optional[str]) -> ConfigEntry:
 	entries = _relay_entries(hass)
 	if entry_id:
 		for e in entries:
 			if e.entry_id == entry_id:
 				return e
-		raise ValueError(f"No linked Vome entry with id {entry_id}")
+		raise ValueError(
+			"That Vome link is no longer on this Home Assistant. "
+			"Refresh the panel and try again."
+		)
 	if len(entries) == 1:
 		return entries[0]
 	if not entries:
 		raise ValueError("No Home Assistant is linked to Vome yet")
-	raise ValueError("Multiple linked entries; pass entry_id")
+	# Panel status now returns an entry_id so this should be rare.
+	raise ValueError(MULTI_ENTRY_HINT)
 
 
 def _pick_vome_entry(hass: HomeAssistant, entry_id: Optional[str]) -> ConfigEntry:
@@ -128,17 +194,16 @@ def _pick_vome_entry(hass: HomeAssistant, entry_id: Optional[str]) -> ConfigEntr
 	Unlike ``_pick_entry`` this does not require a relay to be configured yet,
 	because the whole point of the link services is to set one up.
 	"""
-	entries = list(hass.config_entries.async_entries(DOMAIN))
+	entries = _vome_entries(hass)
 	if entry_id:
 		for e in entries:
 			if e.entry_id == entry_id:
 				return e
-		raise ValueError(f"No Vome entry with id {entry_id}")
-	if len(entries) == 1:
-		return entries[0]
-	if not entries:
-		raise ValueError("The Vome integration isn't set up in Home Assistant yet")
-	raise ValueError("Multiple Vome entries; pass entry_id")
+		raise ValueError(
+			"That Vome integration is no longer in Home Assistant. "
+			"Refresh the panel and try again."
+		)
+	return _preferred_vome_entry(entries)
 
 
 def _link_display_name(hass: HomeAssistant) -> str:
@@ -147,6 +212,35 @@ def _link_display_name(hass: HomeAssistant) -> str:
 	if isinstance(location, str) and location.strip():
 		return location.strip()
 	return "My Home Assistant"
+
+
+def _normalise_portal_url(raw: Optional[str]) -> str:
+	"""Origin of the Vome site used for device-authorisation (prod or staging).
+
+	Blank means production. Host-only values get https://. Paths and trailing
+	slashes are dropped so ``https://staging.vome.io/`` and ``staging.vome.io``
+	both work.
+	"""
+	value = (raw or "").strip() or DEFAULT_PORTAL_URL
+	if "://" not in value:
+		value = "https://" + value
+	parsed = urlparse(value)
+	if parsed.scheme not in ("http", "https"):
+		raise ValueError(
+			"Vome site URL must be http(s), for example https://staging.vome.io"
+		)
+	try:
+		host = parsed.hostname
+		port = parsed.port
+	except ValueError:
+		host = None
+		port = None
+	if not host:
+		raise ValueError(
+			"Vome site URL must be http(s), for example https://staging.vome.io"
+		)
+	netloc = host if port is None else f"{host}:{port}"
+	return f"{parsed.scheme}://{netloc}"
 
 
 async def _save_relay(hass: HomeAssistant, entry: ConfigEntry, relay: dict) -> None:
@@ -237,6 +331,7 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 		"external_url": _external_url_check(
 			hass, bool(relay.get(CONF_RELAY_FORWARD_UI))
 		),
+		"default_portal_url": DEFAULT_PORTAL_URL,
 	}
 
 
@@ -256,18 +351,17 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 
 	async def _get_status(call: ServiceCall) -> ServiceResponse:
 		entries = _relay_entries(hass)
+		all_entries = _vome_entries(hass)
 		entry_id = call.data.get("entry_id")
 		if not entries and not entry_id:
-			# Not linked yet — still surface the (single) Vome entry's id so the
-			# panel can drive the in-app linking services against it.
-			vome_entries = list(hass.config_entries.async_entries(DOMAIN))
-			# The local URL is a property of this Home Assistant, not of the
-			# link, so report it even when unlinked — the panel shows it in the
-			# same place either way, and it is worth being able to check the
-			# address is right *before* connecting an account.
+			# Not linked yet — still surface a Vome entry id so the panel can
+			# drive linking. Two unlinked leftovers (HACS + add-again) used
+			# to return a blank id, and Connect then failed with a raw
+			# "pass entry_id" error while Devices still worked.
+			chosen = _preferred_vome_entry(all_entries) if all_entries else None
 			local_url, local_url_source = describe_local_core_url(hass, None)
-			return {
-				"entry_id": vome_entries[0].entry_id if len(vome_entries) == 1 else "",
+			payload = {
+				"entry_id": chosen.entry_id if chosen else "",
 				"integration_version": INTEGRATION_VERSION,
 				"linked": False,
 				"server_id": "",
@@ -278,9 +372,13 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 				"local_url": local_url,
 				"local_url_source": local_url_source,
 				"local_url_override": "",
-				# Nothing is being forwarded yet, so this cannot be wrong.
 				"external_url": _external_url_check(hass, False),
+				"vome_entries": _entries_public(all_entries),
+				"default_portal_url": DEFAULT_PORTAL_URL,
 			}
+			if len(all_entries) > 1:
+				payload["warning"] = MULTI_ENTRY_HINT
+			return payload
 		# Read-only status must never hard-fail on multiple linked entries:
 		# pick the first so the panel loads, and warn. Writes still target a
 		# specific entry via entry_id (the panel echoes back the one shown).
@@ -289,12 +387,9 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		else:
 			entry = entries[0]
 		payload = remote_status_payload(hass, entry)
-		if len(entries) > 1 and not entry_id:
-			payload["warning"] = (
-				f"{len(entries)} Vome integrations are linked to this Home "
-				"Assistant. Showing the first; remove the extras in Settings "
-				"→ Devices & Services to avoid confusion."
-			)
+		payload["vome_entries"] = _entries_public(all_entries)
+		if len(all_entries) > 1:
+			payload["warning"] = MULTI_ENTRY_HINT
 		return payload
 
 	async def _set_forward_ui(call: ServiceCall) -> ServiceResponse:
@@ -603,16 +698,34 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
 		if ((entry.options or {}).get(CONF_RELAY) or {}).get(CONF_RELAY_SERVER_ID):
 			return {"status": "already_linked", "entry_id": entry.entry_id}
-		session = async_get_clientsession(hass)
-		started = await async_request_device_code(
-			session, DEFAULT_PORTAL_URL, name=_link_display_name(hass)
-		)
-		pending = {
-			"device_code": started.get("device_code"),
-			"user_code": started.get("user_code"),
-			"verification_uri": started.get("verification_uri")
-			or (DEFAULT_PORTAL_URL + "/account/link-ha"),
-		}
+		portal_url = _normalise_portal_url(call.data.get("portal_url"))
+		prefetched = str(call.data.get("device_code") or "").strip()
+		if prefetched:
+			# The add-on already talked to the configured Vome site. Store that
+			# code instead of fetching again (Core was still hitting production).
+			pending = {
+				"device_code": prefetched,
+				"user_code": str(call.data.get("user_code") or ""),
+				"portal_url": portal_url,
+				"verification_uri": str(call.data.get("verification_uri") or "").strip()
+				or (portal_url + "/account/link-ha"),
+			}
+			started = {
+				"interval": call.data.get("interval") or 5,
+				"expires_in": call.data.get("expires_in") or 900,
+			}
+		else:
+			session = async_get_clientsession(hass)
+			started = await async_request_device_code(
+				session, portal_url, name=_link_display_name(hass)
+			)
+			pending = {
+				"device_code": started.get("device_code"),
+				"user_code": started.get("user_code"),
+				"portal_url": portal_url,
+				"verification_uri": started.get("verification_uri")
+				or (portal_url + "/account/link-ha"),
+			}
 		if not pending["device_code"]:
 			raise ValueError("Vome did not return a device code — try again.")
 		hass.data.setdefault(DOMAIN, {}).setdefault(_PENDING_LINK_KEY, {})[entry.entry_id] = pending
@@ -621,6 +734,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			"entry_id": entry.entry_id,
 			"user_code": pending["user_code"] or "",
 			"verification_uri": pending["verification_uri"],
+			"portal_url": portal_url,
 			"interval": int(started.get("interval") or 5),
 			"expires_in": int(started.get("expires_in") or 900),
 		}
@@ -631,15 +745,18 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		if not pending or not pending.get("device_code"):
 			return {"status": "no_pending"}
 		session = async_get_clientsession(hass)
+		portal_url = pending.get("portal_url") or DEFAULT_PORTAL_URL
 		result = await async_poll_device_token(
-			session, DEFAULT_PORTAL_URL, pending["device_code"]
+			session, portal_url, pending["device_code"]
 		)
 		status = result.get("status")
 		if status == "approved":
 			relay = {
 				CONF_RELAY_SERVER_ID: result.get("server_id"),
 				CONF_RELAY_SECRET: result.get("relay_secret"),
-				CONF_RELAY_WS_URL: result.get("relay_ws_url") or DEFAULT_RELAY_WS_URL,
+				CONF_RELAY_WS_URL: relay_ws_url_for_portal(
+					portal_url, result.get("relay_ws_url")
+				),
 			}
 			options = dict(entry.options or {})
 			options[CONF_RELAY] = relay
@@ -668,14 +785,26 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		hass.data.get(DOMAIN, {}).get(_PENDING_LINK_KEY, {}).pop(entry.entry_id, None)
 		return {"status": "unlinked", "was_linked": was_linked}
 
-	_link_schema = vol.Schema({vol.Optional("entry_id"): cv.string})
+	hass.services.async_register(
+		DOMAIN, "link_start", _guard(_link_start),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Optional("portal_url"): cv.string,
+			vol.Optional("device_code"): cv.string,
+			vol.Optional("user_code"): cv.string,
+			vol.Optional("verification_uri"): cv.string,
+			vol.Optional("interval"): vol.Coerce(int),
+			vol.Optional("expires_in"): vol.Coerce(int),
+		}),
+		supports_response=SupportsResponse.ONLY,
+	)
+	_link_follow_schema = vol.Schema({vol.Optional("entry_id"): cv.string})
 	for _name, _handler in (
-		("link_start", _link_start),
 		("link_poll", _link_poll),
 		("unlink", _unlink),
 	):
 		hass.services.async_register(
 			DOMAIN, _name, _guard(_handler),
-			schema=_link_schema, supports_response=SupportsResponse.ONLY,
+			schema=_link_follow_schema, supports_response=SupportsResponse.ONLY,
 		)
 	_LOGGER.debug("Registered Vome remote-access services")
