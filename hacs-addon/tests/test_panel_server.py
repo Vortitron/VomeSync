@@ -139,7 +139,17 @@ def test_panel_exposes_the_local_url_route():
 
 
 def test_addon_version_reads_config_yaml():
-	assert server.addon_version() == "0.3.28"
+	# Read the expected value from config.yaml rather than pinning a literal:
+	# what matters is that addon_version() parses the file, and a hardcoded
+	# version turns every release into a test edit (and a red build when it is
+	# forgotten). test_version_pin.py is where version *consistency* is enforced.
+	config = (ROOT / "vome" / "config.yaml").read_text(encoding="utf-8")
+	expected = next(
+		line.split(":", 1)[1].strip().strip('"\'')
+		for line in config.splitlines()
+		if line.startswith("version:")
+	)
+	assert server.addon_version() == expected
 
 
 def test_stamp_static_html_cache_busts_assets():
