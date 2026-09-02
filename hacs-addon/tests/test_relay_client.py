@@ -633,6 +633,7 @@ class _FakeLocalWS:
 		self._incoming = list(incoming or [])
 		self.sent_str: list[str] = []
 		self.sent_bytes: list[bytes] = []
+		self.sent_json: list[dict] = []
 		self.closed = False
 
 	def __aiter__(self):
@@ -647,6 +648,9 @@ class _FakeLocalWS:
 
 	async def send_str(self, s):
 		self.sent_str.append(s)
+
+	async def send_json(self, obj):
+		self.sent_json.append(obj)
 
 	async def send_bytes(self, b):
 		self.sent_bytes.append(b)
@@ -1351,3 +1355,111 @@ class TestWebhookForwarding:
 		status, _h, _b, error = await client._execute_http_proxy(
 			{"method": "GET", "path": "/lovelace", "headers": []})
 		assert error is None and status == 200
+
+
+class TestEsphomeStream:
+	"""The brokered path for validate/compile/upload/logs/clean.
+
+	These are the commands that let a remote agent flash a device and read its
+	logs through the relay, with no inbound exposure and without the agent ever
+	touching the dashboard directly.
+	"""
+
+	@pytest.mark.asyncio
+	async def test_rejects_an_unknown_command(self):
+		session = _session_for_ws(_FakeLocalWS())
+		client = _client(session, esphome_url="http://esp:6052")
+		ws = AsyncMock()
+		await client._handle_esphome_ws_open(
+			ws, "s1", {"command": "rm -rf", "configuration": "lr.yaml"}
+		)
+		session.ws_connect.assert_not_called()
+		closed = _sent_payloads(ws)[0]
+		assert closed["type"] == "ws_close" and closed["code"] == 1008
+
+	@pytest.mark.asyncio
+	async def test_rejects_a_hostile_configuration_name(self):
+		session = _session_for_ws(_FakeLocalWS())
+		client = _client(session, esphome_url="http://esp:6052")
+		for hostile in ("../../secrets.yaml", "a b.yaml", "", "x" * 200):
+			ws = AsyncMock()
+			await client._handle_esphome_ws_open(
+				ws, "s1", {"command": "compile", "configuration": hostile}
+			)
+			assert _sent_payloads(ws)[0]["type"] == "ws_close", hostile
+		session.ws_connect.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_reports_why_the_dashboard_is_unavailable(self):
+		session = _session_for_ws(_FakeLocalWS())
+		client = _client(session)  # no configured URL, no Supervisor in tests
+		ws = AsyncMock()
+		await client._handle_esphome_ws_open(
+			ws, "s1", {"command": "logs", "configuration": "lr.yaml"}
+		)
+		session.ws_connect.assert_not_called()
+		closed = _sent_payloads(ws)[0]
+		assert closed["type"] == "ws_close" and closed["code"] == 1011
+		# The reason is the resolver's own explanation, not a generic failure.
+		assert "ESPHome" in closed["reason"]
+
+	@pytest.mark.asyncio
+	async def test_spawns_the_command_and_pumps_output(self):
+		local = _FakeLocalWS([
+			_FakeMsg(aiohttp.WSMsgType.TEXT, '{"event":"line","data":"Linking\n"}'),
+			_FakeMsg(aiohttp.WSMsgType.TEXT, '{"event":"exit","code":0}'),
+		])
+		session = _session_for_ws(local)
+		client = _client(session, esphome_url="http://esp:6052")
+		ws = AsyncMock()
+
+		await client._handle_esphome_ws_open(
+			ws, "s1", {"command": "compile", "configuration": "lr.yaml"}
+		)
+
+		assert session.ws_connect.call_args[0][0] == "ws://esp:6052/compile"
+		# The component builds the spawn frame itself; nothing from the caller is
+		# forwarded verbatim to a dashboard that has no auth of its own.
+		assert local.sent_json == [{"type": "spawn", "configuration": "lr.yaml"}]
+		await client._ws_pumps["s1"]
+		payloads = _sent_payloads(ws)
+		assert payloads[0] == {"type": "ws_open_ack", "socketId": "s1"}
+		lines = [p["text"] for p in payloads if p.get("type") == "ws_data"]
+		assert lines == [
+			'{"event":"line","data":"Linking\n"}',
+			'{"event":"exit","code":0}',
+		]
+		assert payloads[-1]["type"] == "ws_close"
+
+	@pytest.mark.asyncio
+	async def test_forwards_a_string_port_but_never_a_non_string(self):
+		local = _FakeLocalWS()
+		session = _session_for_ws(local)
+		client = _client(session, esphome_url="http://esp:6052")
+		await client._handle_esphome_ws_open(
+			AsyncMock(), "s1", {"command": "upload", "configuration": "lr.yaml", "port": "OTA"}
+		)
+		assert local.sent_json[0]["port"] == "OTA"
+
+		hostile = _FakeLocalWS()
+		client2 = _client(_session_for_ws(hostile), esphome_url="http://esp:6052")
+		await client2._handle_esphome_ws_open(
+			AsyncMock(),
+			"s2",
+			{"command": "upload", "configuration": "lr.yaml", "port": {"$ne": None}},
+		)
+		assert "port" not in hostile.sent_json[0]
+
+	@pytest.mark.asyncio
+	async def test_routed_from_ws_open_even_when_ui_forwarding_is_off(self):
+		# ESPHome streaming is its own target and must not depend on the
+		# full-UI forwarding opt-in.
+		session = _session_for_ws(_FakeLocalWS())
+		client = _client(session, esphome_url="http://esp:6052")
+		client._handle_esphome_ws_open = AsyncMock()
+		await client._handle_ws_open(
+			AsyncMock(),
+			{"socketId": "s1", "target": "esphome", "command": "logs",
+			 "configuration": "lr.yaml"},
+		)
+		client._handle_esphome_ws_open.assert_called_once()

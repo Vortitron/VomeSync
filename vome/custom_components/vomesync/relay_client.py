@@ -59,7 +59,9 @@ from .const import (
 	ESPHOME_ADDON_STATE_STARTED,
 	ESPHOME_ALLOWED_METHODS,
 	ESPHOME_ALLOWED_PATHS,
+	ESPHOME_CONFIG_RE,
 	ESPHOME_DEFAULT_PORT,
+	ESPHOME_STREAM_COMMANDS,
 	ESPHOME_INGRESS_HOST,
 	ESPHOME_WEB_PORT_KEY,
 	LAN_TCP_TOKEN_DEFAULT_TTL,
@@ -895,6 +897,12 @@ class RelayClient:
 		socket_id = data.get("socketId")
 		if not socket_id:
 			return
+		# An ESPHome build/log stream is its own target: it is not the frontend
+		# socket and not a LAN route, and it must work regardless of whether
+		# full-UI forwarding is enabled.
+		if data.get("target") == RELAY_RPC_TARGET_ESPHOME:
+			await self._handle_esphome_ws_open(ws, socket_id, data)
+			return
 		path = data.get("path") or "/api/websocket"
 		lan = parse_lan_path(path)
 		if lan is not None:
@@ -951,21 +959,92 @@ class RelayClient:
 			return
 		await self._open_bridged_ws(ws, socket_id, _to_ws_url(base, remainder))
 
+	async def _handle_esphome_ws_open(
+		self,
+		ws: aiohttp.ClientWebSocketResponse,
+		socket_id: str,
+		data: dict,
+	) -> None:
+		"""Bridge one ESPHome streaming build command (validate/compile/upload/…).
+
+		This is what lets a remote agent flash a device and read its logs without
+		any inbound exposure and without reaching the dashboard directly.  It
+		matters more than it looks: the official add-on is host-networked with its
+		web port disabled, behind an ingress nginx that admits only the Supervisor
+		and 127.0.0.1, so on a default install the component is the *only* thing
+		that can reach the dashboard at all.
+
+		The command and configuration are validated here and the ``spawn`` frame is
+		built locally, so nothing the caller sends is forwarded verbatim to a
+		dashboard that has no authentication of its own.
+		"""
+		command = str(data.get("command") or "")
+		if command not in ESPHOME_STREAM_COMMANDS:
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1008, "reason": f"Unsupported ESPHome command: {command!r}.",
+			})
+			return
+		configuration = str(data.get("configuration") or "")
+		if not ESPHOME_CONFIG_RE.match(configuration):
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1008, "reason": "Invalid ESPHome configuration filename.",
+			})
+			return
+		base, problem = await self._resolve_esphome_base()
+		if not base:
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1011, "reason": problem or "ESPHome dashboard not found.",
+			})
+			return
+		spawn: dict = {"type": "spawn", "configuration": configuration}
+		port = data.get("port")
+		if isinstance(port, str) and port:
+			spawn["port"] = port
+		_LOGGER.debug(
+			"Relay (%s): ESPHome %s %s", self._server_id, command, configuration
+		)
+		await self._open_bridged_ws(
+			ws, socket_id, _to_ws_url(base, f"/{command}"), initial=spawn
+		)
+
 	async def _open_bridged_ws(
 		self,
 		ws: aiohttp.ClientWebSocketResponse,
 		socket_id: str,
 		local_url: str,
+		initial: Optional[dict] = None,
 	) -> None:
-		"""Connect to ``local_url`` and register the pump for this bridge."""
+		"""Connect to ``local_url`` and register the pump for this bridge.
+
+		``initial`` is a frame sent as soon as the socket opens — the ESPHome
+		``spawn`` command, which the component composes itself rather than
+		relaying (see :meth:`_handle_esphome_ws_open`).
+		"""
 		try:
 			local = await self._get_session().ws_connect(local_url, heartbeat=30)
 		except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+			# A cached dashboard address may be stale (add-on restarted since
+			# discovery), so drop it and let the next call re-discover.
+			self._esphome_base_cache = None
 			await self._send(ws, {
 				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
 				"code": 1011, "reason": f"Local WebSocket error: {err}",
 			})
 			return
+		if initial is not None:
+			try:
+				await local.send_json(initial)
+			except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+				with suppress(Exception):
+					await local.close()
+				await self._send(ws, {
+					"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+					"code": 1011, "reason": f"Local WebSocket error: {err}",
+				})
+				return
 		self._ws_local[socket_id] = local
 		await self._send(ws, {"type": RELAY_WS_MSG_WS_OPEN_ACK, "socketId": socket_id})
 		self._ws_pumps[socket_id] = asyncio.ensure_future(
