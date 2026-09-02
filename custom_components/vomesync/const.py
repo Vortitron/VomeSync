@@ -268,9 +268,10 @@ WS_COMMAND_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*/[a-z0-9_./-]{0,120}$")
 RELAY_WS_MAX_COMMAND_BYTES = 2_000_000
 
 # ESPHome dashboard: discovered via the Supervisor add-on API on HAOS / Supervised
-# installs, or set explicitly (CONF_RELAY_ESPHOME_URL).  Only the REST subset is
-# proxied — the streaming build commands (compile/upload/run/logs) need a direct
-# dashboard connection and are intentionally not tunnelled.
+# installs, or set explicitly (CONF_RELAY_ESPHOME_URL).  The REST subset rides
+# ha_rpc (request/response); the streaming build commands are WebSocket command
+# channels on the dashboard and ride ws_open/ws_data/ws_close instead — see
+# ESPHOME_STREAM_COMMANDS below.
 SUPERVISOR_ADDONS_URL = "http://supervisor/addons"
 SUPERVISOR_ADDON_INFO_URL = "http://supervisor/addons/{slug}/info"
 ESPHOME_DEFAULT_PORT = 6052
@@ -279,6 +280,18 @@ ESPHOME_WEB_PORT_KEY = "6052/tcp"  # the add-on's optional direct web port mappi
 # matched exactly, never as prefixes, so /devices-x or /edit/../delete are refused.
 ESPHOME_ALLOWED_PATHS = ("/devices", "/version", "/edit")
 ESPHOME_ALLOWED_METHODS = ("GET", "POST")
+# The dashboard's WebSocket command channels.  Each is spawned by connecting to
+# ``<base>/<command>`` and sending one ``{"type": "spawn", ...}`` frame; output
+# arrives as ``{"event": "line"}`` frames and ends with ``{"event": "exit"}``.
+#
+# The component builds that spawn frame itself from the validated command and
+# configuration rather than forwarding whatever the caller sent, so a compromised
+# or buggy caller cannot inject arbitrary frames into a dashboard that has no
+# auth of its own.  Matched exactly — never as a prefix.
+ESPHOME_STREAM_COMMANDS = ("validate", "compile", "upload", "run", "logs", "clean")
+# ESPHome configuration filenames, e.g. ``living-room.yaml``.  Strict, so the
+# value can never escape the frame the component builds around it.
+ESPHOME_CONFIG_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 # Supervisor add-on state: only a *started* add-on is reachable, so discovery
 # must check this rather than surface an opaque connect error.
 ESPHOME_ADDON_STATE_STARTED = "started"
