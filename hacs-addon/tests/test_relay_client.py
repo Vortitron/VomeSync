@@ -329,6 +329,67 @@ class TestEsphome:
 		assert dash.sent[0]["command"] == "devices/get_config"
 
 	@pytest.mark.asyncio
+	async def test_migrate_reports_the_rules_a_config_still_needs(self):
+		# ESPHome shows these as a banner in its own UI, which an agent never
+		# sees — so it goes on writing deprecated spellings.
+		change = {
+			"kind": "action",
+			"old": "homeassistant.service",
+			"new": "homeassistant.action",
+			"since": "2024.8",
+			"required": False,
+		}
+
+		def responder(command, mid, args):
+			if command == "devices/get_config":
+				return [{"message_id": mid, "result": "esphome:\n  name: x\n"}]
+			return [{"message_id": mid, "result": {"yaml_diff": {}, "changes": [change]}}]
+
+		dash = _FakeWsDashboard(responder=responder)
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+
+		status, body, error = await client.execute(
+			"GET", "/migrate?configuration=x.yaml", None, "esphome"
+		)
+
+		assert status == 200 and error is None
+		report = json.loads(body)
+		assert report["migrations_pending"] is True
+		assert report["required"] is False
+		assert report["changes"][0]["new"] == "homeassistant.action"
+		assert [f["command"] for f in dash.sent] == ["devices/get_config", "editor/migrate_config"]
+
+	@pytest.mark.asyncio
+	async def test_migrate_reports_a_clean_config_as_nothing_to_do(self):
+		def responder(command, mid, args):
+			if command == "devices/get_config":
+				return [{"message_id": mid, "result": "esphome:\n"}]
+			return [{"message_id": mid, "result": {"yaml_diff": None, "changes": []}}]
+
+		dash = _FakeWsDashboard(responder=responder)
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		status, body, _err = await client.execute(
+			"GET", "/migrate?configuration=x.yaml", None, "esphome"
+		)
+		assert status == 200
+		assert json.loads(body)["migrations_pending"] is False
+
+	@pytest.mark.asyncio
+	async def test_migrate_flags_a_rename_the_installed_esphome_already_rejects(self):
+		# "required" is the difference between tidy-up and "this stops compiling".
+		def responder(command, mid, args):
+			if command == "devices/get_config":
+				return [{"message_id": mid, "result": "esphome:\n"}]
+			return [{"message_id": mid, "result": {"changes": [{"old": "a", "new": "b", "required": True}]}}]
+
+		dash = _FakeWsDashboard(responder=responder)
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		_status, body, _err = await client.execute(
+			"GET", "/migrate?configuration=x.yaml", None, "esphome"
+		)
+		assert json.loads(body)["required"] is True
+
+	@pytest.mark.asyncio
 	async def test_config_over_ws_rejects_a_hostile_filename(self):
 		dash = _FakeWsDashboard()
 		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")

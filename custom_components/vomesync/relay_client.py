@@ -1464,7 +1464,7 @@ class RelayClient:
 		# /edit was removed when ESPHome split the dashboard out; the path now
 		# serves the single-page app, so a read returned HTML and a write went
 		# nowhere. Keep the relay's stable contract and translate here.
-		if portion == "/edit":
+		if portion in ("/edit", "/migrate"):
 			return await self._esphome_config_via_ws(base, path, method, body)
 		url = base + path
 		session = self._get_session()
@@ -1495,12 +1495,13 @@ class RelayClient:
 	async def _esphome_config_via_ws(
 		self, base: str, path: str, method: str, body: Any
 	) -> tuple[int, Optional[str], Optional[str]]:
-		"""Read or write a device's YAML over the dashboard's /ws API.
+		"""Serve /edit and /migrate over the dashboard's /ws API.
 
 		Answers in the shape the old ``/edit`` REST endpoint did — raw YAML for a
 		read, empty body for a write — so the portal and MCP above keep working
 		unchanged against an endpoint ESPHome has since deleted.
 		"""
+		portion = _safe_path_portion(path) or ""
 		configuration = ""
 		if "?" in path:
 			query = path.split("?", 1)[1]
@@ -1520,6 +1521,9 @@ class RelayClient:
 		try:
 			session = EsphomeWsSession(local)
 			await session.handshake(RELAY_RPC_TIMEOUT)
+			if portion == "/migrate":
+				report = await session.pending_migrations(configuration, RELAY_RPC_TIMEOUT)
+				return 200, json.dumps(report), None
 			if method == "GET":
 				yaml_text = await session.call(
 					"devices/get_config", {"configuration": configuration}, RELAY_RPC_TIMEOUT
