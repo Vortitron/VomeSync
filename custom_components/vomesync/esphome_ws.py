@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Callable, Optional
 
 import aiohttp
@@ -62,6 +63,19 @@ _JOB_COMMANDS: dict[str, str] = {
 SUPPORTED_COMMANDS = tuple(sorted({*_STREAM_COMMANDS, *_JOB_COMMANDS}))
 
 _FOLLOW_JOB = "firmware/follow_job"
+
+
+# A PlatformIO / esptool progress redraw: ``Downloading: [====    ]  45%``.
+# ESPHome's own splitter breaks on ``\r`` as well as ``\n`` so these surface
+# live, which is right for a browser that overwrites a line in place and wrong
+# for us: one framework download emits hundreds of near-identical lines and
+# crowds the real build output out of the line budget downstream.
+_PROGRESS_RE = re.compile(r"\[[=\s.\-#>]*\]\s*\d{1,3}\s*%")
+
+
+def is_progress_line(line: str) -> bool:
+	"""True for a progress-bar redraw, which only the newest of a run matters."""
+	return bool(_PROGRESS_RE.search(line))
 
 
 class EsphomeWsError(Exception):
@@ -156,12 +170,26 @@ class EsphomeWsSession:
 		emit: Callable[[dict[str, Any]], Any],
 		timeout: float,
 	) -> None:
-		"""Forward frames for ``message_id`` until the terminal one arrives."""
+		"""Forward frames for ``message_id`` until the terminal one arrives.
+
+		Consecutive progress-bar redraws are collapsed to the newest, so a
+		framework download does not spend the whole line budget on a bar being
+		drawn a hundred times.
+		"""
+		pending_progress: Optional[str] = None
+
+		async def flush_progress() -> None:
+			nonlocal pending_progress
+			if pending_progress is not None:
+				await emit({"event": "line", "data": f"{pending_progress}\n"})
+				pending_progress = None
+
 		while True:
 			frame = await self._next_frame(timeout)
 			if frame.get("message_id") != message_id:
 				continue
 			if "error_code" in frame:
+				await flush_progress()
 				detail = f"{frame.get('error_code')}: {frame.get('details') or ''}".strip()
 				await emit({"event": "line", "data": f"{detail}\n"})
 				await emit({"event": "exit", "code": 1})
@@ -174,8 +202,16 @@ class EsphomeWsSession:
 				for line in lines:
 					if line is None:
 						continue
+					if is_progress_line(line):
+						# Hold it: if the next line is another redraw this one
+						# never needed sending, and if it isn't, the last state
+						# of the bar is the one worth keeping.
+						pending_progress = line
+						continue
+					await flush_progress()
 					await emit({"event": "line", "data": f"{line}\n"})
 			elif event == "result":
+				await flush_progress()
 				payload = frame.get("data") or {}
 				# The two terminal shapes differ by one key: a firmware job
 				# reports ``exit_code``, a streamed subprocess ``code``. Reading
@@ -194,6 +230,7 @@ class EsphomeWsSession:
 				return
 			elif "result" in frame:
 				# A streaming command that answered with a plain result is done.
+				await flush_progress()
 				await emit({"event": "exit", "code": 0})
 				return
 

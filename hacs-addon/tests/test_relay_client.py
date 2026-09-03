@@ -1563,6 +1563,57 @@ class TestEsphomeStream:
 		assert dash.sent[0]["args"]["port"] == "OTA"
 
 	@pytest.mark.asyncio
+	async def test_collapses_progress_bar_redraws(self):
+		# One framework download redraws its bar hundreds of times. Forwarding
+		# every redraw spends the whole line budget downstream on a bar and
+		# crowds out the build output someone actually needs to read.
+		def responder(command, mid, args):
+			frames = [{"message_id": mid, "event": "output", "data": "INFO Downloading ESP-IDF"}]
+			frames += [
+				{"message_id": mid, "event": "output", "data": f"Downloading: [==  ] {pct}%"}
+				for pct in range(0, 100)
+			]
+			frames.append({"message_id": mid, "event": "output", "data": "Downloading: [====] 100% Done..."})
+			frames.append({"message_id": mid, "event": "output", "data": "INFO Compiling app..."})
+			frames.append({"message_id": mid, "event": "result", "data": {"code": 0}})
+			return frames
+
+		dash = _FakeWsDashboard(responder=responder)
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		ws = AsyncMock()
+
+		await client._handle_esphome_ws_open(
+			ws, "s1", {"command": "validate", "configuration": "lr.yaml"}
+		)
+		await client._ws_pumps["s1"]
+
+		lines = [f["data"] for f in _ws_frames(ws) if f["event"] == "line"]
+		# 101 redraws become one — the last, which carries "Done".
+		assert lines == [
+			"INFO Downloading ESP-IDF\n",
+			"Downloading: [====] 100% Done...\n",
+			"INFO Compiling app...\n",
+		]
+
+	@pytest.mark.asyncio
+	async def test_a_trailing_progress_bar_is_not_swallowed(self):
+		# The hold-and-flush must not lose a bar that is the final output.
+		dash = _FakeWsDashboard(responder=lambda c, mid, a: [
+			{"message_id": mid, "event": "output", "data": "Writing: [====] 100%"},
+			{"message_id": mid, "event": "result", "data": {"code": 0}},
+		])
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		ws = AsyncMock()
+
+		await client._handle_esphome_ws_open(
+			ws, "s1", {"command": "validate", "configuration": "lr.yaml"}
+		)
+		await client._ws_pumps["s1"]
+
+		lines = [f["data"] for f in _ws_frames(ws) if f["event"] == "line"]
+		assert lines == ["Writing: [====] 100%\n"]
+
+	@pytest.mark.asyncio
 	async def test_reads_the_exit_status_of_both_terminal_shapes(self):
 		# A streamed subprocess reports `code`; a firmware job reports
 		# `exit_code`. Reading only one left the other's exit as None, which
