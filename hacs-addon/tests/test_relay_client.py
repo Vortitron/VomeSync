@@ -1596,6 +1596,30 @@ class TestEsphomeStream:
 		]
 
 	@pytest.mark.asyncio
+	async def test_keeps_adjacent_bars_that_are_different_measurements(self):
+		# A build's summary ends with two lines that look exactly like progress
+		# bars but are the result, not a redraw. Collapsing on "looks like a bar"
+		# would report Flash and silently drop RAM.
+		dash = _FakeWsDashboard(responder=lambda c, mid, a: [
+			{"message_id": mid, "event": "output",
+			 "data": "RAM:   [======    ]  63.7% (used 79324 bytes from 124580 bytes)"},
+			{"message_id": mid, "event": "output",
+			 "data": "Flash: [=======   ]  71.2% (used 1307351 bytes from 1835008 bytes)"},
+			{"message_id": mid, "event": "result", "data": {"code": 0}},
+		])
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		ws = AsyncMock()
+
+		await client._handle_esphome_ws_open(
+			ws, "s1", {"command": "validate", "configuration": "lr.yaml"}
+		)
+		await client._ws_pumps["s1"]
+
+		lines = [f["data"] for f in _ws_frames(ws) if f["event"] == "line"]
+		assert len(lines) == 2
+		assert lines[0].startswith("RAM:") and lines[1].startswith("Flash:")
+
+	@pytest.mark.asyncio
 	async def test_a_trailing_progress_bar_is_not_swallowed(self):
 		# The hold-and-flush must not lose a bar that is the final output.
 		dash = _FakeWsDashboard(responder=lambda c, mid, a: [
