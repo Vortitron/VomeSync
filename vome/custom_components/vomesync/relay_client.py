@@ -62,6 +62,7 @@ from .const import (
 	ESPHOME_CONFIG_RE,
 	ESPHOME_DEFAULT_PORT,
 	ESPHOME_STREAM_COMMANDS,
+	ESPHOME_STREAM_TIMEOUT,
 	ESPHOME_INGRESS_HOST,
 	ESPHOME_WEB_PORT_KEY,
 	LAN_TCP_TOKEN_DEFAULT_TTL,
@@ -107,6 +108,7 @@ from .const import (
 )
 from .login_watch import LoginWatcher
 from .webhooks import is_forwardable_webhook, normalise_webhooks
+from .esphome_ws import WS_PATH, EsphomeWsError, EsphomeWsSession
 from .lan_routes import (
 	ROUTE_HOST,
 	ROUTE_PORT,
@@ -965,18 +967,20 @@ class RelayClient:
 		socket_id: str,
 		data: dict,
 	) -> None:
-		"""Bridge one ESPHome streaming build command (validate/compile/upload/…).
+		"""Run one ESPHome build/log command and stream its output up the relay.
 
-		This is what lets a remote agent flash a device and read its logs without
-		any inbound exposure and without reaching the dashboard directly.  It
-		matters more than it looks: the official add-on is host-networked with its
-		web port disabled, behind an ingress nginx that admits only the Supervisor
-		and 127.0.0.1, so on a default install the component is the *only* thing
-		that can reach the dashboard at all.
+		This is what lets a remote agent flash a device and read its logs with no
+		inbound exposure and without touching the dashboard directly. It matters
+		more than it looks: the add-on is host-networked with its web port
+		disabled, behind an ingress nginx admitting only the Supervisor and
+		127.0.0.1, so on a default install the component is the *only* thing that
+		can reach the dashboard at all.
 
-		The command and configuration are validated here and the ``spawn`` frame is
-		built locally, so nothing the caller sends is forwarded verbatim to a
-		dashboard that has no authentication of its own.
+		The command and configuration are validated here and the request is
+		composed locally, so nothing the caller sends is forwarded verbatim to a
+		dashboard that has no authentication of its own. Output is translated to
+		the line/exit frames the relay already carries (see esphome_ws), so the
+		backend, portal and MCP never learn that ESPHome changed its API.
 		"""
 		command = str(data.get("command") or "")
 		if command not in ESPHOME_STREAM_COMMANDS:
@@ -999,16 +1003,73 @@ class RelayClient:
 				"code": 1011, "reason": problem or "ESPHome dashboard not found.",
 			})
 			return
-		spawn: dict = {"type": "spawn", "configuration": configuration}
+
 		port = data.get("port")
-		if isinstance(port, str) and port:
-			spawn["port"] = port
+		port = port if isinstance(port, str) and port else None
+		try:
+			local = await self._get_session().ws_connect(
+				_to_ws_url(base, WS_PATH), heartbeat=30
+			)
+		except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+			# A cached address may be stale (add-on restarted since discovery),
+			# so drop it and let the next call re-discover.
+			self._esphome_base_cache = None
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+				"code": 1011, "reason": f"ESPHome dashboard error: {err}",
+			})
+			return
+
+		self._ws_local[socket_id] = local
+		await self._send(ws, {"type": RELAY_WS_MSG_WS_OPEN_ACK, "socketId": socket_id})
 		_LOGGER.debug(
 			"Relay (%s): ESPHome %s %s", self._server_id, command, configuration
 		)
-		await self._open_bridged_ws(
-			ws, socket_id, _to_ws_url(base, f"/{command}"), initial=spawn
+		self._ws_pumps[socket_id] = asyncio.ensure_future(
+			self._pump_esphome(ws, socket_id, local, command, configuration, port)
 		)
+
+	async def _pump_esphome(
+		self,
+		ws: aiohttp.ClientWebSocketResponse,
+		socket_id: str,
+		local: aiohttp.ClientWebSocketResponse,
+		command: str,
+		configuration: str,
+		port: Optional[str],
+	) -> None:
+		"""Drive one ESPHome command, forwarding translated frames upward."""
+		close_code, close_reason = 1000, ""
+
+		async def emit(frame: dict) -> None:
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_DATA,
+				"socketId": socket_id,
+				"text": json.dumps(frame),
+			})
+
+		try:
+			session = EsphomeWsSession(local)
+			await session.handshake(RELAY_RPC_TIMEOUT)
+			await session.run_build_command(
+				command, configuration, port, emit, ESPHOME_STREAM_TIMEOUT
+			)
+		except EsphomeWsError as err:
+			close_code, close_reason = 1011, str(err)
+		except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+			close_code, close_reason = 1011, f"ESPHome dashboard error: {err}"
+		except asyncio.CancelledError:
+			close_code, close_reason = 1000, "cancelled"
+		finally:
+			self._ws_local.pop(socket_id, None)
+			self._ws_pumps.pop(socket_id, None)
+			with suppress(Exception):
+				await local.close()
+			with suppress(Exception):
+				await self._send(ws, {
+					"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+					"code": close_code, "reason": close_reason,
+				})
 
 	async def _open_bridged_ws(
 		self,
@@ -1400,6 +1461,11 @@ class RelayClient:
 				"ESPHome dashboard not found. Install the ESPHome add-on, or set the "
 				"ESPHome dashboard URL in the Vome relay options."
 			)
+		# /edit was removed when ESPHome split the dashboard out; the path now
+		# serves the single-page app, so a read returned HTML and a write went
+		# nowhere. Keep the relay's stable contract and translate here.
+		if portion == "/edit":
+			return await self._esphome_config_via_ws(base, path, method, body)
 		url = base + path
 		session = self._get_session()
 		# A YAML write is raw text; everything else is a bodyless read.
@@ -1425,6 +1491,53 @@ class RelayClient:
 				f"ESPHome dashboard error: {err}. "
 				"Check the ESPHome add-on is running, then retry."
 			)
+
+	async def _esphome_config_via_ws(
+		self, base: str, path: str, method: str, body: Any
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""Read or write a device's YAML over the dashboard's /ws API.
+
+		Answers in the shape the old ``/edit`` REST endpoint did — raw YAML for a
+		read, empty body for a write — so the portal and MCP above keep working
+		unchanged against an endpoint ESPHome has since deleted.
+		"""
+		configuration = ""
+		if "?" in path:
+			query = path.split("?", 1)[1]
+			for part in query.split("&"):
+				key, _, value = part.partition("=")
+				if key == "configuration":
+					configuration = unquote(value)
+		if not ESPHOME_CONFIG_RE.match(configuration):
+			return 0, None, "Invalid ESPHome configuration filename."
+		try:
+			local = await self._get_session().ws_connect(
+				_to_ws_url(base, WS_PATH), heartbeat=30
+			)
+		except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+			self._esphome_base_cache = None
+			return 0, None, f"ESPHome dashboard error: {err}"
+		try:
+			session = EsphomeWsSession(local)
+			await session.handshake(RELAY_RPC_TIMEOUT)
+			if method == "GET":
+				yaml_text = await session.call(
+					"devices/get_config", {"configuration": configuration}, RELAY_RPC_TIMEOUT
+				)
+				return 200, yaml_text if isinstance(yaml_text, str) else "", None
+			await session.call(
+				"devices/update_config",
+				{"configuration": configuration, "content": body if isinstance(body, str) else ""},
+				RELAY_RPC_TIMEOUT,
+			)
+			return 200, "", None
+		except EsphomeWsError as err:
+			return 0, None, str(err)
+		except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+			return 0, None, f"ESPHome dashboard error: {err}"
+		finally:
+			with suppress(Exception):
+				await local.close()
 
 	async def _resolve_esphome_base(self) -> tuple[Optional[str], Optional[str]]:
 		"""Return ``(base_url, None)`` or ``(None, problem)`` for the dashboard.
