@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -63,9 +63,98 @@ async def async_setup_entry(
 		entity = VomeSyncSensor(coordinator, uid, name)
 		entities.append(entity)
 	
+	# The health score, whether or not this instance is linked to an account
+	# yet: it is the one entity that exists before anything is configured,
+	# because running the check is how somebody finds out what Vome is for.
+	entities.append(VomeHealthScoreSensor(hass, config_entry))
+
 	if entities:
 		async_add_entities(entities)
 		_LOGGER.info("Added %d VomeSync sensor entities", len(entities))
+
+
+class VomeHealthScoreSensor(SensorEntity):
+	"""This instance's Vome health score, with the findings on it.
+
+	Vome computes the score (the collectors and the write-up are its), but
+	the answer is about *this* system, so it belongs here — and for a
+	login-free run it is the copy that survives: Vome deletes its own two
+	hours later.  See health_score.py.
+
+	Unavailable rather than zero when there has been no check: a health
+	score of nothing is not a health score of 0.
+	"""
+
+	_attr_has_entity_name = True
+	_attr_should_poll = False
+	_attr_icon = "mdi:heart-pulse"
+	_attr_native_unit_of_measurement = "/100"
+
+	def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+		self.hass = hass
+		self._entry = entry
+		self._attr_unique_id = f"vomesync_health_score_{entry.entry_id}"
+		self._attr_name = "Vome health score"
+		self._attr_device_info = {
+			"identifiers": {(DOMAIN, f"vome_account_{entry.entry_id}")},
+			"name": "Vome",
+			"manufacturer": DEVICE_MANUFACTURER,
+		}
+
+	async def async_added_to_hass(self) -> None:
+		from homeassistant.helpers.dispatcher import async_dispatcher_connect
+		from .health_score import SIGNAL_HEALTH_UPDATED
+
+		@callback
+		def _updated(entry_id: str) -> None:
+			if entry_id == self._entry.entry_id:
+				self.async_write_ha_state()
+
+		self.async_on_remove(
+			async_dispatcher_connect(self.hass, SIGNAL_HEALTH_UPDATED, _updated)
+		)
+
+	@property
+	def _report(self) -> Optional[Dict[str, Any]]:
+		from .health_score import stored_report
+		return stored_report(self.hass, self._entry.entry_id)
+
+	@property
+	def available(self) -> bool:
+		return self._report is not None
+
+	@property
+	def native_value(self) -> Optional[int]:
+		report = self._report or {}
+		score = report.get("score")
+		return int(score) if isinstance(score, (int, float)) else None
+
+	@property
+	def extra_state_attributes(self) -> Dict[str, Any]:
+		"""The findings themselves, so the report is readable from here.
+
+		A dashboard card, an automation, or a person clicking the entity
+		all read the same thing — no round trip to a website, and nothing
+		lost when Vome deletes its copy of a login-free run.
+		"""
+		from . import health_score
+
+		report = self._report or {}
+		attributes: Dict[str, Any] = {
+			"summary": report.get("summary") or "",
+			"findings": report.get("findings") or [],
+			"categories": report.get("categories") or [],
+			"generated_at": report.get("generated_at"),
+		}
+		if health_score.is_guest(self._entry):
+			# Said plainly on the entity as well as in the notification:
+			# this number is on a clock unless somebody signs in.
+			attributes["saved_to_account"] = False
+			attributes["keep_it_url"] = health_score.claim_url(self._entry)
+			attributes["deleted_in_seconds"] = health_score.guest_seconds_left(self._entry)
+		else:
+			attributes["saved_to_account"] = health_score.is_linked(self._entry)
+		return attributes
 
 
 class VomeSyncSensor(CoordinatorEntity[VomeSyncCoordinator], SensorEntity):

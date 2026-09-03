@@ -29,6 +29,9 @@ EXPECTED_SERVICES = frozenset({
 	"link_start",
 	"link_poll",
 	"unlink",
+	# The health score: the one action that works before an account does.
+	"health_score_run",
+	"health_score_get",
 })
 
 

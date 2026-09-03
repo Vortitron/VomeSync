@@ -807,4 +807,52 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			DOMAIN, _name, _guard(_handler),
 			schema=_link_follow_schema, supports_response=SupportsResponse.ONLY,
 		)
+	# ── The health score ────────────────────────────────────────────────
+	# The one action that works before anything is set up: a Home
+	# Assistant with no Vome account gets a temporary link, a check and a
+	# result, and only then is anyone asked to sign in.  See health_score.py.
+
+	async def _health_score_run(call: ServiceCall) -> ServiceResponse:
+		from . import health_score
+
+		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
+		use_ai = bool(call.data.get("use_ai", True))
+		result = await health_score.async_run_check(hass, entry, use_ai=use_ai)
+		# Watch for the result in the background: the service returns now so
+		# the panel (or the button) is not held open for two minutes, and the
+		# sensor and a notification carry the answer when it lands.
+		hass.async_create_task(health_score.async_watch_for_report(hass, entry))
+		return result
+
+	async def _health_score_get(call: ServiceCall) -> ServiceResponse:
+		from . import health_score
+
+		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
+		if call.data.get("refresh", True):
+			await health_score.async_refresh_report(hass, entry)
+		report = health_score.stored_report(hass, entry.entry_id)
+		return {
+			"report": report,
+			"saved_to_account": not health_score.is_guest(entry),
+			"keep_it_url": health_score.claim_url(entry),
+			"deleted_in_seconds": health_score.guest_seconds_left(entry),
+		}
+
+	hass.services.async_register(
+		DOMAIN, "health_score_run", _guard(_health_score_run),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Optional("use_ai", default=True): cv.boolean,
+		}),
+		supports_response=SupportsResponse.ONLY,
+	)
+	hass.services.async_register(
+		DOMAIN, "health_score_get", _guard(_health_score_get),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Optional("refresh", default=True): cv.boolean,
+		}),
+		supports_response=SupportsResponse.ONLY,
+	)
+
 	_LOGGER.debug("Registered Vome remote-access services")
