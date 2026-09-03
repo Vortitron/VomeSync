@@ -70,12 +70,24 @@ _FOLLOW_JOB = "firmware/follow_job"
 # live, which is right for a browser that overwrites a line in place and wrong
 # for us: one framework download emits hundreds of near-identical lines and
 # crowds the real build output out of the line budget downstream.
-_PROGRESS_RE = re.compile(r"\[[=\s.\-#>]*\]\s*\d{1,3}\s*%")
+_PROGRESS_RE = re.compile(r"^(?P<label>.*?)\[[=\s.\-#>]*\]\s*\d{1,3}(?:\.\d+)?\s*%")
 
 
-def is_progress_line(line: str) -> bool:
-	"""True for a progress-bar redraw, which only the newest of a run matters."""
-	return bool(_PROGRESS_RE.search(line))
+def progress_label(line: str) -> Optional[str]:
+	"""The text before the bar, or None when the line is not a progress bar.
+
+	The label is what makes collapsing safe. A build's summary ends with two
+	lines that look exactly like progress bars::
+
+	    RAM:   [======    ]  63.7% (used 79324 bytes from 124580 bytes)
+	    Flash: [=======   ]  71.2% (used 1307351 bytes from 1835008 bytes)
+
+	Collapsing purely on "looks like a bar" would drop the RAM line and report
+	only Flash. Two lines are the same bar being redrawn only if they carry the
+	same label, so that is the test.
+	"""
+	match = _PROGRESS_RE.match(line)
+	return match.group("label") if match else None
 
 
 class EsphomeWsError(Exception):
@@ -177,12 +189,14 @@ class EsphomeWsSession:
 		drawn a hundred times.
 		"""
 		pending_progress: Optional[str] = None
+		pending_label: Optional[str] = None
 
 		async def flush_progress() -> None:
-			nonlocal pending_progress
+			nonlocal pending_progress, pending_label
 			if pending_progress is not None:
 				await emit({"event": "line", "data": f"{pending_progress}\n"})
 				pending_progress = None
+				pending_label = None
 
 		while True:
 			frame = await self._next_frame(timeout)
@@ -202,11 +216,15 @@ class EsphomeWsSession:
 				for line in lines:
 					if line is None:
 						continue
-					if is_progress_line(line):
-						# Hold it: if the next line is another redraw this one
-						# never needed sending, and if it isn't, the last state
-						# of the bar is the one worth keeping.
+					label = progress_label(line)
+					if label is not None:
+						# Hold it: if the next line redraws the *same* bar this
+						# one never needed sending, and if it does not, the last
+						# state of the bar is the one worth keeping.
+						if pending_progress is not None and label != pending_label:
+							await flush_progress()
 						pending_progress = line
+						pending_label = label
 						continue
 					await flush_progress()
 					await emit({"event": "line", "data": f"{line}\n"})
