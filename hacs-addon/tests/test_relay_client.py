@@ -299,18 +299,44 @@ class TestEsphome:
 		assert kwargs["data"] is None
 
 	@pytest.mark.asyncio
-	async def test_save_config_sends_yaml(self):
-		session, _ = _mock_session_with_response(status=200, text="")
-		client = _client(session, esphome_url="http://esp:6052")
+	async def test_save_config_writes_over_the_ws_api(self):
+		# ESPHome deleted /edit when it split the dashboard out; the path now
+		# serves the single-page app, so a write there went nowhere at all. The
+		# relay contract above is unchanged — the translation happens here.
+		dash = _FakeWsDashboard(responder=lambda c, mid, a: [{"message_id": mid, "result": None}])
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
 		yaml = "esphome:\n  name: x\n"
+
 		status, body, error = await client.execute(
 			"POST", "/edit?configuration=x.yaml", yaml, "esphome"
 		)
+
 		assert status == 200 and error is None
-		args, kwargs = session.request.call_args
-		assert args[1] == "http://esp:6052/edit?configuration=x.yaml"
-		assert kwargs["data"] == yaml
-		assert kwargs["headers"]["Content-Type"] == "application/yaml"
+		assert dash.sent[0]["command"] == "devices/update_config"
+		assert dash.sent[0]["args"] == {"configuration": "x.yaml", "content": yaml}
+
+	@pytest.mark.asyncio
+	async def test_get_config_reads_over_the_ws_api(self):
+		dash = _FakeWsDashboard(
+			responder=lambda c, mid, a: [{"message_id": mid, "result": "esphome:\n  name: x\n"}]
+		)
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+
+		status, body, error = await client.execute("GET", "/edit?configuration=x.yaml", None, "esphome")
+
+		assert status == 200 and error is None
+		assert body == "esphome:\n  name: x\n"
+		assert dash.sent[0]["command"] == "devices/get_config"
+
+	@pytest.mark.asyncio
+	async def test_config_over_ws_rejects_a_hostile_filename(self):
+		dash = _FakeWsDashboard()
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		status, _body, error = await client.execute(
+			"GET", "/edit?configuration=../../secrets.yaml", None, "esphome"
+		)
+		assert status == 0 and "Invalid ESPHome configuration filename" in error
+		assert dash.sent == []
 
 	# The official add-on's shape: host-networked, web port disabled, dashboard
 	# behind a dynamic ingress port (nginx admits only Supervisor + localhost).
@@ -657,6 +683,50 @@ class _FakeLocalWS:
 
 	async def close(self):
 		self.closed = True
+
+
+class _FakeWsDashboard:
+	"""Stand-in for esphome-device-builder's multiplexed ``/ws`` endpoint.
+
+	Opens with a server-info frame like the real one, then answers each command
+	through ``responder`` so a test can script the exact frame sequence it wants
+	to see translated.
+	"""
+
+	def __init__(self, *, requires_auth=False, responder=None):
+		self.sent: list[dict] = []
+		self.closed = False
+		self._queue: list[dict] = [{
+			"server_version": "1.13.1",
+			"esphome_version": "2026.8.2",
+			"port": 6052,
+			"ha_addon": True,
+			"requires_auth": requires_auth,
+		}]
+		self._responder = responder or (lambda command, message_id, args: [])
+
+	async def send_json(self, obj):
+		self.sent.append(obj)
+		self._queue.extend(
+			self._responder(obj.get("command"), obj.get("message_id"), obj.get("args") or {})
+		)
+
+	async def receive(self):
+		if not self._queue:
+			return _FakeMsg(aiohttp.WSMsgType.CLOSED, None)
+		return _FakeMsg(aiohttp.WSMsgType.TEXT, json.dumps(self._queue.pop(0)))
+
+	async def close(self):
+		self.closed = True
+
+
+def _ws_frames(ws):
+	"""The line/exit frames the relay forwarded upward, decoded."""
+	return [
+		json.loads(p["text"])
+		for p in _sent_payloads(ws)
+		if p.get("type") == "ws_data" and "text" in p
+	]
 
 
 def _session_for_ws(fake_local):
@@ -1404,51 +1474,126 @@ class TestEsphomeStream:
 		assert "ESPHome" in closed["reason"]
 
 	@pytest.mark.asyncio
-	async def test_spawns_the_command_and_pumps_output(self):
-		local = _FakeLocalWS([
-			_FakeMsg(aiohttp.WSMsgType.TEXT, '{"event":"line","data":"Linking\n"}'),
-			_FakeMsg(aiohttp.WSMsgType.TEXT, '{"event":"exit","code":0}'),
+	async def test_streams_a_validate_and_translates_frames(self):
+		# The dashboard speaks output/result on one multiplexed socket; the relay
+		# above still sees the line/exit stream it always did.
+		dash = _FakeWsDashboard(responder=lambda c, mid, a: [
+			{"message_id": mid, "event": "output", "data": "INFO Reading configuration"},
+			{"message_id": mid, "event": "output", "data": "INFO Configuration is valid!"},
+			{"message_id": mid, "event": "result", "data": {"status": "completed", "exit_code": 0}},
 		])
-		session = _session_for_ws(local)
-		client = _client(session, esphome_url="http://esp:6052")
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		ws = AsyncMock()
+
+		await client._handle_esphome_ws_open(
+			ws, "s1", {"command": "validate", "configuration": "lr.yaml"}
+		)
+		await client._ws_pumps["s1"]
+
+		assert dash.sent[0]["command"] == "devices/validate"
+		assert dash.sent[0]["args"] == {"configuration": "lr.yaml"}
+		assert _ws_frames(ws) == [
+			{"event": "line", "data": "INFO Reading configuration\n"},
+			{"event": "line", "data": "INFO Configuration is valid!\n"},
+			{"event": "exit", "code": 0},
+		]
+		payloads = _sent_payloads(ws)
+		assert payloads[0] == {"type": "ws_open_ack", "socketId": "s1"}
+		assert payloads[-1]["type"] == "ws_close"
+		assert "s1" not in client._ws_local and "s1" not in client._ws_pumps
+
+	@pytest.mark.asyncio
+	async def test_compile_queues_a_job_then_follows_it(self):
+		# Builds are jobs now. Going through the queue (rather than the
+		# deprecated per-command socket) is also what makes an agent-triggered
+		# build appear in the dashboard's own Firmware tasks panel.
+		def responder(command, mid, args):
+			if command == "firmware/compile":
+				return [{"message_id": mid, "result": {"job_id": "job-7", "status": "queued"}}]
+			return [
+				{"message_id": mid, "event": "output", "data": "Compiling app..."},
+				{"message_id": mid, "event": "result", "data": {"status": "completed", "exit_code": 0}},
+			]
+
+		dash = _FakeWsDashboard(responder=responder)
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
 		ws = AsyncMock()
 
 		await client._handle_esphome_ws_open(
 			ws, "s1", {"command": "compile", "configuration": "lr.yaml"}
 		)
-
-		assert session.ws_connect.call_args[0][0] == "ws://esp:6052/compile"
-		# The component builds the spawn frame itself; nothing from the caller is
-		# forwarded verbatim to a dashboard that has no auth of its own.
-		assert local.sent_json == [{"type": "spawn", "configuration": "lr.yaml"}]
 		await client._ws_pumps["s1"]
-		payloads = _sent_payloads(ws)
-		assert payloads[0] == {"type": "ws_open_ack", "socketId": "s1"}
-		lines = [p["text"] for p in payloads if p.get("type") == "ws_data"]
-		assert lines == [
-			'{"event":"line","data":"Linking\n"}',
-			'{"event":"exit","code":0}',
-		]
-		assert payloads[-1]["type"] == "ws_close"
+
+		assert [f["command"] for f in dash.sent] == ["firmware/compile", "firmware/follow_job"]
+		assert dash.sent[1]["args"] == {"job_id": "job-7"}
+		assert _ws_frames(ws)[-1] == {"event": "exit", "code": 0}
 
 	@pytest.mark.asyncio
-	async def test_forwards_a_string_port_but_never_a_non_string(self):
-		local = _FakeLocalWS()
-		session = _session_for_ws(local)
-		client = _client(session, esphome_url="http://esp:6052")
-		await client._handle_esphome_ws_open(
-			AsyncMock(), "s1", {"command": "upload", "configuration": "lr.yaml", "port": "OTA"}
-		)
-		assert local.sent_json[0]["port"] == "OTA"
+	async def test_upload_sends_the_port_and_defaults_to_ota(self):
+		def responder(command, mid, args):
+			if command == "firmware/upload":
+				return [{"message_id": mid, "result": {"job_id": "job-8"}}]
+			return [{"message_id": mid, "event": "result", "data": {"exit_code": 0}}]
 
-		hostile = _FakeLocalWS()
-		client2 = _client(_session_for_ws(hostile), esphome_url="http://esp:6052")
-		await client2._handle_esphome_ws_open(
+		for given, expected in ((None, "OTA"), ("192.168.1.34", "192.168.1.34")):
+			dash = _FakeWsDashboard(responder=responder)
+			client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+			data = {"command": "upload", "configuration": "lr.yaml"}
+			if given is not None:
+				data["port"] = given
+			await client._handle_esphome_ws_open(AsyncMock(), "s1", data)
+			await client._ws_pumps["s1"]
+			assert dash.sent[0]["args"] == {"configuration": "lr.yaml", "port": expected}
+
+	@pytest.mark.asyncio
+	async def test_a_non_string_port_is_never_forwarded(self):
+		def responder(command, mid, args):
+			if command == "firmware/upload":
+				return [{"message_id": mid, "result": {"job_id": "job-9"}}]
+			return [{"message_id": mid, "event": "result", "data": {"exit_code": 0}}]
+
+		dash = _FakeWsDashboard(responder=responder)
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		await client._handle_esphome_ws_open(
 			AsyncMock(),
-			"s2",
+			"s1",
 			{"command": "upload", "configuration": "lr.yaml", "port": {"$ne": None}},
 		)
-		assert "port" not in hostile.sent_json[0]
+		await client._ws_pumps["s1"]
+		assert dash.sent[0]["args"]["port"] == "OTA"
+
+	@pytest.mark.asyncio
+	async def test_surfaces_a_refused_command_as_output_then_failure(self):
+		dash = _FakeWsDashboard(responder=lambda c, mid, a: [
+			{"message_id": mid, "error_code": "not_found", "details": "no such device"},
+		])
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		ws = AsyncMock()
+
+		await client._handle_esphome_ws_open(
+			ws, "s1", {"command": "validate", "configuration": "lr.yaml"}
+		)
+		await client._ws_pumps["s1"]
+
+		frames = _ws_frames(ws)
+		assert "no such device" in frames[0]["data"]
+		assert frames[-1] == {"event": "exit", "code": 1}
+
+	@pytest.mark.asyncio
+	async def test_refuses_a_dashboard_that_demands_authentication(self):
+		# Vome holds no dashboard credential, so say that plainly rather than
+		# hanging or reporting a generic transport failure.
+		dash = _FakeWsDashboard(requires_auth=True)
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		ws = AsyncMock()
+
+		await client._handle_esphome_ws_open(
+			ws, "s1", {"command": "logs", "configuration": "lr.yaml"}
+		)
+		await client._ws_pumps["s1"]
+
+		closed = _sent_payloads(ws)[-1]
+		assert closed["type"] == "ws_close" and "authentication" in closed["reason"]
 
 	@pytest.mark.asyncio
 	async def test_routed_from_ws_open_even_when_ui_forwarding_is_off(self):

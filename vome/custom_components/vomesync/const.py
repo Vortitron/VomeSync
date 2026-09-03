@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.22"
+INTEGRATION_VERSION = "0.9.23"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -278,17 +278,27 @@ ESPHOME_DEFAULT_PORT = 6052
 ESPHOME_WEB_PORT_KEY = "6052/tcp"  # the add-on's optional direct web port mapping
 # Exact path portions (query excluded) of the brokered ESPHome REST subset —
 # matched exactly, never as prefixes, so /devices-x or /edit/../delete are refused.
+# ``/edit`` is kept as the *relay's* contract even though ESPHome deleted the
+# endpoint: relay_client translates it to the dashboard's /ws config commands,
+# so the portal and MCP above keep working unchanged (see esphome_ws.py).
 ESPHOME_ALLOWED_PATHS = ("/devices", "/version", "/edit")
 ESPHOME_ALLOWED_METHODS = ("GET", "POST")
-# The dashboard's WebSocket command channels.  Each is spawned by connecting to
-# ``<base>/<command>`` and sending one ``{"type": "spawn", ...}`` frame; output
-# arrives as ``{"event": "line"}`` frames and ends with ``{"event": "exit"}``.
+# The ESPHome commands Vome exposes.  Each maps to a command on the dashboard's
+# multiplexed ``/ws`` API (see esphome_ws.py), which replaced the old
+# per-command WebSockets; output is translated back into the
+# ``{"event": "line"}`` / ``{"event": "exit"}`` frames the relay carries.
 #
-# The component builds that spawn frame itself from the validated command and
+# The component composes each request itself from the validated command and
 # configuration rather than forwarding whatever the caller sent, so a compromised
-# or buggy caller cannot inject arbitrary frames into a dashboard that has no
-# auth of its own.  Matched exactly — never as a prefix.
-ESPHOME_STREAM_COMMANDS = ("validate", "compile", "upload", "run", "logs", "clean")
+# or buggy caller cannot drive arbitrary commands on a dashboard that has no auth
+# of its own.  Matched exactly — never as a prefix.
+# What the Device Builder's /ws API actually offers us (see esphome_ws.py).
+# "run" is gone: it was compile+upload+logs on the old dashboard and has no
+# equivalent command — callers use upload, then logs.
+ESPHOME_STREAM_COMMANDS = ("validate", "compile", "upload", "logs", "clean")
+# A clean ESP-IDF build downloads a toolchain before it compiles anything, so
+# the ceiling here is "a first build on a cold cache", not "a normal build".
+ESPHOME_STREAM_TIMEOUT = 1800
 # ESPHome configuration filenames, e.g. ``living-room.yaml``.  Strict, so the
 # value can never escape the frame the component builds around it.
 ESPHOME_CONFIG_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
