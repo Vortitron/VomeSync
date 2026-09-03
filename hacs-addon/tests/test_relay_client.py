@@ -390,6 +390,25 @@ class TestEsphome:
 		assert json.loads(body)["required"] is True
 
 	@pytest.mark.asyncio
+	async def test_refuses_the_shared_secrets_file(self):
+		# secrets.yaml holds wifi PSK, API encryption keys and OTA passwords for
+		# every device. A device's YAML refers to secrets by name, so nothing
+		# legitimate needs their values — and reading needs only ha:read.
+		dash = _FakeWsDashboard()
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+
+		for method, path, body in (
+			("GET", "/edit?configuration=secrets.yaml", None),
+			("POST", "/edit?configuration=secrets.yaml", "wifi_password: hunter2\n"),
+			("GET", "/migrate?configuration=SECRETS.YAML", None),
+		):
+			status, _body, error = await client.execute(method, path, body, "esphome")
+			assert status == 0, path
+			assert "secrets.yaml" in error, path
+		# Never opened a socket to the dashboard, let alone asked it for the file.
+		assert dash.sent == []
+
+	@pytest.mark.asyncio
 	async def test_config_over_ws_rejects_a_hostile_filename(self):
 		dash = _FakeWsDashboard()
 		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")

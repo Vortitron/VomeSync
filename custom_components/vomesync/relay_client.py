@@ -61,14 +61,18 @@ from .const import (
 	ESPHOME_ALLOWED_PATHS,
 	ESPHOME_CONFIG_RE,
 	ESPHOME_DEFAULT_PORT,
+	ESPHOME_SECRETS_FILENAME,
 	ESPHOME_STREAM_COMMANDS,
 	ESPHOME_STREAM_TIMEOUT,
 	ESPHOME_INGRESS_HOST,
 	ESPHOME_WEB_PORT_KEY,
 	LAN_TCP_TOKEN_DEFAULT_TTL,
 	RELAY_ALLOWED_METHODS,
+	AGENT_HEALTH_CHECK_PATH,
+	AGENT_HEALTH_REPORT_PATH,
 	RELAY_DEVICE_CODE_PATH,
 	RELAY_DEVICE_TOKEN_PATH,
+	RELAY_GUEST_PATH,
 	RELAY_FORWARD_HTTP_TIMEOUT,
 	RELAY_FORWARD_MAX_BODY,
 	RELAY_FORWARD_BODY_TIMEOUT,
@@ -1511,6 +1515,12 @@ class RelayClient:
 					configuration = unquote(value)
 		if not ESPHOME_CONFIG_RE.match(configuration):
 			return 0, None, "Invalid ESPHome configuration filename."
+		if configuration.lower() == ESPHOME_SECRETS_FILENAME:
+			return 0, None, (
+				"Refusing to read or write secrets.yaml. It holds the credentials for "
+				"every device (wifi, API encryption, OTA), and a device's YAML refers to "
+				"them by name rather than by value."
+			)
 		try:
 			local = await self._get_session().ws_connect(
 				_to_ws_url(base, WS_PATH), heartbeat=30
@@ -1676,6 +1686,78 @@ async def async_poll_device_token(
 	"""Poll for approval; returns ``{'status': ...}`` (and creds once approved)."""
 	url = (portal_url or DEFAULT_PORTAL_URL).rstrip("/") + RELAY_DEVICE_TOKEN_PATH
 	return await _post_portal_json(session, url, {"device_code": device_code})
+
+
+# ── The health score, before there is an account ────────────────────────────
+
+async def async_request_guest_run(
+	session: aiohttp.ClientSession,
+	portal_url: str,
+	name: Optional[str] = None,
+	use_ai: bool = True,
+) -> dict:
+	"""Open a login-free health-score run for this Home Assistant.
+
+	One call does what the device-code dance needs three screens for: Vome
+	opens a throwaway account, provisions the relay link, queues the check,
+	and answers with ``{server_id, relay_secret, relay_ws_url, report_id,
+	claim_url, expires_at}``.  Nothing is typed and nobody signs up; the
+	whole run deletes itself in two hours unless its owner opens
+	``claim_url`` and does.
+	"""
+	url = (portal_url or DEFAULT_PORTAL_URL).rstrip("/") + RELAY_GUEST_PATH
+	return await _post_portal_json(session, url, {"name": name or "", "use_ai": use_ai})
+
+
+async def _agent_request(
+	session: aiohttp.ClientSession,
+	method: str,
+	portal_url: str,
+	path: str,
+	secret: str,
+	payload: Optional[dict] = None,
+) -> dict:
+	"""Call an agent endpoint with the relay secret we already hold.
+
+	Returns the decoded body with ``_status`` added, because these two
+	endpoints answer meaningfully with 202 (a check is running) and 404
+	(there has never been one) — treating either as a failure would turn
+	"not yet" into "broken".
+	"""
+	url = (portal_url or DEFAULT_PORTAL_URL).rstrip("/") + path
+	headers = {"Authorization": f"Bearer {secret}"}
+	async with session.request(
+		method, url, headers=headers, json=payload, timeout=_HTTP_TIMEOUT,
+	) as resp:
+		if resp.status >= 500 or resp.status in (401, 403):
+			body = (await resp.text())[:300]
+			raise RuntimeError(f"Vome returned HTTP {resp.status} for {url}: {body}")
+		try:
+			data = await resp.json()
+		except Exception:  # noqa: BLE001 - a proxy error page, say
+			data = {}
+		data = dict(data or {})
+		data["_status"] = resp.status
+		return data
+
+
+async def async_fetch_health_report(
+	session: aiohttp.ClientSession, portal_url: str, secret: str
+) -> dict:
+	"""The latest finished health report for this Home Assistant."""
+	return await _agent_request(
+		session, "GET", portal_url, AGENT_HEALTH_REPORT_PATH, secret,
+	)
+
+
+async def async_start_health_check(
+	session: aiohttp.ClientSession, portal_url: str, secret: str, use_ai: bool = True
+) -> dict:
+	"""Ask for a fresh check on a Home Assistant that is already linked."""
+	return await _agent_request(
+		session, "POST", portal_url, AGENT_HEALTH_CHECK_PATH, secret,
+		{"use_ai": use_ai},
+	)
 
 
 # ── Entry lifecycle integration ─────────────────────────────────────────────
