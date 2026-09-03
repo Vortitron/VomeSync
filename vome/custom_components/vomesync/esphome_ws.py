@@ -252,6 +252,32 @@ class EsphomeWsSession:
 				await emit({"event": "exit", "code": 0})
 				return
 
+	async def pending_migrations(self, configuration: str, timeout: float) -> dict:
+		"""Which rename rules ``configuration``'s YAML still needs.
+
+		ESPHome surfaces these as a banner in its own UI; an agent never sees it
+		and goes on writing deprecated spellings. The dashboard reports the
+		rules, not replacement text, so this reports them too — knowing that
+		``homeassistant.service`` became ``homeassistant.action`` is what an
+		agent needs to fix the YAML it already has read/write access to.
+		"""
+		yaml_text = await self.call(
+			"devices/get_config", {"configuration": configuration}, timeout
+		)
+		if not isinstance(yaml_text, str):
+			yaml_text = ""
+		result = await self.call("editor/migrate_config", {"content": yaml_text}, timeout)
+		changes = (result or {}).get("changes") or [] if isinstance(result, dict) else []
+		return {
+			"configuration": configuration,
+			"migrations_pending": bool(changes),
+			# `required` means the installed ESPHome already rejects the old
+			# spelling — the difference between "tidy this up" and "this will
+			# stop compiling".
+			"required": any(bool(c.get("required")) for c in changes if isinstance(c, dict)),
+			"changes": changes,
+		}
+
 	async def run_build_command(
 		self,
 		command: str,

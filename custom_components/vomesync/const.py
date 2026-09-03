@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.26"
+INTEGRATION_VERSION = "0.9.27"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -281,7 +281,11 @@ ESPHOME_WEB_PORT_KEY = "6052/tcp"  # the add-on's optional direct web port mappi
 # ``/edit`` is kept as the *relay's* contract even though ESPHome deleted the
 # endpoint: relay_client translates it to the dashboard's /ws config commands,
 # so the portal and MCP above keep working unchanged (see esphome_ws.py).
-ESPHOME_ALLOWED_PATHS = ("/devices", "/version", "/edit")
+# ``/migrate`` is ours, not the dashboard's: relay_client answers it by asking
+# the dashboard which rename rules a device's YAML still needs. ESPHome shows
+# these as a "Config migration available" banner in its own UI, which an agent
+# never sees — so it silently keeps editing deprecated spellings.
+ESPHOME_ALLOWED_PATHS = ("/devices", "/version", "/edit", "/migrate")
 ESPHOME_ALLOWED_METHODS = ("GET", "POST")
 # The ESPHome commands Vome exposes.  Each maps to a command on the dashboard's
 # multiplexed ``/ws`` API (see esphome_ws.py), which replaced the old
