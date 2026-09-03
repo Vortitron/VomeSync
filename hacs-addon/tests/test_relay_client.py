@@ -1563,6 +1563,24 @@ class TestEsphomeStream:
 		assert dash.sent[0]["args"]["port"] == "OTA"
 
 	@pytest.mark.asyncio
+	async def test_reads_the_exit_status_of_both_terminal_shapes(self):
+		# A streamed subprocess reports `code`; a firmware job reports
+		# `exit_code`. Reading only one left the other's exit as None, which
+		# reads as failure even when the command plainly succeeded.
+		for payload in ({"success": True, "code": 0}, {"status": "completed", "exit_code": 0}):
+			dash = _FakeWsDashboard(responder=lambda c, mid, a, p=payload: [
+				{"message_id": mid, "event": "output", "data": "INFO Configuration is valid!"},
+				{"message_id": mid, "event": "result", "data": p},
+			])
+			client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+			ws = AsyncMock()
+			await client._handle_esphome_ws_open(
+				ws, "s1", {"command": "validate", "configuration": "lr.yaml"}
+			)
+			await client._ws_pumps["s1"]
+			assert _ws_frames(ws)[-1] == {"event": "exit", "code": 0}, payload
+
+	@pytest.mark.asyncio
 	async def test_surfaces_a_refused_command_as_output_then_failure(self):
 		dash = _FakeWsDashboard(responder=lambda c, mid, a: [
 			{"message_id": mid, "error_code": "not_found", "details": "no such device"},

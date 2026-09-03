@@ -25,7 +25,8 @@ and replies arrive tagged with that ``message_id``:
 * ``{"message_id", "result"}``            — a completed non-streaming command
 * ``{"message_id", "event": "output", "data"}``   — one line of output
 * ``{"message_id", "event": "snapshot", "data"}`` — buffered lines replayed
-* ``{"message_id", "event": "result", "data"}``   — terminal, carries exit_code
+* ``{"message_id", "event": "result", "data"}``   — terminal; the exit status is
+  ``exit_code`` on a firmware job and ``code`` on a streamed subprocess
 * ``{"message_id", "error_code", "details"}``     — refused
 
 Builds are *jobs*: ``firmware/compile`` and ``firmware/upload`` queue one and
@@ -176,7 +177,15 @@ class EsphomeWsSession:
 					await emit({"event": "line", "data": f"{line}\n"})
 			elif event == "result":
 				payload = frame.get("data") or {}
-				code = payload.get("exit_code") if isinstance(payload, dict) else None
+				# The two terminal shapes differ by one key: a firmware job
+				# reports ``exit_code``, a streamed subprocess ``code``. Reading
+				# only one leaves the other's exit as None, which reads as
+				# failure even when the command plainly succeeded.
+				code = None
+				if isinstance(payload, dict):
+					code = payload.get("exit_code")
+					if code is None:
+						code = payload.get("code")
 				if code is None and isinstance(payload, dict) and payload.get("error"):
 					# A job that failed without an exit code still failed.
 					await emit({"event": "line", "data": f"{payload['error']}\n"})
