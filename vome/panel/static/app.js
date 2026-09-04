@@ -11,6 +11,7 @@
 		forward: "Home Assistant UI",
 		lan: "LAN tunnels",
 		link: "Vome account",
+		health: "Health score",
 		switches: "Switches",
 		about: "About",
 	};
@@ -244,6 +245,7 @@
 			btn.classList.toggle("active", btn.dataset.view === name);
 		});
 		if (name === "switches" && switchesData === null) loadSwitches();
+		if (name === "health" && healthData === null) loadHealth(true);
 		render();
 	}
 
@@ -348,12 +350,14 @@
 				<h2>Quick actions</h2>
 				<div class="row">
 					${hideConnect ? "" : `<button type="button" class="primary" id="qa-connect">Connect to Vome</button>`}
+					<button type="button" id="qa-health">Check my health score</button>
 					<button type="button" id="qa-rdp">Set up Remote Desktop</button>
 					<button type="button" id="qa-lan">LAN tunnels</button>
 					<button type="button" id="qa-forward">Home Assistant UI</button>
 				</div>
 				<p class="muted" style="margin-top:0.8rem">After a friendly domain is active on vome.io: Home Assistant opens at the domain root (needs UI forwarding on), LAN web devices at <code>/t/&lt;slug&gt;/</code>, and Remote Desktop through a tunnel token.</p>
 			</div>`;
+		document.getElementById("qa-health").onclick = () => setView("health");
 		document.getElementById("qa-lan").onclick = () => setView("lan");
 		document.getElementById("qa-forward").onclick = () => setView("forward");
 		document.getElementById("qa-rdp").onclick = () => {
@@ -838,7 +842,7 @@
 			linkFlow = {
 				userCode: res.user_code || "",
 				uri: uri,
-				interval: Math.max(3, Number(res.interval) or 5),
+				interval: Math.max(3, Number(res.interval) || 5),
 				message: "",
 			};
 			render();
@@ -1154,12 +1158,137 @@
 		};
 	}
 
+	// ── Health score ────────────────────────────────────────────────────
+	// The only thing in this panel that works before the home is linked to
+	// anything: it links itself temporarily, runs the check, and hands back
+	// a URL to see the result and decide whether to keep it.  That deal has
+	// a two-hour clock on it, so every state that shows a score also shows
+	// the clock — see custom_components/vomesync/health_score.py.
+
+	let healthData = null;
+	let healthBusy = false;
+
+	async function loadHealth(quiet) {
+		try {
+			healthData = await api("/api/health_score");
+		} catch (err) {
+			if (!quiet) showBanner(err.message || "Could not read the health score", true);
+			healthData = healthData || null;
+		}
+		if (current === "health") render();
+	}
+
+	function healthToneClass(score) {
+		if (score === null || score === undefined) return "";
+		if (score >= 80) return "ok";
+		if (score >= 55) return "warn";
+		return "bad";
+	}
+
+	function healthClockCard() {
+		if (!healthData || healthData.saved_to_account !== false) return "";
+		const url = healthData.keep_it_url || "";
+		const mins = Math.max(0, Math.round((healthData.deleted_in_seconds || 0) / 60));
+		return `
+		<div class="card warn-card">
+			<h2>This check is not saved</h2>
+			<p class="muted">Vome deletes it — and the temporary link to this Home Assistant — in about ${mins} minute${mins === 1 ? "" : "s"} unless you sign in and keep it. The report stays here either way.</p>
+			${url ? `<div class="row"><a class="btn primary" href="${escapeHtml(url)}" target="_blank" rel="noopener">Open it and sign in</a></div>` : ""}
+		</div>`;
+	}
+
+	function healthFindingsCard() {
+		const report = (healthData && healthData.report) || null;
+		if (!report) return "";
+		const findings = report.findings || [];
+		const rows = findings.map((f) => `
+			<li>
+				<strong>${escapeHtml(f.title || "")}</strong>
+				<span class="pill ${escapeHtml(f.severity || "info")}">${escapeHtml(f.severity || "info")}</span>
+				<div class="muted">${escapeHtml(f.evidence || "")}</div>
+				${f.recommendation ? `<div class="muted"><em>${escapeHtml(f.recommendation)}</em></div>` : ""}
+			</li>`).join("");
+		const score = report.score;
+		return `
+		<div class="card">
+			<h2>Score</h2>
+			<p class="health-score ${healthToneClass(score)}">${score === null || score === undefined ? "—" : escapeHtml(String(score))}<span class="muted"> / 100</span></p>
+			${report.summary ? `<p class="muted">${escapeHtml(report.summary)}</p>` : ""}
+			${rows ? `<ul class="health-findings">${rows}</ul>` : `<p class="muted">Nothing to report — that is the good outcome.</p>`}
+		</div>`;
+	}
+
+	function renderHealth() {
+		const report = (healthData && healthData.report) || null;
+		const linked = vomeHomeLinked();
+		viewEl.innerHTML = `
+			${healthClockCard()}
+			<div class="card">
+				<h2>Check this Home Assistant</h2>
+				<p class="muted">Vome reads this instance and writes up what it finds — noisy sensors, a database that is growing, entities that stopped reporting, backups that stopped happening — and scores it out of 100.${linked ? "" : " You do not need a Vome account: this links itself temporarily, and nothing is kept unless you sign in afterwards."}</p>
+				<p class="muted">Only the findings are sent to be written up — never your states, history, configuration or backups.</p>
+				<div class="row">
+					<button type="button" class="primary" id="health-run"${healthBusy ? " disabled" : ""}>${healthBusy ? "Checking…" : (report ? "Check again" : "Check my health score")}</button>
+					<label class="inline"><input type="checkbox" id="health-ai" checked> Let the AI write it up</label>
+				</div>
+			</div>
+			${healthFindingsCard()}
+			${report ? "" : `<div class="card info-card"><h2>No check yet</h2><p class="muted">The first one takes a minute or two. The result appears here, on <code>sensor.vome_health_score</code>, and as a notification.</p></div>`}`;
+
+		const run = document.getElementById("health-run");
+		if (run) run.onclick = async () => {
+			healthBusy = true;
+			render();
+			showBanner("Running the check — this takes a minute or two.", "info");
+			try {
+				const useAi = document.getElementById("health-ai");
+				const started = await api("/api/health_score/run", {
+					method: "POST",
+					body: JSON.stringify(withEntry({ use_ai: !useAi || useAi.checked })),
+				});
+				if (started && started.claim_url) {
+					healthData = Object.assign({}, healthData, {
+						saved_to_account: false,
+						keep_it_url: started.claim_url,
+						deleted_in_seconds: Math.max(
+							0, (started.expires_at || 0) - Math.floor(Date.now() / 1000),
+						),
+					});
+				}
+				// The check runs at Vome's end; poll for the write-up rather
+				// than holding this request open for two minutes.
+				watchHealth();
+			} catch (err) {
+				showBanner(err.message || "Could not start the check", true);
+			} finally {
+				healthBusy = false;
+				render();
+			}
+		};
+	}
+
+	function watchHealth() {
+		let attempts = 0;
+		const tick = async () => {
+			attempts += 1;
+			await loadHealth(true);
+			if (healthData && healthData.report) {
+				showBanner("");
+				return;
+			}
+			if (attempts < 40) window.setTimeout(tick, 15000);
+			else showBanner("The check is taking longer than usual. It will appear here when it lands.", "info");
+		};
+		window.setTimeout(tick, 15000);
+	}
+
 	function render() {
 		if (current === "overview") renderOverview();
 		else if (current === "forward") renderForward();
 		else if (current === "lan") renderLan();
 		else if (current === "webhooks") renderWebhooks();
 		else if (current === "link") renderLink();
+		else if (current === "health") renderHealth();
 		else if (current === "switches") renderSwitches();
 		else renderAbout();
 		if (lastDiag && current === "about") {

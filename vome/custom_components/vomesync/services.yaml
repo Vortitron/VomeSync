@@ -423,3 +423,47 @@ unlink:
       required: false
       selector:
         text:
+
+health_score_run:
+  name: Check my health score
+  description: >-
+    Run Vome's health check on this Home Assistant. No account needed —
+    if this instance is not linked to Vome yet, it opens a temporary link,
+    runs the check and gives you a link to see the score and decide
+    whether to keep it. Vome deletes an unclaimed run after two hours;
+    the report stays here either way.
+  fields:
+    entry_id:
+      name: Vome integration
+      description: Which Vome config entry to use (only needed if you have more than one).
+      required: false
+      selector:
+        text:
+    use_ai:
+      name: Let the AI write it up
+      description: >-
+        Only the findings are sent to be turned into prose — never your
+        states, history, configuration or backups. Turn it off for a
+        plainer summary written locally.
+      required: false
+      default: true
+      selector:
+        boolean:
+
+health_score_get:
+  name: Get my health score
+  description: The findings from the last check, as data.
+  fields:
+    entry_id:
+      name: Vome integration
+      description: Which Vome config entry to read (only needed if you have more than one).
+      required: false
+      selector:
+        text:
+    refresh:
+      name: Check Vome first
+      description: Ask Vome for a newer report before answering.
+      required: false
+      default: true
+      selector:
+        boolean:

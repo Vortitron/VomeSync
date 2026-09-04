@@ -98,3 +98,45 @@ def test_multiple_entries_error_is_plain_language():
 	assert "More than one Vome integration" in PANEL_JS
 	assert "pass entry_id" in PANEL_JS
 	assert "extraEntriesCard" in PANEL_JS
+
+
+# ── The health score in the panel ───────────────────────────────────────────
+
+PANEL_HTML = (ROOT / "vome" / "panel" / "static" / "index.html").read_text(encoding="utf-8")
+PANEL_SERVER = (ROOT / "vome" / "panel" / "server.py").read_text(encoding="utf-8")
+
+
+def test_the_panel_can_run_a_check_and_read_the_result():
+	"""Both halves, or the button is decoration: a POST that starts one
+	and a GET that reads the last one."""
+	assert '"/api/health_score/run": ("health_score_run", body)' in PANEL_SERVER
+	assert 'call_service("health_score_get"' in PANEL_SERVER
+
+
+def test_the_health_view_exists_and_is_reachable():
+	assert 'health: "Health score"' in PANEL_JS
+	assert 'current === "health"' in PANEL_JS
+	# Reachable without hunting: a quick action on the overview.
+	assert 'id="qa-health"' in PANEL_JS
+
+
+def test_an_unsaved_run_shows_its_clock_and_the_way_to_keep_it():
+	"""A guest check is deleted in two hours. A panel that showed the
+	score without saying so would be the dishonest half of the feature."""
+	assert "saved_to_account !== false" in PANEL_JS
+	assert "keep_it_url" in PANEL_JS
+	assert "deleted_in_seconds" in PANEL_JS
+	assert "unless you sign in" in PANEL_JS
+
+
+def test_it_says_what_leaves_the_house():
+	"""The AI writes the summary; the page has to say what is sent."""
+	assert "Only the findings are sent" in PANEL_JS
+	assert "never your states, history, configuration or backups" in PANEL_JS
+
+
+def test_the_check_is_polled_rather_than_waited_on():
+	"""It takes a minute or two — holding the request open would look
+	like a hung panel."""
+	assert "function watchHealth(" in PANEL_JS
+	assert "loadHealth(true)" in PANEL_JS

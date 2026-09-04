@@ -390,6 +390,25 @@ class TestEsphome:
 		assert json.loads(body)["required"] is True
 
 	@pytest.mark.asyncio
+	async def test_refuses_the_shared_secrets_file(self):
+		# secrets.yaml holds wifi PSK, API encryption keys and OTA passwords for
+		# every device. A device's YAML refers to secrets by name, so nothing
+		# legitimate needs their values — and reading needs only ha:read.
+		dash = _FakeWsDashboard()
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+
+		for method, path, body in (
+			("GET", "/edit?configuration=secrets.yaml", None),
+			("POST", "/edit?configuration=secrets.yaml", "wifi_password: hunter2\n"),
+			("GET", "/migrate?configuration=SECRETS.YAML", None),
+		):
+			status, _body, error = await client.execute(method, path, body, "esphome")
+			assert status == 0, path
+			assert "secrets.yaml" in error, path
+		# Never opened a socket to the dashboard, let alone asked it for the file.
+		assert dash.sent == []
+
+	@pytest.mark.asyncio
 	async def test_config_over_ws_rejects_a_hostile_filename(self):
 		dash = _FakeWsDashboard()
 		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
@@ -1762,3 +1781,112 @@ class TestEsphomeStream:
 			 "configuration": "lr.yaml"},
 		)
 		client._handle_esphome_ws_open.assert_called_once()
+
+
+class TestConfigFiles:
+	"""The `files` target — a hosted home has no SSH, so this is the only way
+	to reach configuration.yaml from an agent."""
+
+	def _client_with_config(self, tmp_path):
+		hass = SimpleNamespace(config=SimpleNamespace(path=lambda *a: str(tmp_path)))
+		client = RelayClient(hass, server_id="rly-1", secret="sek", session=AsyncMock())
+
+		async def _executor(fn, *args):
+			return fn(*args)
+
+		hass.async_add_executor_job = _executor
+		return client
+
+	@pytest.mark.asyncio
+	async def test_reads_and_writes_a_config_file(self, tmp_path):
+		(tmp_path / "configuration.yaml").write_text("homeassistant:\n", encoding="utf-8")
+		client = self._client_with_config(tmp_path)
+
+		status, body, error = await client.execute(
+			"GET", "/read?path=configuration.yaml", None, "files"
+		)
+		assert status == 200 and error is None
+		assert json.loads(body)["content"] == "homeassistant:\n"
+
+		status, body, error = await client.execute(
+			"POST", "/write?path=configuration.yaml", {"content": "homeassistant:\n  name: x\n"}, "files"
+		)
+		assert status == 200 and error is None
+		assert (tmp_path / "configuration.yaml").read_text() == "homeassistant:\n  name: x\n"
+
+	@pytest.mark.asyncio
+	async def test_refuses_to_escape_the_config_directory(self, tmp_path):
+		outside = tmp_path.parent / "outside.txt"
+		outside.write_text("secret", encoding="utf-8")
+		client = self._client_with_config(tmp_path)
+
+		for rel in ("../outside.txt", "/etc/passwd", "a/../../outside.txt"):
+			status, _body, error = await client.execute("GET", f"/read?path={rel}", None, "files")
+			assert status == 0, rel
+			assert "outside" in error or "not exist" in error, rel
+
+	@pytest.mark.asyncio
+	async def test_a_symlink_out_of_the_directory_is_refused_too(self, tmp_path):
+		# Resolving before the containment check is what catches this; a string
+		# comparison would pass it straight through.
+		target = tmp_path.parent / "escape.yaml"
+		target.write_text("secret", encoding="utf-8")
+		(tmp_path / "link.yaml").symlink_to(target)
+		client = self._client_with_config(tmp_path)
+
+		status, _body, error = await client.execute("GET", "/read?path=link.yaml", None, "files")
+		assert status == 0
+		assert "outside" in error
+
+	@pytest.mark.asyncio
+	async def test_refuses_home_assistants_internal_storage(self, tmp_path):
+		storage = tmp_path / ".storage"
+		storage.mkdir()
+		(storage / "auth").write_text("{}", encoding="utf-8")
+		client = self._client_with_config(tmp_path)
+
+		status, _body, error = await client.execute("GET", "/read?path=.storage/auth", None, "files")
+		assert status == 0
+		assert "internal storage" in error
+
+	@pytest.mark.asyncio
+	async def test_listing_hides_internal_storage(self, tmp_path):
+		(tmp_path / ".storage").mkdir()
+		(tmp_path / "configuration.yaml").write_text("x", encoding="utf-8")
+		client = self._client_with_config(tmp_path)
+
+		_status, body, _error = await client.execute("GET", "/list?path=", None, "files")
+		names = [e["name"] for e in json.loads(body)["entries"]]
+		assert "configuration.yaml" in names
+		assert ".storage" not in names
+
+	@pytest.mark.asyncio
+	async def test_refuses_a_file_too_large_to_be_config(self, tmp_path):
+		big = tmp_path / "big.bin"
+		big.write_text("x" * (2 * 1024 * 1024 + 10), encoding="utf-8")
+		client = self._client_with_config(tmp_path)
+
+		status, _body, error = await client.execute("GET", "/read?path=big.bin", None, "files")
+		assert status == 0
+		assert "limit" in error
+
+	@pytest.mark.asyncio
+	async def test_refuses_a_non_allowlisted_operation(self, tmp_path):
+		client = self._client_with_config(tmp_path)
+		status, _body, error = await client.execute("GET", "/delete?path=x", None, "files")
+		assert status == 0
+		assert "non-allowlisted" in error
+
+	@pytest.mark.asyncio
+	async def test_a_failed_write_cannot_truncate_the_original(self, tmp_path):
+		# Home Assistant will not start without a readable configuration.yaml,
+		# so a half-written one is worse than a rejected write.
+		cfg = tmp_path / "configuration.yaml"
+		cfg.write_text("homeassistant:\n", encoding="utf-8")
+		client = self._client_with_config(tmp_path)
+
+		status, _body, error = await client.execute(
+			"POST", "/write?path=configuration.yaml", {"content": 123}, "files"
+		)
+		assert status == 0 and "content" in error
+		assert cfg.read_text() == "homeassistant:\n"

@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.27"
+INTEGRATION_VERSION = "0.9.29"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -102,6 +102,23 @@ DEFAULT_RELAY_WS_URL = "wss://sync.vome.io/ws/relay"
 STAGING_RELAY_WS_URL = "wss://dev.sync.vome.io/ws/relay"
 RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
 RELAY_DEVICE_TOKEN_PATH = "/api/v1/relay/device/token"
+# The health score, for a Home Assistant whose owner has not signed up.
+# ``/api/v1/relay/guest`` opens a throwaway link and queues a check in one
+# call, so nobody reads a code off one screen and types it into another;
+# it answers with relay credentials and a ``claim_url`` its owner can open
+# to see the result and decide whether to keep it.  Vome deletes the whole
+# run in two hours unless they sign in — see docs/HEALTH_SCORE.md.
+RELAY_GUEST_PATH = "/api/v1/relay/guest"
+# The report itself, authenticated by the relay secret we already hold, so
+# the findings can live in the house they are about rather than only on
+# Vome's website.
+AGENT_HEALTH_REPORT_PATH = "/api/sync/agent/health-report"
+AGENT_HEALTH_CHECK_PATH = "/api/sync/agent/health-check"
+
+# ``options[CONF_RELAY]`` keys written only by a guest run.
+CONF_RELAY_GUEST = "guest"
+CONF_RELAY_GUEST_EXPIRES = "guest_expires_at"
+CONF_RELAY_GUEST_CLAIM_URL = "guest_claim_url"
 
 
 def relay_ws_url_for_portal(portal_url: str, offered: str | None = None) -> str:
@@ -246,6 +263,27 @@ FORWARD_HOST_HEADER = "x-ha-original-host"
 # without any inbound exposure.
 RELAY_RPC_TARGET_CORE = "core"
 RELAY_RPC_TARGET_ESPHOME = "esphome"
+# Raw files under Home Assistant's config directory.  Hosted homes have no SSH
+# and no host shell, so configuration.yaml -- and anything else with no UI
+# equivalent -- was unreachable except through a file-editor add-on in a
+# browser.  Gated on its own ``ha:files`` scope rather than folded into
+# ``ha:config``, so it can be withheld or removed on its own.
+RELAY_RPC_TARGET_FILES = "files"
+# Exact path portions of the file API.  ``/read`` and ``/list`` take
+# ``?path=``; ``/write`` takes the same plus a JSON body.
+FILES_ALLOWED_PATHS = ("/list", "/read", "/write")
+FILES_ALLOWED_METHODS = ("GET", "POST")
+# Directories never served, whatever the caller asks for.  ``.storage`` is Home
+# Assistant's own database -- registries, config entries, every credential the
+# UI has stored.  Hand-editing it corrupts state, and reading it would hand over
+# far more than a config file.
+FILES_DENIED_DIRS = (".storage", ".cloud")
+# Caps.  A config file is kilobytes; anything near these is not one, and the
+# relay frame carries the whole body.
+FILES_MAX_READ_BYTES = 2 * 1024 * 1024
+FILES_MAX_WRITE_BYTES = 2 * 1024 * 1024
+# Listing is for finding a file to edit, not for walking a media library.
+FILES_MAX_ENTRIES = 500
 RELAY_RPC_TARGET_WEBSOCKET = "websocket"
 
 # Allowlisted Home Assistant WebSocket commands for brokered Lovelace dashboard
@@ -306,6 +344,13 @@ ESPHOME_STREAM_TIMEOUT = 1800
 # ESPHome configuration filenames, e.g. ``living-room.yaml``.  Strict, so the
 # value can never escape the frame the component builds around it.
 ESPHOME_CONFIG_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+# ESPHome's shared secrets file, which the config paths refuse outright.
+# Everything a device authenticates with lives here -- wifi PSK, API encryption
+# keys, OTA passwords -- so serving it would let a read-only token walk off with
+# the credentials to the whole fleet, and writing it would let one silently swap
+# them. Devices reference secrets by name (``!secret wifi_password``); an agent
+# never needs their values to edit a device's YAML.
+ESPHOME_SECRETS_FILENAME = "secrets.yaml"
 # Supervisor add-on state: only a *started* add-on is reachable, so discovery
 # must check this rather than surface an opaque connect error.
 ESPHOME_ADDON_STATE_STARTED = "started"

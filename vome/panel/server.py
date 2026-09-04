@@ -458,6 +458,17 @@ class PanelHandler(BaseHTTPRequestHandler):
 		if path == "/api/diag":
 			self._send_json(200, run_diagnostics())
 			return
+		if path == "/api/health_score":
+			# Read-only: the last report, refreshed from Vome first.  A
+			# house that has never run one answers with an empty report
+			# rather than an error — "not yet" is a state the panel
+			# renders, not a failure.
+			status, payload = call_service("health_score_get", {})
+			body = _unwrap(payload)
+			if isinstance(body, dict) and body.get("error") and status < 400:
+				status = 400
+			self._send_json(status, body)
+			return
 		if path == "/api/switches":
 			status, payload = call_service("list_switches", {})
 			body = _unwrap(payload)
@@ -499,6 +510,10 @@ class PanelHandler(BaseHTTPRequestHandler):
 			"/api/switches/subscribe": ("subscribe_switch", body),
 			"/api/switches/delete": ("delete_switch", body),
 			"/api/switches/forget": ("forget_switch", body),
+			# The one action that works before this home is linked to
+			# anything: it links itself temporarily, runs the check, and
+			# hands back a URL to see it and decide.
+			"/api/health_score/run": ("health_score_run", body),
 		}
 		if path not in mapping:
 			self._send_json(404, {"error": "not found"})

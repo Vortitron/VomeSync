@@ -30,9 +30,13 @@ async def test_sensor_created_from_imported_cache_for_subscriptions(hass, config
 
 	await async_setup_entry(hass, config_entry, _add_entities)
 
-	# Only one sensor should be created (for uid-sub)
-	assert len(added) == 1
-	assert added[0].unique_id == "vomesync_sensor_uid-sub"
+	# One switch sensor (for uid-sub), plus the health score, which exists
+	# for every entry whether or not anything is imported or even linked.
+	switch_sensors = [e for e in added if e.unique_id.startswith("vomesync_sensor_")]
+	assert len(switch_sensors) == 1
+	assert switch_sensors[0].unique_id == "vomesync_sensor_uid-sub"
+	assert [e.unique_id for e in added].count(
+		f"vomesync_health_score_{config_entry.entry_id}") == 1
 
 
 @pytest.mark.asyncio
@@ -57,5 +61,7 @@ async def test_sensor_skips_subscription_with_access_key(hass, config_entry):
 
 	await async_setup_entry(hass, config_entry, _add_entities)
 
-	assert len(added) == 0
+	assert [e for e in added if e.unique_id.startswith("vomesync_sensor_")] == []
+	# The health score is not a switch sensor and is always there.
+	assert len(added) == 1
 
