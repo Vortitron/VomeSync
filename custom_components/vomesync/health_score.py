@@ -55,6 +55,7 @@ from .const import (
 )
 from .relay_client import (
 	async_fetch_health_report,
+	async_instance_id,
 	async_request_guest_run,
 	async_start_health_check,
 	async_start_relay,
@@ -136,6 +137,9 @@ async def _open_guest_run(hass: HomeAssistant, entry: ConfigEntry, use_ai: bool)
 	portal_url = _portal_url(entry)
 	opened = await async_request_guest_run(
 		session, portal_url, name=hass.config.location_name or "", use_ai=use_ai,
+		# Recorded now so that claiming this run later can find the
+		# account's own row for this house rather than adding another.
+		instance_id=await async_instance_id(hass),
 	)
 	relay = _relay(entry)
 	relay.update({

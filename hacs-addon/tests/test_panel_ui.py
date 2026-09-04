@@ -140,3 +140,45 @@ def test_the_check_is_polled_rather_than_waited_on():
 	like a hung panel."""
 	assert "function watchHealth(" in PANEL_JS
 	assert "loadHealth(true)" in PANEL_JS
+
+
+def test_the_health_score_is_in_the_side_menu():
+	"""It was reachable only from a quick action on the Overview, which
+	is fine for somebody already reading that card and invisible to
+	anybody who left the page."""
+	nav = PANEL_HTML[PANEL_HTML.index("<nav>"):PANEL_HTML.index("</nav>")]
+	assert 'data-view="health"' in nav
+	assert "Health score" in nav
+	# Above the sections: it is the one thing that works before any of
+	# them are configured.
+	assert nav.index('data-view="health"') < nav.index("Remote access")
+
+
+def test_the_ai_doctor_is_offered_on_each_finding():
+	"""It runs at Vome, against the account that owns this home — so the
+	panel links to it rather than pretending to host it."""
+	assert "Ask the AI Doctor about this" in PANEL_JS
+	assert "function doctorUrl(" in PANEL_JS
+	# Built from the Vome this home actually talks to, not a guess.
+	assert "state.portal_url" in PANEL_JS
+	assert "portal_url" in (ROOT / "custom_components" / "vomesync" /
+	                        "services_remote.py").read_text(encoding="utf-8")
+
+
+def test_an_unlinked_home_is_told_what_the_doctor_needs():
+	"""No account, no conversation to hang it on — say that rather than
+	showing a link that will not work."""
+	assert "It needs an account to belong to" in PANEL_JS
+
+
+def test_the_card_can_be_bought_from_here():
+	"""The score is free; the shareable card is the thing on sale, and
+	the app never mentioned it."""
+	assert "Publish this as a card" in PANEL_JS
+	assert "#score-card" in PANEL_JS
+	# Honest about what it is: no device names on a public page.
+	assert "never device names" in PANEL_JS
+
+
+def test_an_unsaved_check_is_told_what_the_card_needs():
+	assert "once this check is saved to an account" in PANEL_JS

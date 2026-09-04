@@ -20,6 +20,7 @@ import aiohttp
 import pytest
 
 import custom_components.vomesync.health_score as hs
+import custom_components.vomesync.relay_client as hs_relay
 from custom_components.vomesync.const import (
 	CONF_RELAY,
 	CONF_RELAY_GUEST,
@@ -58,11 +59,15 @@ class TestTheCalls:
 			"server_id": "rly-1", "relay_secret": "rly_rly-1.s",
 			"claim_url": "https://vome.io/score/try?k=tok", "expires_at": 123,
 		})
-		result = await async_request_guest_run(session, "https://vome.io", "My HA")
+		result = await async_request_guest_run(
+			session, "https://vome.io", "My HA", instance_id="uuid-1",
+		)
 		assert result["claim_url"].startswith("https://vome.io/score/try?k=")
 		args, kwargs = session.post.call_args
 		assert args[0] == "https://vome.io/api/v1/relay/guest"
-		assert kwargs["json"] == {"name": "My HA", "use_ai": True}
+		assert kwargs["json"] == {
+			"name": "My HA", "use_ai": True, "instance_id": "uuid-1",
+		}
 
 	@pytest.mark.asyncio
 	async def test_the_report_is_fetched_with_the_relay_secret(self):
@@ -326,3 +331,52 @@ class TestTheSensorInTheHouse:
 		assert attributes["saved_to_account"] is False
 		assert attributes["keep_it_url"].endswith("k=tok")
 		assert attributes["deleted_in_seconds"] > 0
+
+
+class TestSayingWhichHouseThisIs:
+	"""Vome tells a re-link from a new house by the instance's own uuid.
+
+	Without it, unlinking and linking again arrived as a stranger and left
+	the previous server holding every health report — which is how it was
+	found, on a real instance.
+	"""
+
+	@pytest.mark.asyncio
+	async def test_it_reads_the_instance_id(self):
+		hass = MagicMock()
+		hass.data = {"core.uuid": "from-storage"}
+		with patch.dict("sys.modules"):
+			got = await hs_relay.async_instance_id(hass)
+		assert got
+
+	@pytest.mark.asyncio
+	async def test_an_install_that_will_not_say_still_links(self):
+		"""No uuid is the old behaviour, not a failure to link."""
+		hass = MagicMock()
+		hass.data = {}
+		with patch("homeassistant.helpers.instance_id.async_get",
+		           side_effect=RuntimeError("no storage")):
+			assert await hs_relay.async_instance_id(hass) == ""
+
+	@pytest.mark.asyncio
+	async def test_the_guest_run_sends_it_too(self):
+		"""So claiming can find the account's own row for this house."""
+		entry = _Entry()
+		hass = _hass(entry)
+		opened = {
+			"server_id": "rly-1", "relay_secret": "s", "claim_url": "u",
+			"expires_at": 1, "report_id": "r1",
+		}
+		sent = {}
+
+		async def _guest(session, portal_url, name=None, use_ai=True, instance_id=None):
+			sent["instance_id"] = instance_id
+			return opened
+
+		with patch.object(hs, "async_get_clientsession", return_value=MagicMock()), \
+				patch.object(hs, "async_instance_id", AsyncMock(return_value="uuid-9")), \
+				patch.object(hs, "async_request_guest_run", _guest), \
+				patch.object(hs, "async_start_relay", AsyncMock()), \
+				patch.object(hs.persistent_notification, "async_create"):
+			await hs.async_run_check(hass, entry)
+		assert sent["instance_id"] == "uuid-9"

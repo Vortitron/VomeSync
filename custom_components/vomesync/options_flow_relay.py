@@ -33,6 +33,7 @@ from .const import (
 	relay_ws_url_for_portal,
 )
 from .relay_client import (
+	async_instance_id,
 	async_poll_device_token,
 	async_request_device_code,
 	async_start_relay,
@@ -77,7 +78,10 @@ class VomeSyncOptionsFlowRelayMixin:
 		"""Fetch a fresh device code into step data; return an error key or None."""
 		try:
 			started = await async_request_device_code(
-				session, self._relay_portal_url(), name=self._relay_link_name()
+				session, self._relay_portal_url(), name=self._relay_link_name(),
+				# So Vome recognises a house it already has a row for,
+				# instead of adding a second one beside it.
+				instance_id=await async_instance_id(self.hass),
 			)
 		except Exception as err:  # noqa: BLE001
 			_LOGGER.warning("Relay device-code request failed: %s", err)

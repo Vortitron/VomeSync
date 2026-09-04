@@ -1197,16 +1197,29 @@
 		</div>`;
 	}
 
+	// The AI Doctor takes one finding apart in a conversation of its own.
+	// It runs at Vome, against the account that owns this home, so the
+	// panel links to it rather than pretending to host it — and says so
+	// plainly when there is no account for it to belong to yet.
+	function doctorUrl() {
+		const serverId = (state && state.server_id) || "";
+		const base = (state && (state.portal_url || state.default_portal_url)) || "https://vome.io";
+		if (!serverId || !vomeHomeLinked()) return "";
+		return `${base.replace(/\/$/, "")}/servers/${encodeURIComponent(serverId)}/health`;
+	}
+
 	function healthFindingsCard() {
 		const report = (healthData && healthData.report) || null;
 		if (!report) return "";
 		const findings = report.findings || [];
+		const doctor = doctorUrl();
 		const rows = findings.map((f) => `
 			<li>
 				<strong>${escapeHtml(f.title || "")}</strong>
 				<span class="pill ${escapeHtml(f.severity || "info")}">${escapeHtml(f.severity || "info")}</span>
 				<div class="muted">${escapeHtml(f.evidence || "")}</div>
 				${f.recommendation ? `<div class="muted"><em>${escapeHtml(f.recommendation)}</em></div>` : ""}
+				${doctor ? `<div><a class="link" href="${escapeHtml(doctor)}" target="_blank" rel="noopener">Ask the AI Doctor about this</a></div>` : ""}
 			</li>`).join("");
 		const score = report.score;
 		return `
@@ -1215,7 +1228,26 @@
 			<p class="health-score ${healthToneClass(score)}">${score === null || score === undefined ? "—" : escapeHtml(String(score))}<span class="muted"> / 100</span></p>
 			${report.summary ? `<p class="muted">${escapeHtml(report.summary)}</p>` : ""}
 			${rows ? `<ul class="health-findings">${rows}</ul>` : `<p class="muted">Nothing to report — that is the good outcome.</p>`}
+			${rows && !doctor ? `<p class="muted">The <strong>AI Doctor</strong> can take any of these apart — one finding, one answer, on your own system. It needs an account to belong to, so sign in and keep this check first.</p>` : ""}
+			${scoreCardRow(score)}
 		</div>`;
+	}
+
+	// The card is the shareable version of the number: a public page with
+	// the score and three badges on it, and never a device name. Bought at
+	// Vome, from the report page, so this is a link rather than a checkout
+	// pretending to live in Home Assistant.
+	function scoreCardRow(score) {
+		if (score === null || score === undefined) return "";
+		const doctor = doctorUrl();
+		if (!doctor) {
+			return `<p class="muted">Want to post this? A shareable card of your score can be published once this check is saved to an account.</p>`;
+		}
+		return `
+			<div class="row" style="margin-top:0.9rem">
+				<a class="btn" href="${escapeHtml(doctor)}#score-card" target="_blank" rel="noopener">Publish this as a card</a>
+			</div>
+			<p class="muted" style="margin-top:0.5rem">A public page with your score and three badges — never device names. Yours to share; the check itself stays free.</p>`;
 	}
 
 	function renderHealth() {

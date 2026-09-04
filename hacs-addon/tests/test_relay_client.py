@@ -690,11 +690,15 @@ class TestDeviceHelpers:
 		session.post.return_value.__aenter__.return_value.json.return_value = {
 			"device_code": "dc", "user_code": "AAAA-BBBB"
 		}
-		result = await async_request_device_code(session, "https://vome.io", name="My HA")
+		result = await async_request_device_code(
+			session, "https://vome.io", name="My HA", instance_id="uuid-1",
+		)
 		assert result["device_code"] == "dc"
 		args, kwargs = session.post.call_args
 		assert args[0] == "https://vome.io/api/v1/relay/device/code"
-		assert kwargs["json"] == {"name": "My HA"}
+		# The instance id rides along so Vome can tell a re-link from a
+		# new house — see test_health_score.TestTheSameHouseComingBack.
+		assert kwargs["json"] == {"name": "My HA", "instance_id": "uuid-1"}
 
 	@pytest.mark.asyncio
 	async def test_poll_device_token(self):

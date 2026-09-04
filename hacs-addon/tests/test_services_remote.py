@@ -4,9 +4,13 @@ from custom_components.vomesync.services_remote import remote_status_payload
 
 
 class _FakeEntry:
-	def __init__(self, entry_id, options):
+	# A real ConfigEntry always has both; the fake grew ``data`` when the
+	# status payload started reading it (which Vome this home talks to,
+	# for the panel's links into the report page).
+	def __init__(self, entry_id, options, data=None):
 		self.entry_id = entry_id
 		self.options = options
+		self.data = data or {}
 
 
 def test_remote_status_payload_strips_secrets():
