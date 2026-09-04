@@ -36,6 +36,8 @@ from datetime import timedelta
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
+from pathlib import Path
+
 import aiohttp
 from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 from homeassistant.core import HomeAssistant
@@ -83,7 +85,14 @@ from .const import (
 	RELAY_MINT_TOKEN_TIMEOUT,
 	RELAY_RECONNECT_DELAY,
 	RELAY_RECONNECT_MAX_DELAY,
+	FILES_ALLOWED_METHODS,
+	FILES_ALLOWED_PATHS,
+	FILES_DENIED_DIRS,
+	FILES_MAX_ENTRIES,
+	FILES_MAX_READ_BYTES,
+	FILES_MAX_WRITE_BYTES,
 	RELAY_RPC_TARGET_ESPHOME,
+	RELAY_RPC_TARGET_FILES,
 	RELAY_RPC_TARGET_WEBSOCKET,
 	RELAY_RPC_TIMEOUT,
 	RELAY_WS_MAX_COMMAND_BYTES,
@@ -1346,14 +1355,161 @@ class RelayClient:
 		"""Execute one relayed call locally; return ``(status, body_text, error)``.
 
 		``target`` selects the local service: the HA core REST API (``core``, the
-		default), the ESPHome dashboard (``esphome``), or one allowlisted HA
-		WebSocket command (``websocket``).  ``status`` is 0 on a local failure.
+		default), the ESPHome dashboard (``esphome``), a file under the config
+		directory (``files``), or one allowlisted HA WebSocket command
+		(``websocket``).  ``status`` is 0 on a local failure.
 		"""
 		if target == RELAY_RPC_TARGET_ESPHOME:
 			return await self._execute_esphome(method, path, body)
+		if target == RELAY_RPC_TARGET_FILES:
+			return await self._execute_files(method, path, body)
 		if target == RELAY_RPC_TARGET_WEBSOCKET:
 			return await self._execute_websocket(body)
 		return await self._execute_core(method, path, body)
+
+	def _config_dir(self) -> Optional[Path]:
+		"""Home Assistant's config directory, resolved."""
+		if self._hass is None:
+			return None
+		try:
+			return Path(self._hass.config.path()).resolve()
+		except Exception:  # pragma: no cover - defensive
+			return None
+
+	def _resolve_config_path(self, raw: Any) -> tuple[Optional[Path], Optional[str]]:
+		"""Resolve ``raw`` inside the config directory, or explain the refusal.
+
+		Resolution happens *before* the containment check, so a symlink pointing
+		out of the directory is caught as well as ``..`` — checking the string
+		would only stop the obvious half.  An empty path means the directory
+		itself, which is how listing works.
+		"""
+		base = self._config_dir()
+		if base is None:
+			return None, "Home Assistant config directory is not available."
+		rel = (raw or "").strip() if isinstance(raw, str) else ""
+		rel = rel.lstrip("/")
+		try:
+			target = (base / rel).resolve() if rel else base
+		except (OSError, ValueError) as err:
+			return None, f"Invalid path: {err}"
+		if target != base and base not in target.parents:
+			return None, "Path is outside the Home Assistant config directory."
+		parts = target.relative_to(base).parts if target != base else ()
+		if any(part in FILES_DENIED_DIRS for part in parts):
+			return None, (
+				"Refusing to touch Home Assistant's internal storage. It holds the "
+				"registries and every credential the UI has saved, and hand-editing "
+				"it corrupts state."
+			)
+		return target, None
+
+	async def _execute_files(
+		self, method: Optional[str], path: Optional[str], body: Any
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""Serve one file call under the config directory.
+
+		The whole point of this target: a hosted home has no SSH and no host
+		shell, so a file with no UI equivalent — configuration.yaml above all —
+		could only be edited through a browser add-on. Every call is confined to
+		the config directory and gated on ``ha:files`` upstream.
+		"""
+		portion = _safe_path_portion(path)
+		if portion is None or portion not in FILES_ALLOWED_PATHS:
+			return 0, None, "Refusing a non-allowlisted file operation."
+		method = (method or "GET").upper()
+		if method not in FILES_ALLOWED_METHODS:
+			return 0, None, f"Unsupported file method: {method}"
+
+		rel = ""
+		if "?" in (path or ""):
+			for part in path.split("?", 1)[1].split("&"):
+				key, _, value = part.partition("=")
+				if key == "path":
+					rel = unquote(value)
+		target, problem = self._resolve_config_path(rel)
+		if target is None:
+			return 0, None, problem
+
+		try:
+			return await self._hass.async_add_executor_job(
+				self._files_op, portion, target, body
+			)
+		except Exception as err:  # pragma: no cover - defensive
+			_LOGGER.debug("Relay (%s) file op failed: %s", self._server_id, err)
+			return 0, None, f"File operation failed: {err}"
+
+	def _files_op(
+		self, portion: str, target: Path, body: Any
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""Blocking half of :meth:`_execute_files`, run in an executor."""
+		base = self._config_dir()
+		if portion == "/list":
+			if not target.is_dir():
+				return 0, None, "Not a directory."
+			entries = []
+			for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name)):
+				if child.name in FILES_DENIED_DIRS:
+					continue
+				try:
+					stat = child.stat()
+				except OSError:
+					continue
+				entries.append({
+					"name": child.name,
+					"path": str(child.relative_to(base)),
+					"is_dir": child.is_dir(),
+					"size": stat.st_size if child.is_file() else None,
+				})
+				if len(entries) >= FILES_MAX_ENTRIES:
+					break
+			return 200, json.dumps({
+				"path": "" if target == base else str(target.relative_to(base)),
+				"entries": entries,
+				"truncated": len(entries) >= FILES_MAX_ENTRIES,
+			}), None
+
+		if portion == "/read":
+			if not target.is_file():
+				return 0, None, "Not a file, or it does not exist."
+			size = target.stat().st_size
+			if size > FILES_MAX_READ_BYTES:
+				return 0, None, (
+					f"File is {size} bytes; the limit is {FILES_MAX_READ_BYTES}. "
+					"This target is for configuration files, not media."
+				)
+			try:
+				text = target.read_text(encoding="utf-8")
+			except (UnicodeDecodeError, ValueError):
+				return 0, None, "File is not UTF-8 text."
+			except OSError as err:
+				return 0, None, f"Could not read the file: {err}"
+			return 200, json.dumps({
+				"path": str(target.relative_to(base)), "content": text
+			}), None
+
+		# /write
+		content = body.get("content") if isinstance(body, dict) else None
+		if not isinstance(content, str):
+			return 0, None, "Body must be JSON with a 'content' string."
+		if len(content.encode("utf-8")) > FILES_MAX_WRITE_BYTES:
+			return 0, None, f"Content exceeds {FILES_MAX_WRITE_BYTES} bytes."
+		if target.exists() and target.is_dir():
+			return 0, None, "Path is a directory."
+		try:
+			target.parent.mkdir(parents=True, exist_ok=True)
+			# Write via a temporary file in the same directory and replace, so a
+			# failure part-way cannot leave configuration.yaml truncated — the
+			# file Home Assistant refuses to start without.
+			tmp = target.with_name(f".{target.name}.vome-tmp")
+			tmp.write_text(content, encoding="utf-8")
+			os.replace(tmp, target)
+		except OSError as err:
+			return 0, None, f"Could not write the file: {err}"
+		return 200, json.dumps({
+			"path": str(target.relative_to(base)), "written": True,
+			"bytes": len(content.encode("utf-8")),
+		}), None
 
 	async def _execute_websocket(
 		self, command: Any

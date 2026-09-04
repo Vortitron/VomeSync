@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.28"
+INTEGRATION_VERSION = "0.9.29"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -263,6 +263,27 @@ FORWARD_HOST_HEADER = "x-ha-original-host"
 # without any inbound exposure.
 RELAY_RPC_TARGET_CORE = "core"
 RELAY_RPC_TARGET_ESPHOME = "esphome"
+# Raw files under Home Assistant's config directory.  Hosted homes have no SSH
+# and no host shell, so configuration.yaml -- and anything else with no UI
+# equivalent -- was unreachable except through a file-editor add-on in a
+# browser.  Gated on its own ``ha:files`` scope rather than folded into
+# ``ha:config``, so it can be withheld or removed on its own.
+RELAY_RPC_TARGET_FILES = "files"
+# Exact path portions of the file API.  ``/read`` and ``/list`` take
+# ``?path=``; ``/write`` takes the same plus a JSON body.
+FILES_ALLOWED_PATHS = ("/list", "/read", "/write")
+FILES_ALLOWED_METHODS = ("GET", "POST")
+# Directories never served, whatever the caller asks for.  ``.storage`` is Home
+# Assistant's own database -- registries, config entries, every credential the
+# UI has stored.  Hand-editing it corrupts state, and reading it would hand over
+# far more than a config file.
+FILES_DENIED_DIRS = (".storage", ".cloud")
+# Caps.  A config file is kilobytes; anything near these is not one, and the
+# relay frame carries the whole body.
+FILES_MAX_READ_BYTES = 2 * 1024 * 1024
+FILES_MAX_WRITE_BYTES = 2 * 1024 * 1024
+# Listing is for finding a file to edit, not for walking a media library.
+FILES_MAX_ENTRIES = 500
 RELAY_RPC_TARGET_WEBSOCKET = "websocket"
 
 # Allowlisted Home Assistant WebSocket commands for brokered Lovelace dashboard
