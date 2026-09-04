@@ -51,6 +51,7 @@ from .lan_routes import (
 	validate_route,
 )
 from .relay_client import (
+	async_instance_id,
 	async_poll_device_token,
 	async_request_device_code,
 	async_start_relay,
@@ -302,6 +303,24 @@ def _observed_forward_url(hass: HomeAssistant) -> str:
 	return f"https://{host}" if host else ""
 
 
+def _entry_portal_url(entry: ConfigEntry) -> str:
+	"""The Vome this entry was linked against."""
+	# getattr rather than entry.data: this is a status payload, and it is
+	# read from several call sites (and several test doubles) where the
+	# entry is whatever that caller had to hand. A missing field here must
+	# degrade to the default, not take the panel down.
+	merged = {
+		**(getattr(entry, "data", None) or {}),
+		**(getattr(entry, "options", None) or {}),
+	}
+	try:
+		return _normalise_portal_url(merged.get("portal_url")) or DEFAULT_PORTAL_URL
+	except ValueError:
+		# A stored value we cannot parse must not take the status payload
+		# — and with it the whole panel — down.
+		return DEFAULT_PORTAL_URL
+
+
 def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
 	"""Public status dict for the add-on panel (no secrets)."""
 	relay = dict((entry.options or {}).get(CONF_RELAY) or {})
@@ -332,6 +351,11 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 			hass, bool(relay.get(CONF_RELAY_FORWARD_UI))
 		),
 		"default_portal_url": DEFAULT_PORTAL_URL,
+		# Which Vome this home actually talks to, so the panel can link
+		# into it (the AI Doctor lives on the report page there). Falls
+		# back to the default rather than guessing at vome.io when the
+		# entry was set up against staging.
+		"portal_url": _entry_portal_url(entry),
 	}
 
 
@@ -717,7 +741,10 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		else:
 			session = async_get_clientsession(hass)
 			started = await async_request_device_code(
-				session, portal_url, name=_link_display_name(hass)
+				session, portal_url, name=_link_display_name(hass),
+				# So a re-link lands on the row this house already has —
+				# see relay_servers.find_relay_for_instance at the portal.
+				instance_id=await async_instance_id(hass),
 			)
 			pending = {
 				"device_code": started.get("device_code"),

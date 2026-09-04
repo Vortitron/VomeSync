@@ -1828,12 +1828,37 @@ async def _post_portal_json(
 		return await resp.json()
 
 
+async def async_instance_id(hass) -> str:
+	"""This Home Assistant's own uuid, or "" if it will not say.
+
+	Sent with every link request so Vome can tell "the house I already
+	know" from "a new house".  Without it, unlinking and linking again
+	arrived as a stranger and left the previous server holding all the
+	health reports.
+
+	Never fatal: an install that cannot produce one keeps the old
+	behaviour rather than failing to link at all.
+	"""
+	try:
+		from homeassistant.helpers import instance_id as ha_instance_id
+		return str(await ha_instance_id.async_get(hass) or "")
+	except Exception:  # noqa: BLE001 - older core, or storage unreadable
+		try:
+			return str((hass.data or {}).get("core.uuid") or "")
+		except Exception:  # noqa: BLE001
+			_LOGGER.debug("Could not read this instance's id", exc_info=True)
+			return ""
+
+
 async def async_request_device_code(
-	session: aiohttp.ClientSession, portal_url: str, name: Optional[str] = None
+	session: aiohttp.ClientSession, portal_url: str, name: Optional[str] = None,
+	instance_id: Optional[str] = None,
 ) -> dict:
 	"""Start a device-authorisation; returns the portal's JSON (codes + URL)."""
 	url = (portal_url or DEFAULT_PORTAL_URL).rstrip("/") + RELAY_DEVICE_CODE_PATH
-	return await _post_portal_json(session, url, {"name": name or ""})
+	return await _post_portal_json(
+		session, url, {"name": name or "", "instance_id": instance_id or ""},
+	)
 
 
 async def async_poll_device_token(
@@ -1851,6 +1876,7 @@ async def async_request_guest_run(
 	portal_url: str,
 	name: Optional[str] = None,
 	use_ai: bool = True,
+	instance_id: Optional[str] = None,
 ) -> dict:
 	"""Open a login-free health-score run for this Home Assistant.
 
@@ -1862,7 +1888,11 @@ async def async_request_guest_run(
 	``claim_url`` and does.
 	"""
 	url = (portal_url or DEFAULT_PORTAL_URL).rstrip("/") + RELAY_GUEST_PATH
-	return await _post_portal_json(session, url, {"name": name or "", "use_ai": use_ai})
+	return await _post_portal_json(session, url, {
+		"name": name or "",
+		"use_ai": use_ai,
+		"instance_id": instance_id or "",
+	})
 
 
 async def _agent_request(
