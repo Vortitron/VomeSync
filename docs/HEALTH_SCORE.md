@@ -33,6 +33,20 @@ this instance already holds) and published on
 `sensor.vome_health_score`: the score is the state, the findings,
 summary and categories are attributes.
 
+## Which install you need
+
+Either. The check needs the integration and nothing else: the relay
+mints its own local access token through `hass.auth` and never touches
+the Supervisor (that is only used to find an ESPHome dashboard), so a
+Container or Core install with HACS runs the same check and gets the
+same report on the same sensor.
+
+What the add-on adds is the button. On a HACS-only install the same
+thing is *Developer tools → Actions → Vome: Check my health score*,
+which is a fine answer for somebody who already lives in there and a
+poor first impression for anybody else — so vome.io/score/try leads
+with the add-on and keeps HACS as a link underneath.
+
 ## The two-hour clock, and why it is said out loud
 
 A guest run is temporary. Vome deletes the check, the findings and the
