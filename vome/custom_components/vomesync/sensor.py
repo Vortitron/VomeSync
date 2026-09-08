@@ -140,6 +140,7 @@ class VomeHealthScoreSensor(SensorEntity):
 		from . import health_score
 
 		report = self._report or {}
+		links = health_score.panel_links(self._entry, report)
 		attributes: Dict[str, Any] = {
 			"summary": report.get("summary") or "",
 			"findings": report.get("findings") or [],
@@ -150,10 +151,18 @@ class VomeHealthScoreSensor(SensorEntity):
 			# Said plainly on the entity as well as in the notification:
 			# this number is on a clock unless somebody signs in.
 			attributes["saved_to_account"] = False
-			attributes["keep_it_url"] = health_score.claim_url(self._entry)
+			attributes["keep_it_url"] = links["keep_it_url"]
 			attributes["deleted_in_seconds"] = health_score.guest_seconds_left(self._entry)
 		else:
 			attributes["saved_to_account"] = health_score.is_linked(self._entry)
+		if links.get("online_url"):
+			attributes["online_url"] = links["online_url"]
+		if links.get("health_url"):
+			attributes["health_url"] = links["health_url"]
+		if links.get("share_url"):
+			attributes["share_url"] = links["share_url"]
+		if links.get("card_url"):
+			attributes["card_url"] = links["card_url"]
 		return attributes
 
 

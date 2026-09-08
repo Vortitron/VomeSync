@@ -22,6 +22,8 @@ import pytest
 import custom_components.vomesync.health_score as hs
 import custom_components.vomesync.relay_client as hs_relay
 from custom_components.vomesync.const import (
+	CONF_BACKUP,
+	CONF_BACKUP_SECRET,
 	CONF_RELAY,
 	CONF_RELAY_GUEST,
 	CONF_RELAY_GUEST_CLAIM_URL,
@@ -29,11 +31,17 @@ from custom_components.vomesync.const import (
 	CONF_RELAY_SECRET,
 	CONF_RELAY_SERVER_ID,
 	DOMAIN,
+	backup_secret_server_id,
 )
 from custom_components.vomesync.relay_client import (
 	async_fetch_health_report,
 	async_request_guest_run,
 	async_start_health_check,
+)
+
+
+HOSTED_BACKUP_KEY = (
+	"vbk_3d80386f-279a-4388-accb-5d8dd9d1ac71.RmFrZVRva2VuVmFsdWU"
 )
 
 
@@ -178,6 +186,22 @@ class TestRunningItFromAnUnlinkedHouse:
 		check.assert_awaited_once()
 		assert result["guest"] is False
 
+	@pytest.mark.asyncio
+	async def test_a_hosted_vm_runs_the_check_on_its_own_server(self):
+		"""No relay on a hosted box — the backup key is the credential."""
+		entry = _Entry({CONF_BACKUP: {CONF_BACKUP_SECRET: HOSTED_BACKUP_KEY}})
+		hass = _hass(entry)
+		with patch.object(hs, "async_get_clientsession", return_value=MagicMock()), \
+				patch.object(hs, "async_request_guest_run", AsyncMock()) as guest, \
+				patch.object(hs, "async_start_health_check",
+				             AsyncMock(return_value={"status": "queued"})) as check:
+			result = await hs.async_run_check(hass, entry)
+		guest.assert_not_awaited()
+		check.assert_awaited_once()
+		assert check.await_args.args[2] == HOSTED_BACKUP_KEY
+		assert result["guest"] is False
+		assert result["server_id"] == backup_secret_server_id(HOSTED_BACKUP_KEY)
+
 
 class TestTheReportComesHome:
 	@pytest.mark.asyncio
@@ -318,6 +342,9 @@ class TestTheSensorInTheHouse:
 		assert attributes["findings"][0]["title"] == "Backups are stale"
 		assert attributes["summary"] == "Mostly well."
 		assert attributes["saved_to_account"] is True
+		assert attributes["health_url"].endswith("/servers/rly-9/health")
+		assert attributes["online_url"] == attributes["health_url"]
+		assert attributes["card_url"].endswith("#score-card")
 
 	def test_a_guest_score_says_it_is_not_saved(self):
 		"""Whoever reads this entity — a card, an automation, a person —
@@ -331,6 +358,37 @@ class TestTheSensorInTheHouse:
 		assert attributes["saved_to_account"] is False
 		assert attributes["keep_it_url"].endswith("k=tok")
 		assert attributes["deleted_in_seconds"] > 0
+		assert attributes["online_url"].endswith("k=tok")
+		assert "health_url" not in attributes
+
+
+class TestPanelLinks:
+	def test_a_linked_house_points_at_its_health_page(self, linked_entry):
+		links = hs.panel_links(linked_entry, {"score": 71})
+		assert links["server_id"] == "rly-9"
+		assert links["health_url"].endswith("/servers/rly-9/health")
+		assert links["online_url"] == links["health_url"]
+		assert links["card_url"].endswith("#score-card")
+
+	def test_a_hosted_vm_points_at_its_health_page(self):
+		entry = _Entry({CONF_BACKUP: {CONF_BACKUP_SECRET: HOSTED_BACKUP_KEY}})
+		links = hs.panel_links(entry, {"score": 71})
+		server_id = backup_secret_server_id(HOSTED_BACKUP_KEY)
+		assert links["server_id"] == server_id
+		assert links["health_url"].endswith(f"/servers/{server_id}/health")
+		assert links["online_url"] == links["health_url"]
+		assert links["card_url"].endswith("#score-card")
+
+	def test_a_guest_run_points_at_the_claim_url_not_the_owner_page(self):
+		entry = _Entry({CONF_RELAY: {
+			CONF_RELAY_SERVER_ID: "rly-1", CONF_RELAY_SECRET: "s",
+			CONF_RELAY_GUEST: True,
+			CONF_RELAY_GUEST_CLAIM_URL: "https://vome.io/score/try?k=tok",
+		}})
+		links = hs.panel_links(entry, {"score": 61})
+		assert links["online_url"].endswith("k=tok")
+		assert links["health_url"] == ""
+		assert links["card_url"].endswith("k=tok")
 
 
 class TestSayingWhichHouseThisIs:

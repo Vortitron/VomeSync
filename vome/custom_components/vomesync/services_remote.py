@@ -858,11 +858,19 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		if call.data.get("refresh", True):
 			await health_score.async_refresh_report(hass, entry)
 		report = health_score.stored_report(hass, entry.entry_id)
+		links = health_score.panel_links(entry, report)
 		return {
 			"report": report,
 			"saved_to_account": not health_score.is_guest(entry),
-			"keep_it_url": health_score.claim_url(entry),
+			"keep_it_url": links["keep_it_url"],
 			"deleted_in_seconds": health_score.guest_seconds_left(entry),
+			"server_id": links["server_id"],
+			"portal_url": links["portal_url"],
+			"health_url": links["health_url"],
+			"share_url": links["share_url"],
+			"card_url": links["card_url"],
+			"online_url": links["online_url"],
+			"card_included": bool((report or {}).get("card_included")),
 		}
 
 	hass.services.async_register(
