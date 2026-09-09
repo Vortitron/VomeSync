@@ -1894,3 +1894,34 @@ class TestConfigFiles:
 		)
 		assert status == 0 and "content" in error
 		assert cfg.read_text() == "homeassistant:\n"
+
+
+# ── Access-event reporting (the home's own failed-login notifications) ──────
+
+class TestSendAccessEvents:
+	@pytest.mark.asyncio
+	async def test_returns_false_when_the_relay_is_down(self):
+		client = _client(AsyncMock())
+		client._ws = None
+		assert await client.send_access_events([{"event": "login_failed"}]) is False
+
+	@pytest.mark.asyncio
+	async def test_returns_false_for_an_empty_batch(self):
+		client = _client(AsyncMock())
+		client._ws = object()
+		assert await client.send_access_events([]) is False
+
+	@pytest.mark.asyncio
+	async def test_returns_true_once_the_send_succeeds(self):
+		client = _client(AsyncMock())
+		client._ws = object()
+		client._send = AsyncMock()
+		assert await client.send_access_events([{"event": "login_failed"}]) is True
+		client._send.assert_awaited_once()
+
+	@pytest.mark.asyncio
+	async def test_returns_false_rather_than_raise_when_the_send_fails(self):
+		client = _client(AsyncMock())
+		client._ws = object()
+		client._send = AsyncMock(side_effect=RuntimeError("socket closed"))
+		assert await client.send_access_events([{"event": "login_failed"}]) is False

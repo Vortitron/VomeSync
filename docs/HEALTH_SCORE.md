@@ -85,7 +85,9 @@ the house still has one.
 | Service | What it does |
 |---|---|
 | `vomesync.health_score_run` | Runs a check (linking first if needed). Returns immediately; the score arrives on the sensor and in a notification. `use_ai: false` asks for a locally-written summary instead. |
-| `vomesync.health_score_get` | The last report as data, refreshing from Vome first unless `refresh: false`. |
+| `vomesync.health_score_get` | The last report as data, refreshing from Vome first unless `refresh: false`. Includes `online_url`, `health_url`, `card_url` and `share_url` so the add-on panel can open the score, the AI Doctor and the shareable card without reconstructing them. |
+
+After a check finishes, the notification and `sensor.vome_health_score` carry those URLs. A guest run's `online_url` is the keep-it link; a linked house's is `/servers/<id>/health`. A **hosted VomeHome VM** has no relay tunnel, so the check authenticates with the backup key and opens that same health page — it must not fall through to a throwaway guest run. Hosting and Connect customers publish the shareable card without the 49 kr; everyone else can pay or redeem a limited voucher.
 
 ## What is sent
 

@@ -1264,22 +1264,26 @@ class RelayClient:
 			return None, "Vome did not return a tunnel token."
 		return str(token), None
 
-	async def send_access_events(self, events: list) -> None:
-		"""Report this home's own access events to Vome (fire and forget).
+	async def send_access_events(self, events: list) -> bool:
+		"""Report this home's own access events to Vome.
 
-		Silently does nothing while the relay is down: these are a convenience
-		for the owner's log, and a home that cannot reach Vome has more
-		pressing problems than a missing log line.  Nothing waits on a reply —
-		there is none.
+		Returns whether the batch actually went out.  Nothing waits on a
+		reply -- there is none -- but the return value lets a caller that
+		must not lose these silently (see ``login_watch.LoginWatcher``) know
+		to hold onto them and try again once the relay is back, rather than
+		believe a login failure was reported when the relay was simply down.
 		"""
 		ws = self._ws
 		if ws is None or not events:
-			return
-		with suppress(Exception):
+			return False
+		try:
 			await self._send(ws, {
 				"type": RELAY_WS_MSG_ACCESS_EVENTS,
 				"events": list(events)[:ACCESS_EVENTS_MAX_BATCH],
 			})
+		except Exception:  # noqa: BLE001 - reported as a failed send, not raised
+			return False
+		return True
 
 	async def _handle_ws_data(self, data: dict) -> None:
 		"""Forward one frame down to the local HA socket or TCP connection."""

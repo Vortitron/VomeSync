@@ -87,10 +87,31 @@ def _portal_url(entry: ConfigEntry) -> str:
 	return str(data.get("portal_url") or DEFAULT_PORTAL_URL).rstrip("/")
 
 
+def _agent_credentials(entry: ConfigEntry) -> tuple:
+	"""``(server_id, secret)`` the health endpoints will accept.
+
+	A linked home holds a relay secret. A VomeHome-hosted VM has no
+	relay — a tunnel to itself is nonsense — and holds a backup key
+	instead. The portal's agent endpoints accept both. Falling through
+	to a throwaway guest run when the backup key is already there is
+	what hid the health page, the AI Doctor and the shareable card
+	from paying hosting customers.
+	"""
+	from .backup_client import credentials_for_entry
+
+	server_id, secret = credentials_for_entry(entry)
+	return str(server_id or ""), str(secret or "")
+
+
 def is_linked(entry: ConfigEntry) -> bool:
-	"""Whether this entry has relay credentials at all (guest included)."""
-	relay = _relay(entry)
-	return bool(relay.get(CONF_RELAY_SERVER_ID) and relay.get(CONF_RELAY_SECRET))
+	"""Whether this entry can talk to Vome as an existing house.
+
+	Guest runs count: they hold real relay credentials, just on a clock.
+	A backup key on a hosted VM also counts — that house already has an
+	account.
+	"""
+	server_id, secret = _agent_credentials(entry)
+	return bool(server_id and secret)
 
 
 def is_guest(entry: ConfigEntry) -> bool:
@@ -108,6 +129,45 @@ def guest_seconds_left(entry: ConfigEntry, *, now: Optional[float] = None) -> in
 
 def claim_url(entry: ConfigEntry) -> str:
 	return str(_relay(entry).get(CONF_RELAY_GUEST_CLAIM_URL) or "")
+
+
+def panel_links(entry: ConfigEntry, report: Optional[dict] = None) -> dict:
+	"""URLs the add-on panel, the sensor and the notification can show.
+
+	Built from this house's own credentials so the panel does not have
+	to wait for a stale status payload before it can link anywhere.
+	A guest run's live page is the claim URL; the signed-in health
+	page would 302 to login.
+	"""
+	portal = _portal_url(entry)
+	server_id, _secret = _agent_credentials(entry)
+	guest = is_guest(entry)
+	claim = claim_url(entry)
+	health = f"{portal}/servers/{server_id}/health" if server_id else ""
+	share = ""
+	if isinstance(report, dict):
+		share = str(report.get("share_url") or "")
+		token = str(report.get("share_token") or "")
+		if token and not share:
+			share = f"{portal}/score/{token}"
+	card = f"{health}#score-card" if health else f"{portal}/score"
+	if guest:
+		online = claim or share
+		health_out = ""
+		card_out = claim or f"{portal}/score"
+	else:
+		online = share or health
+		health_out = health
+		card_out = card if health else f"{portal}/score"
+	return {
+		"portal_url": portal,
+		"server_id": server_id,
+		"health_url": health_out,
+		"share_url": share,
+		"card_url": card_out,
+		"online_url": online,
+		"keep_it_url": claim,
+	}
 
 
 def stored_report(hass: HomeAssistant, entry_id: str) -> Optional[dict]:
@@ -179,18 +239,20 @@ async def async_run_check(
 			"guest": True,
 			"claim_url": opened.get("claim_url"),
 			"expires_at": opened.get("expires_at"),
+			"server_id": opened.get("server_id") or "",
 		}
 
 	session = async_get_clientsession(hass)
-	relay = _relay(entry)
+	server_id, secret = _agent_credentials(entry)
 	result = await async_start_health_check(
-		session, _portal_url(entry), relay.get(CONF_RELAY_SECRET), use_ai=use_ai,
+		session, _portal_url(entry), secret, use_ai=use_ai,
 	)
 	return {
 		"status": result.get("status") or "queued",
 		"guest": is_guest(entry),
 		"claim_url": claim_url(entry),
-		"expires_at": relay.get(CONF_RELAY_GUEST_EXPIRES),
+		"expires_at": _relay(entry).get(CONF_RELAY_GUEST_EXPIRES),
+		"server_id": server_id,
 	}
 
 
@@ -207,10 +269,10 @@ async def async_refresh_report(
 	if not is_linked(entry):
 		return None
 	session = async_get_clientsession(hass)
-	relay = _relay(entry)
+	_server_id, secret = _agent_credentials(entry)
 	try:
 		payload = await async_fetch_health_report(
-			session, _portal_url(entry), relay.get(CONF_RELAY_SECRET),
+			session, _portal_url(entry), secret,
 		)
 	except RuntimeError as err:
 		if is_guest(entry):
@@ -227,6 +289,14 @@ async def async_refresh_report(
 	report = payload.get("report")
 	if not report:
 		return None
+	# URLs live next to the findings so the panel can link without
+	# reconstructing them from a stale status payload.
+	if isinstance(report, dict):
+		for key in ("health_url", "share_url", "card_url", "online_url"):
+			if payload.get(key):
+				report[key] = payload[key]
+		if payload.get("card_included") is not None:
+			report["card_included"] = bool(payload.get("card_included"))
 	_store_report(hass, entry.entry_id, report)
 	return report
 
@@ -266,7 +336,7 @@ async def _notify_guest_run(hass: HomeAssistant, entry: ConfigEntry, url: str) -
 	persistent_notification.async_create(
 		hass,
 		(
-			f"Your health check is running. Open it here to see the score:\n\n"
+			f"Your health check is running. Open it online here:\n\n"
 			f"{url}\n\n"
 			"It is not tied to an account yet — Vome deletes the check, and the "
 			"link to this Home Assistant, in two hours unless you sign in from "
@@ -282,13 +352,26 @@ async def _notify_result(hass: HomeAssistant, entry: ConfigEntry, report: dict) 
 	lines = [f"Health score: {score}/100." if score is not None else "Check finished."]
 	if report.get("summary"):
 		lines.append(str(report["summary"]))
-	if is_guest(entry) and claim_url(entry):
+	links = panel_links(entry, report)
+	if is_guest(entry) and links.get("keep_it_url"):
 		mins = guest_seconds_left(entry) // 60
 		lines.append(
 			f"This run is not saved to an account. Keep it (and this link to "
-			f"Home Assistant) by signing in at {claim_url(entry)} — about "
+			f"Home Assistant) by signing in at {links['keep_it_url']} — about "
 			f"{mins} minutes left."
 		)
+	elif links.get("online_url"):
+		lines.append(f"Open this score online: {links['online_url']}")
+		if links.get("card_url") and links["card_url"] != links.get("online_url"):
+			lines.append(
+				"Ask the AI Doctor there, or publish a shareable card "
+				f"({links['card_url']}). Hosting and Connect customers publish free."
+			)
+		elif links.get("card_url"):
+			lines.append(
+				"Ask the AI Doctor on that page, or publish a shareable card. "
+				"Hosting and Connect customers publish free."
+			)
 	persistent_notification.async_create(
 		hass, "\n\n".join(lines), title="Vome health score",
 		notification_id=NOTIFICATION_ID,

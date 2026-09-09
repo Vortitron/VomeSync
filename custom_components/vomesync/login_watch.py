@@ -163,6 +163,16 @@ class LoginWatcher:
             return
         batch, self._queue = self._queue, []
         try:
-            await self._send(batch)
-        except Exception:  # noqa: BLE001 - dropped, never requeued into a wall
-            _LOGGER.debug("Could not report login events to Vome", exc_info=True)
+            sent = await self._send(batch)
+        except Exception:  # noqa: BLE001 - requeued below, retried on the next event
+            _LOGGER.debug("Could not report login events to Vome; will retry", exc_info=True)
+            sent = False
+        # ``False`` is the explicit "the relay was down, this never left"
+        # signal (see ``relay_client.send_access_events``); anything else --
+        # ``True``, or a bare stub in a test -- counts as sent.  Requeued
+        # events go back at the front, merged with whatever arrived during
+        # the await, and trimmed the same way ``_handle`` bounds the queue.
+        if sent is False:
+            self._queue = batch + self._queue
+            if len(self._queue) > MAX_QUEUED:
+                del self._queue[: len(self._queue) - MAX_QUEUED]

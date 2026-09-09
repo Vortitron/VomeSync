@@ -1187,33 +1187,64 @@
 
 	function healthClockCard() {
 		if (!healthData || healthData.saved_to_account !== false) return "";
-		const url = healthData.keep_it_url || "";
+		const url = healthData.keep_it_url || healthData.online_url || "";
 		const mins = Math.max(0, Math.round((healthData.deleted_in_seconds || 0) / 60));
 		return `
 		<div class="card warn-card">
 			<h2>This check is not saved</h2>
 			<p class="muted">Vome deletes it — and the temporary link to this Home Assistant — in about ${mins} minute${mins === 1 ? "" : "s"} unless you sign in and keep it. The report stays here either way.</p>
-			${url ? `<div class="row"><a class="btn primary" href="${escapeHtml(url)}" target="_blank" rel="noopener">Open it and sign in</a></div>` : ""}
+			${url ? `<div class="row"><a class="btn primary" href="${escapeHtml(url)}" target="_blank" rel="noopener">Open it online and sign in</a></div>` : ""}
 		</div>`;
 	}
 
-	// The AI Doctor takes one finding apart in a conversation of its own.
-	// It runs at Vome, against the account that owns this home, so the
-	// panel links to it rather than pretending to host it — and says so
-	// plainly when there is no account for it to belong to yet.
-	function doctorUrl() {
-		const serverId = (state && state.server_id) || "";
-		const base = (state && (state.portal_url || state.default_portal_url)) || "https://vome.io";
-		if (!serverId || !vomeHomeLinked()) return "";
-		return `${base.replace(/\/$/, "")}/servers/${encodeURIComponent(serverId)}/health`;
+	// Links come from the health-score API (this house's own credentials),
+	// not from the last /api/status payload. After a guest run the status
+	// can still say "not linked" while the check already has a URL.
+	function healthUrls() {
+		const portal = (
+			(healthData && healthData.portal_url)
+			|| (state && (state.portal_url || state.default_portal_url))
+			|| "https://vome.io"
+		).replace(/\/$/, "");
+		const serverId = (healthData && healthData.server_id) || (state && state.server_id) || "";
+		const guest = !!(healthData && healthData.saved_to_account === false);
+		const claim = (healthData && (healthData.keep_it_url || healthData.online_url)) || "";
+		const health = (healthData && healthData.health_url) || (serverId && !guest ? `${portal}/servers/${encodeURIComponent(serverId)}/health` : "");
+		const share = (healthData && healthData.share_url) || "";
+		const card = (healthData && healthData.card_url) || (guest ? (claim || `${portal}/score`) : (health ? `${health}#score-card` : `${portal}/score`));
+		const online = (healthData && healthData.online_url) || claim || share || health;
+		return { portal, serverId, guest, claim, health, share, card, online };
+	}
+
+	function healthActionRow() {
+		const report = (healthData && healthData.report) || null;
+		if (!report) return "";
+		const urls = healthUrls();
+		const included = !!(healthData && healthData.card_included);
+		const shareLabel = urls.share
+			? "Open the shareable card"
+			: (included ? "Publish this as a card — included" : "Publish or buy a shareable card");
+		const shareHref = urls.share || urls.card || `${urls.portal}/score`;
+		const doctorHref = urls.health || urls.claim || urls.online;
+		const openHref = urls.online || urls.health || urls.claim;
+		if (!openHref && !shareHref && !doctorHref) {
+			return `<p class="muted">Want to post this? Sign in to keep the check, then a shareable card of your score can be published from vome.io.</p>`;
+		}
+		return `
+			<div class="row health-actions">
+				${openHref ? `<a class="btn primary" href="${escapeHtml(openHref)}" target="_blank" rel="noopener">Open this score online</a>` : ""}
+				${doctorHref ? `<a class="btn" href="${escapeHtml(doctorHref)}" target="_blank" rel="noopener">Ask the AI Doctor</a>` : ""}
+				${shareHref ? `<a class="btn" href="${escapeHtml(shareHref)}" target="_blank" rel="noopener">${shareLabel}</a>` : ""}
+			</div>
+			<p class="muted" style="margin-top:0.5rem">A public card shows the number and three badges — never device names. ${included ? "Included with hosting and Connect." : "49 kr to publish, or free with hosting, Connect, or a voucher."} The check itself stays free.</p>`;
 	}
 
 	function healthFindingsCard() {
 		const report = (healthData && healthData.report) || null;
 		if (!report) return "";
-		const findings = report.findings || [];
-		const doctor = doctorUrl();
-		const rows = findings.map((f) => `
+		const urls = healthUrls();
+		const doctor = urls.health || urls.claim || urls.online;
+		const rows = (report.findings || []).map((f) => `
 			<li>
 				<strong>${escapeHtml(f.title || "")}</strong>
 				<span class="pill ${escapeHtml(f.severity || "info")}">${escapeHtml(f.severity || "info")}</span>
@@ -1227,27 +1258,9 @@
 			<h2>Score</h2>
 			<p class="health-score ${healthToneClass(score)}">${score === null || score === undefined ? "—" : escapeHtml(String(score))}<span class="muted"> / 100</span></p>
 			${report.summary ? `<p class="muted">${escapeHtml(report.summary)}</p>` : ""}
+			${healthActionRow()}
 			${rows ? `<ul class="health-findings">${rows}</ul>` : `<p class="muted">Nothing to report — that is the good outcome.</p>`}
-			${rows && !doctor ? `<p class="muted">The <strong>AI Doctor</strong> can take any of these apart — one finding, one answer, on your own system. It needs an account to belong to, so sign in and keep this check first.</p>` : ""}
-			${scoreCardRow(score)}
 		</div>`;
-	}
-
-	// The card is the shareable version of the number: a public page with
-	// the score and three badges on it, and never a device name. Bought at
-	// Vome, from the report page, so this is a link rather than a checkout
-	// pretending to live in Home Assistant.
-	function scoreCardRow(score) {
-		if (score === null || score === undefined) return "";
-		const doctor = doctorUrl();
-		if (!doctor) {
-			return `<p class="muted">Want to post this? A shareable card of your score can be published once this check is saved to an account.</p>`;
-		}
-		return `
-			<div class="row" style="margin-top:0.9rem">
-				<a class="btn" href="${escapeHtml(doctor)}#score-card" target="_blank" rel="noopener">Publish this as a card</a>
-			</div>
-			<p class="muted" style="margin-top:0.5rem">A public page with your score and three badges — never device names. Yours to share; the check itself stays free.</p>`;
 	}
 
 	function renderHealth() {
@@ -1282,11 +1295,19 @@
 					healthData = Object.assign({}, healthData, {
 						saved_to_account: false,
 						keep_it_url: started.claim_url,
+						online_url: started.claim_url,
+						card_url: started.claim_url,
+						server_id: started.server_id || (healthData && healthData.server_id) || "",
 						deleted_in_seconds: Math.max(
 							0, (started.expires_at || 0) - Math.floor(Date.now() / 1000),
 						),
 					});
 				}
+				try {
+					const next = await api("/api/status");
+					state = next;
+					syncChrome();
+				} catch (_err) { /* keep the last status if this races HA */ }
 				// The check runs at Vome's end; poll for the write-up rather
 				// than holding this request open for two minutes.
 				watchHealth();
