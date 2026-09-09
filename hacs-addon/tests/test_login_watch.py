@@ -140,6 +140,34 @@ def test_a_broken_send_cannot_break_the_event_bus(watcher):
 	})  # must not raise
 
 
+def test_a_failed_send_is_requeued_and_retried(watcher):
+	"""``send_access_events`` returning False (relay down) must not lose the event."""
+	calls = []
+
+	async def flaky(batch):
+		calls.append(batch)
+		if len(calls) == 1:
+			return False
+		watcher.sent.append(batch)
+		return True
+
+	watcher.watch._send = flaky
+	watcher.hass.bus.fire(login_watch.EVENT_SYSTEM_LOG, {
+		"name": login_watch.BAN_LOGGER, "message": [FAILURE_LINE],
+	})
+	assert watcher.sent == [], "must not count as sent while the relay is down"
+	assert watcher.watch._queue, "a failed send must stay queued for retry"
+
+	# The relay is back: the next failure triggers another flush, which
+	# succeeds and picks up the requeued one alongside the new one.
+	watcher.hass.bus.fire(login_watch.EVENT_SYSTEM_LOG, {
+		"name": login_watch.BAN_LOGGER, "message": [FAILURE_LINE],
+	})
+	assert len(watcher.sent) == 1
+	assert len(watcher.sent[0]) == 2, "the retried event travels with the new one"
+	assert watcher.watch._queue == []
+
+
 def test_a_malformed_event_is_ignored(watcher):
 	watcher.hass.bus.fire(login_watch.EVENT_SYSTEM_LOG, {})
 	watcher.hass.bus.fire(login_watch.EVENT_SYSTEM_LOG, {"name": None, "message": None})
