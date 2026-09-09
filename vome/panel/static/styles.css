@@ -294,6 +294,18 @@ input, select {
 	.tree { border-right: 0; border-bottom: 1px solid var(--line); }
 	.tree nav { flex-direction: row; flex-wrap: wrap; }
 }
+@media (max-width: 560px) {
+	main { padding: 1rem 0.9rem 2rem; }
+	.tree { padding: 0.9rem 0.7rem; }
+	.top { flex-wrap: wrap; row-gap: 0.6rem; }
+	.top h1 { font-size: 1.2rem; }
+	.top-actions { width: 100%; justify-content: flex-start; }
+	.card { padding: 0.85rem 0.9rem; }
+	.health-score { font-size: 2.3rem; }
+	.health-actions.row { flex-direction: column; align-items: stretch; }
+	.health-actions.row .btn { text-align: center; }
+	table { display: block; overflow-x: auto; white-space: nowrap; }
+}
 
 /* LAN-tunnel / RDP helper UI */
 ol.steps { margin: 0.5rem 0 0; padding-left: 1.2rem; }
@@ -355,9 +367,23 @@ ol.steps ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
 	margin: 1rem 0 0;
 }
 .health-findings li {
-	padding: 0.75rem 0;
 	border-top: 1px solid var(--line);
 }
+.health-findings details { padding: 0.75rem 0; }
+.health-findings summary {
+	cursor: pointer;
+	list-style: none;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.5rem 0.6rem;
+}
+.health-findings summary::-webkit-details-marker { display: none; }
+.health-findings summary::before { content: "▸ "; color: var(--muted); flex: 0 0 auto; }
+.health-findings details[open] summary::before { content: "▾ "; }
+.health-findings summary strong { flex: 1 1 auto; }
+.health-findings details > .muted,
+.health-findings details > div { margin-top: 0.5rem; }
 .health-actions { margin-top: 0.9rem; }
 a.link {
 	color: var(--accent);

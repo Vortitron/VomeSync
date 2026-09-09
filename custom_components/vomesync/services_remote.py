@@ -17,6 +17,8 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
+	CONF_BACKUP,
+	CONF_BACKUP_SECRET,
 	CONF_RELAY,
 	CONF_RELAY_FORWARD_UI,
 	CONF_RELAY_LAN_ROUTES,
@@ -28,6 +30,7 @@ from .const import (
 	DEFAULT_PORTAL_URL,
 	DEFAULT_RELAY_WS_URL,
 	relay_ws_url_for_portal,
+	backup_secret_server_id,
 	DOMAIN,
 	FORWARD_HOST_KEY,
 	INTEGRATION_VERSION,
@@ -321,6 +324,21 @@ def _entry_portal_url(entry: ConfigEntry) -> str:
 		return DEFAULT_PORTAL_URL
 
 
+def _hosted_server_id(entry: ConfigEntry) -> str:
+	"""The server id if this entry authenticates via a backup key.
+
+	That key only exists at all for a VomeHome-hosted VM (see
+	``CONF_BACKUP``'s docstring in const.py): it has no relay tunnel to
+	itself, so it holds no relay secret and never gets one. Its presence is
+	therefore an unambiguous "this is hosted, not self-hosted" signal —
+	distinct from ``linked``/``server_id`` below, which until now only ever
+	looked at the relay dict and so read as "not linked" for a hosted home.
+	"""
+	options = getattr(entry, "options", None) or {}
+	backup = options.get(CONF_BACKUP) or {}
+	return backup_secret_server_id(backup.get(CONF_BACKUP_SECRET)) or ""
+
+
 def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
 	"""Public status dict for the add-on panel (no secrets)."""
 	relay = dict((entry.options or {}).get(CONF_RELAY) or {})
@@ -328,12 +346,19 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 	local_url, local_url_source = describe_local_core_url(
 		hass, relay.get(CONF_RELAY_LOCAL_URL)
 	)
+	hosted_server_id = _hosted_server_id(entry)
+	hosted = bool(hosted_server_id)
+	# A hosted VM has no relay tunnel to gate, so the portal always serves
+	# its friendly domain's HA UI — full-UI forwarding is not a toggle this
+	# entry has an opinion on, the way it is for a self-hosted relay link.
+	forward_ui = True if hosted else bool(relay.get(CONF_RELAY_FORWARD_UI))
 	return {
 		"entry_id": entry.entry_id,
 		"integration_version": INTEGRATION_VERSION,
-		"linked": bool(relay.get(CONF_RELAY_SERVER_ID)),
-		"server_id": relay.get(CONF_RELAY_SERVER_ID) or "",
-		"forward_ui": bool(relay.get(CONF_RELAY_FORWARD_UI)),
+		"linked": hosted or bool(relay.get(CONF_RELAY_SERVER_ID)),
+		"hosted": hosted,
+		"server_id": relay.get(CONF_RELAY_SERVER_ID) or hosted_server_id,
+		"forward_ui": forward_ui,
 		"lan_routes": routes,
 		"lan_max": LAN_MAX_ROUTES,
 		"webhooks": normalise_webhooks(relay.get(CONF_RELAY_WEBHOOKS)),
@@ -347,15 +372,17 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 		"local_url_override": relay.get(CONF_RELAY_LOCAL_URL) or "",
 		# Whether Core knows the public name it is being reached on. Only
 		# meaningful once full-UI forwarding is actually serving that name.
-		"external_url": _external_url_check(
-			hass, bool(relay.get(CONF_RELAY_FORWARD_UI))
-		),
+		"external_url": _external_url_check(hass, forward_ui),
 		"default_portal_url": DEFAULT_PORTAL_URL,
 		# Which Vome this home actually talks to, so the panel can link
 		# into it (the AI Doctor lives on the report page there). Falls
 		# back to the default rather than guessing at vome.io when the
 		# entry was set up against staging.
 		"portal_url": _entry_portal_url(entry),
+		# The friendly-domain host last observed forwarding a request here —
+		# so the panel can show exactly *which* Vome address this is, not
+		# just that some link exists. Blank until it has been visited once.
+		"forward_url": _observed_forward_url(hass),
 	}
 
 

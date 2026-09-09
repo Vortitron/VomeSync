@@ -169,7 +169,7 @@ def test_the_ai_doctor_is_offered_on_each_finding():
 def test_the_score_always_has_an_online_link():
 	"""The old panel hid Open / Doctor / Share behind a stale linked
 	flag, so a finished check in the app had nowhere to go."""
-	assert "Open this score online" in PANEL_JS
+	assert "Open in Vome" in PANEL_JS
 	assert "function healthActionRow(" in PANEL_JS
 	assert "health_url" in PANEL_JS
 	assert "card_url" in PANEL_JS
@@ -187,3 +187,19 @@ def test_the_card_can_be_bought_from_here():
 def test_an_unsaved_check_still_has_somewhere_to_open():
 	assert "Open it online and sign in" in PANEL_JS
 	assert "keep_it_url" in PANEL_JS
+
+
+def test_a_hosted_home_gets_a_forwarding_pill_that_matches_reality():
+	"""GamlaBio is hosted, has no relay tunnel to gate, and its friendly
+	domain forwards the HA UI regardless — the pill used to read
+	unconditionally off the relay-only flag and call that "off"."""
+	assert "state.hosted" in PANEL_JS
+	assert "hosted by Vome" in PANEL_JS
+
+
+def test_overview_shows_which_vome_this_is():
+	"""'Linked' on its own does not say *which* Vome account/home — add the
+	identity (server id or friendly domain) with a link to open it there."""
+	assert "function vomeIdentityLine(" in PANEL_JS
+	assert "open in Vome" in PANEL_JS
+	assert "state.forward_url" in PANEL_JS

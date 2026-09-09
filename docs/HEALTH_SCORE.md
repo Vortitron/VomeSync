@@ -89,6 +89,8 @@ the house still has one.
 
 After a check finishes, the notification and `sensor.vome_health_score` carry those URLs. A guest run's `online_url` is the keep-it link; a linked house's is `/servers/<id>/health`. A **hosted VomeHome VM** has no relay tunnel, so the check authenticates with the backup key and opens that same health page — it must not fall through to a throwaway guest run. Hosting and Connect customers publish the shareable card without the 49 kr; everyone else can pay or redeem a limited voucher.
 
+**Chatty devices** counts recorder writes in this Home Assistant (`GET /api/vomesync/health/recorder_counts`) rather than downloading a full day of `/api/history/period`. The dump is why that check used to fail on any busy recorder.
+
 ## What is sent
 
 Only the findings leave the instance, and only to be turned into prose —

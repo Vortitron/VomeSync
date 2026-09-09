@@ -2,9 +2,9 @@ name: VomeSync HA tests
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, Develop ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, Develop ]
   workflow_dispatch:
 
 env:

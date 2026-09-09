@@ -102,6 +102,20 @@
 		return !!(state && state.linked);
 	}
 
+	// A house with more than one Vome home (or one moved between relay and
+	// hosted) needs to see *which* one this panel is talking about, not just
+	// that a link exists — otherwise "linked" and "forwarding" pills read as
+	// generic reassurance rather than a specific, checkable fact.
+	function vomeIdentityLine() {
+		if (!vomeHomeLinked()) return "";
+		const portal = ((state && (state.portal_url || state.default_portal_url)) || "https://vome.io").replace(/\/$/, "");
+		const serverId = (state && state.server_id) || "";
+		const forwardUrl = (state && state.forward_url) || "";
+		const openHref = forwardUrl || (serverId ? `${portal}/servers/${encodeURIComponent(serverId)}` : portal);
+		const label = forwardUrl ? forwardUrl.replace(/^https?:\/\//, "") : (serverId ? `server ${serverId}` : "your Vome account");
+		return `<p class="muted" style="margin-top:0.5rem">Linked as <code>${escapeHtml(label)}</code> — <a class="link" href="${escapeHtml(openHref)}" target="_blank" rel="noopener">open in Vome</a></p>`;
+	}
+
 	function syncChrome() {
 		const linked = vomeHomeLinked();
 		const header = document.getElementById("header-connect");
@@ -341,10 +355,12 @@
 				<p class="muted">Same settings as the HACS options menu, laid out as a tree so remote access and LAN tunnels are easier to find.</p>
 				<div class="row">
 					${pill(vomeHomeLinked(), "Linked to Vome", "Not linked")}
-					${pill(!!(state && state.forward_ui), "HA UI forwarding on", "HA UI forwarding off")}
+					${pill(!!(state && state.forward_ui), (state && state.hosted) ? "HA UI forwarding on (hosted by Vome)" : "HA UI forwarding on", "HA UI forwarding off")}
+					${(state && !state.forward_ui) ? `<a class="link" href="#" id="ov-device-urls">A friendly domain still works for devices — manage device URLs</a>` : ""}
 					${pill(enabled > 0, `${enabled} LAN tunnel${enabled === 1 ? "" : "s"} on`, "No LAN tunnels")}
 					${pill(!!(state && state.addon_marker), "Add-on install", "HACS-only install")}
 				</div>
+				${vomeIdentityLine()}
 			</div>
 			<div class="card">
 				<h2>Quick actions</h2>
@@ -357,6 +373,8 @@
 				</div>
 				<p class="muted" style="margin-top:0.8rem">After a friendly domain is active on vome.io: Home Assistant opens at the domain root (needs UI forwarding on), LAN web devices at <code>/t/&lt;slug&gt;/</code>, and Remote Desktop through a tunnel token.</p>
 			</div>`;
+		const deviceUrlsLink = document.getElementById("ov-device-urls");
+		if (deviceUrlsLink) deviceUrlsLink.onclick = (e) => { e.preventDefault(); setView("lan"); };
 		document.getElementById("qa-health").onclick = () => setView("health");
 		document.getElementById("qa-lan").onclick = () => setView("lan");
 		document.getElementById("qa-forward").onclick = () => setView("forward");
@@ -455,10 +473,19 @@
 	}
 
 	function renderForward() {
+		const hosted = !!(state && state.hosted);
 		const on = !!(state && state.forward_ui);
 		const localUrl = (state && state.local_url) || "";
 		const override = (state && state.local_url_override) || "";
-		viewEl.innerHTML = `
+		// A hosted VM has no relay tunnel for this flag to gate — the
+		// friendly domain always shows the HA UI, so the toggle would be
+		// inert. Explain that instead of offering a control that does
+		// nothing when saved.
+		const forwardCard = hosted ? `
+			<div class="card info-card">
+				<h2>Full-UI forwarding</h2>
+				<p class="muted">This Home Assistant is hosted by Vome, so its friendly domain always shows the full HA UI — there is no relay tunnel here to gate, and nothing to switch off.</p>
+			</div>` : `
 			<div class="card">
 				<h2>Full-UI forwarding</h2>
 				<p class="muted">Exposes this Home Assistant on your friendly domain. Keep it off unless you need browser access to HA itself. LAN tunnels work independently.</p>
@@ -469,7 +496,9 @@
 				<div class="row">
 					<button type="button" class="primary" id="save-fwd">Save</button>
 				</div>
-			</div>
+			</div>`;
+		viewEl.innerHTML = `
+			${forwardCard}
 			<div class="card">
 				<h2>How Vome reaches Home Assistant</h2>
 				<p class="muted">Everything Vome does — remote access, the assistant, LAN tunnels — goes through this address on your own machine. Vome currently uses <code>${escapeHtml(localUrl)}</code>. ${escapeHtml(localUrlNote())}</p>
@@ -493,7 +522,8 @@
 				reportError(err);
 			}
 		};
-		document.getElementById("save-fwd").onclick = async () => {
+		const saveFwd = document.getElementById("save-fwd");
+		if (saveFwd) saveFwd.onclick = async () => {
 			try {
 				const enabled = document.getElementById("fwd").checked;
 				state = await api("/api/forward_ui", {
@@ -1225,18 +1255,18 @@
 			? "Open the shareable card"
 			: (included ? "Publish this as a card — included" : "Publish or buy a shareable card");
 		const shareHref = urls.share || urls.card || `${urls.portal}/score`;
-		const doctorHref = urls.health || urls.claim || urls.online;
-		const openHref = urls.online || urls.health || urls.claim;
-		if (!openHref && !shareHref && !doctorHref) {
-			return `<p class="muted">Want to post this? Sign in to keep the check, then a shareable card of your score can be published from vome.io.</p>`;
-		}
+		const doctorHref = urls.health || urls.claim || urls.online || urls.portal;
+		// Always resolves to something, down to the bare portal URL — this is
+		// the funnel into a Vome account, so it must never quietly disappear.
+		const openHref = urls.online || urls.health || urls.claim || urls.portal;
+		const openLabel = urls.guest ? "Open in Vome — create your account" : "Open in Vome";
 		return `
 			<div class="row health-actions">
-				${openHref ? `<a class="btn primary" href="${escapeHtml(openHref)}" target="_blank" rel="noopener">Open this score online</a>` : ""}
-				${doctorHref ? `<a class="btn" href="${escapeHtml(doctorHref)}" target="_blank" rel="noopener">Ask the AI Doctor</a>` : ""}
-				${shareHref ? `<a class="btn" href="${escapeHtml(shareHref)}" target="_blank" rel="noopener">${shareLabel}</a>` : ""}
+				<a class="btn primary" href="${escapeHtml(openHref)}" target="_blank" rel="noopener">${openLabel}</a>
+				<a class="btn" href="${escapeHtml(doctorHref)}" target="_blank" rel="noopener">Ask the AI Doctor</a>
+				<a class="btn" href="${escapeHtml(shareHref)}" target="_blank" rel="noopener">${shareLabel}</a>
 			</div>
-			<p class="muted" style="margin-top:0.5rem">A public card shows the number and three badges — never device names. ${included ? "Included with hosting and Connect." : "49 kr to publish, or free with hosting, Connect, or a voucher."} The check itself stays free.</p>`;
+			<p class="muted" style="margin-top:0.5rem">${urls.guest ? "One click links this Home Assistant to a new Vome account and keeps this result — nothing is kept until you do. " : ""}A public card shows the number and three badges — never device names. ${included ? "Included with hosting and Connect." : "49 kr to publish, or free with hosting, Connect, or a voucher."} The check itself stays free.</p>`;
 	}
 
 	function healthFindingsCard() {
@@ -1244,14 +1274,24 @@
 		if (!report) return "";
 		const urls = healthUrls();
 		const doctor = urls.health || urls.claim || urls.online;
-		const rows = (report.findings || []).map((f) => `
+		// Critical/warn findings open by default — those are the ones worth
+		// seeing without a tap. Everything else (advice/unknown/info) starts
+		// collapsed so a long, healthy-ish report still reads as tidy.
+		const rows = (report.findings || []).map((f) => {
+			const openAttr = (f.severity === "critical" || f.severity === "warn") ? " open" : "";
+			return `
 			<li>
-				<strong>${escapeHtml(f.title || "")}</strong>
-				<span class="pill ${escapeHtml(f.severity || "info")}">${escapeHtml(f.severity || "info")}</span>
-				<div class="muted">${escapeHtml(f.evidence || "")}</div>
-				${f.recommendation ? `<div class="muted"><em>${escapeHtml(f.recommendation)}</em></div>` : ""}
-				${doctor ? `<div><a class="link" href="${escapeHtml(doctor)}" target="_blank" rel="noopener">Ask the AI Doctor about this</a></div>` : ""}
-			</li>`).join("");
+				<details${openAttr}>
+					<summary>
+						<strong>${escapeHtml(f.title || "")}</strong>
+						<span class="pill ${escapeHtml(f.severity || "info")}">${escapeHtml(f.severity || "info")}</span>
+					</summary>
+					<div class="muted">${escapeHtml(f.evidence || "")}</div>
+					${f.recommendation ? `<div class="muted"><em>${escapeHtml(f.recommendation)}</em></div>` : ""}
+					${doctor ? `<div><a class="link" href="${escapeHtml(doctor)}" target="_blank" rel="noopener">Ask the AI Doctor about this</a></div>` : ""}
+				</details>
+			</li>`;
+		}).join("");
 		const score = report.score;
 		return `
 		<div class="card">
