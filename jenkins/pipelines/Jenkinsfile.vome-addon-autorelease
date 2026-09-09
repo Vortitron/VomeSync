@@ -1,0 +1,93 @@
+// =============================================================================
+// VomeSync Supervisor add-on — Auto-Release on a version bump
+//
+// vome-addon-release already does the real work (validate, sync + test,
+// build the zip, publish) but has never been triggered by anything -- its
+// own description used to say so ("Not triggered on push"). This is what
+// starts it: a push to main that bumps vome/config.yaml's version gets a
+// matching GitHub Release, the same way the HACS integration's own version
+// bump gets one via .github/workflows/release.yml, without a human needing
+// to remember either step.
+//
+// The tag is prefixed (vome-addon-vX.Y.Z, not vX.Y.Z) because this repo's
+// tag namespace is shared with the HACS integration's own release tags,
+// and those need to stay a clean vX.Y.Z for HACS's version display and
+// update-comparison logic to read correctly.
+// =============================================================================
+
+pipeline {
+	agent any
+
+	options {
+		ansiColor('xterm')
+		timestamps()
+		timeout(time: 30, unit: 'MINUTES')
+		buildDiscarder(logRotator(numToKeepStr: '15', daysToKeepStr: '30'))
+		disableConcurrentBuilds()
+	}
+
+	triggers {
+		// Declared here too, not just in casc.yaml: a Jenkinsfile's own
+		// triggers{} block only registers after the pipeline has run once,
+		// so a brand-new job never fires without this. Confirmed the hard
+		// way on the VomeHome side (jenkins/PIPELINES.md there) -- a job
+		// with triggers only in the Jenkinsfile sat at "not built" forever,
+		// waiting for a trigger that only a build would have registered.
+		//
+		// No pollSCM: every VomeSync job deliberately does without it (see
+		// PIPELINES.md's "GitHub webhooks" section) -- the git plugin
+		// reported spurious changes on every poll for this repo and ran a
+		// full build every few minutes regardless of whether anything had
+		// actually changed.
+		githubPush()
+	}
+
+	stages {
+		stage('Check for a version bump') {
+			steps {
+				script {
+					sh 'git fetch --tags -q'
+					def version = sh(
+						script: "grep -m1 '^version:' vome/config.yaml | sed -E 's/version: *\"([^\"]+)\"/\\1/'",
+						returnStdout: true
+					).trim()
+					if (!version) {
+						error('Could not read a version out of vome/config.yaml')
+					}
+					env.ADDON_VERSION = version
+					env.ADDON_TAG = "vome-addon-v${version}"
+					def existing = sh(script: "git tag -l '${env.ADDON_TAG}'", returnStdout: true).trim()
+					env.ADDON_ALREADY_RELEASED = existing ? 'true' : 'false'
+					currentBuild.description = env.ADDON_ALREADY_RELEASED == 'true'
+						? "${env.ADDON_TAG} (already released)"
+						: "${env.ADDON_TAG} (new)"
+				}
+			}
+		}
+
+		stage('Release') {
+			when {
+				expression { env.ADDON_ALREADY_RELEASED == 'false' }
+			}
+			steps {
+				build job: 'VomeSync/vome-addon-release', wait: true, propagate: true,
+					parameters: [string(name: 'RELEASE_TAG', value: env.ADDON_TAG)]
+			}
+		}
+	}
+
+	post {
+		success {
+			script {
+				if (env.ADDON_ALREADY_RELEASED == 'false') {
+					echo "✓ Released ${env.ADDON_TAG}."
+				} else {
+					echo "No version bump (still ${env.ADDON_TAG}) -- nothing to release."
+				}
+			}
+		}
+		failure {
+			echo "✗ Add-on auto-release failed for ${env.ADDON_TAG ?: 'unresolved version'} -- check vome-addon-release for which stage gave up."
+		}
+	}
+}

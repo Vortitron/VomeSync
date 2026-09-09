@@ -1,5 +1,11 @@
 // =============================================================================
-// Vome Supervisor add-on — Release packaging (VomeSync repo)
+// Vome Supervisor add-on — Release packaging + publishing (VomeSync repo)
+//
+// Packages the add-on, tests it, and -- if GITHUB_TOKEN is available --
+// publishes the result as a GitHub Release with the zip attached. Runs
+// manually from the Jenkins GUI, or automatically from
+// vome-addon-autorelease whenever vome/config.yaml's version changes and
+// has no matching release tag yet.
 // =============================================================================
 
 pipeline {
@@ -9,7 +15,7 @@ pipeline {
         string(
             name: 'RELEASE_TAG',
             defaultValue: '',
-            description: 'Optional release label (example: v0.2.1). Leave empty to use config.yaml version.'
+            description: 'Git tag for the published release (example: vome-addon-v0.3.37). Leave empty to use vX.Y.Z from config.yaml -- note this becomes the actual release tag now, not just an artefact label.'
         )
     }
 
@@ -78,6 +84,36 @@ pipeline {
         success {
             archiveArtifacts artifacts: 'dist/vome-addon-*.zip,dist/vome-addon-release.txt', fingerprint: true
             echo 'Vome add-on release artifact created and archived.'
+            script {
+                // Archiving in Jenkins is not a release: nothing outside this
+                // Jenkins instance could ever discover the artefact. This is
+                // what actually publishes it, using the same GITHUB_TOKEN /
+                // GITHUB_USERNAME already used for HTTPS checkout -- they
+                // reach every build via the container's env_file, so no
+                // withCredentials wrapper is needed. A missing token warns
+                // and skips (this stage is additive; the archived artifact
+                // is still there either way); an attempted call that fails
+                // fails the build, because a silently-not-actually-published
+                // release is worse than a red build telling you so.
+                if (!env.GITHUB_TOKEN?.trim()) {
+                    echo 'GITHUB_TOKEN is not set -- skipping the GitHub release. The artifact is archived in Jenkins only.'
+                } else {
+                    def info = readFile('dist/vome-addon-release.txt').trim()
+                    def props = [:]
+                    info.split('\n').each { line ->
+                        def parts = line.split('=', 2)
+                        if (parts.length == 2) { props[parts[0]] = parts[1] }
+                    }
+                    def tag = props['tag']
+                    def artifactName = props['artifact']
+                    if (!tag || !artifactName) {
+                        error("dist/vome-addon-release.txt did not contain both tag= and artifact=: ${info}")
+                    }
+                    withEnv(["RELEASE_TAG_RESOLVED=${tag}", "RELEASE_ARTIFACT=${artifactName}"]) {
+                        sh 'scripts/publish_addon_release.sh'
+                    }
+                }
+            }
         }
         failure {
             echo 'Vome add-on release pipeline failed.'

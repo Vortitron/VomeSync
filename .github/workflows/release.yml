@@ -1,0 +1,71 @@
+# =============================================================================
+# VomeSync integration — auto-release on a version bump
+#
+# HACS shows whatever a GitHub Release's tag says as the installed/available
+# version, and offers an update whenever a newer one exists. Cutting that
+# release has always been a manual, easily-forgotten step here: the
+# integration is at manifest version 0.9.30 and this repository has never
+# once had a tag. Every one of those thirty-odd versions shipped invisibly
+# to HACS.
+#
+# This closes that gap the same way the add-on's own release tag already
+# works one repo over (vomehome-failover-v*), but without needing a human to
+# remember an extra `git tag && git push --tags`: bump manifest.json's
+# version as part of the normal change, merge to main, and the release
+# appears on its own.
+#
+# Scoped tightly on purpose. It only ever runs when manifest.json changes on
+# main, and does nothing at all once the corresponding tag already exists --
+# so a rebase, a revert, or an unrelated merge commit touching the file
+# without changing the version number is a silent no-op, not a spurious
+# release.
+# =============================================================================
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "custom_components/vomesync/manifest.json"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Tag and release on a version bump
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read the manifest version
+        id: version
+        run: |
+          version=$(python3 -c "import json; print(json.load(open('custom_components/vomesync/manifest.json'))['version'])")
+          if [ -z "$version" ]; then
+            echo "manifest.json has no version" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether that version already has a release
+        id: check
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create the release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --generate-notes \
+            --target main
