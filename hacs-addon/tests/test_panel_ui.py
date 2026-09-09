@@ -201,5 +201,5 @@ def test_overview_shows_which_vome_this_is():
 	"""'Linked' on its own does not say *which* Vome account/home — add the
 	identity (server id or friendly domain) with a link to open it there."""
 	assert "function vomeIdentityLine(" in PANEL_JS
-	assert "open in Vome" in PANEL_JS
+	assert "in Vome" in PANEL_JS
 	assert "state.forward_url" in PANEL_JS

@@ -814,6 +814,15 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			}
 			options = dict(entry.options or {})
 			options[CONF_RELAY] = relay
+			# The credential just granted only works against the Vome that
+			# granted it. Without this, every later call falls through
+			# _entry_portal_url()'s default to production regardless of
+			# which site this house actually linked against (e.g. staging)
+			# — the health check would then ask production about a server
+			# id it has never heard of, get back "Unknown server", and (
+			# before relay_client._agent_request also got fixed) that
+			# error quietly read as success.
+			options["portal_url"] = portal_url
 			hass.config_entries.async_update_entry(entry, options=options)
 			await async_start_relay(hass, entry)
 			_notify_backup_agents_changed(hass)

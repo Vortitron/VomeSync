@@ -67,6 +67,8 @@ from .const import (
 	ESPHOME_STREAM_COMMANDS,
 	ESPHOME_STREAM_TIMEOUT,
 	ESPHOME_INGRESS_HOST,
+	ESPHOME_REMOTE_BUILD_PATH,
+	ESPHOME_REMOTE_BUILD_TIMEOUT,
 	ESPHOME_WEB_PORT_KEY,
 	LAN_TCP_TOKEN_DEFAULT_TTL,
 	RELAY_ALLOWED_METHODS,
@@ -82,6 +84,7 @@ from .const import (
 	FORWARD_HOST_KEY,
 	RELAY_FORWARD_STRIP_HEADERS,
 	RELAY_FORWARD_WS_PATHS,
+	RELAY_FORWARD_WS_INGRESS_RE,
 	RELAY_MINT_TOKEN_TIMEOUT,
 	RELAY_RECONNECT_DELAY,
 	RELAY_RECONNECT_MAX_DELAY,
@@ -478,6 +481,33 @@ def _safe_path_portion(path: Any) -> Optional[str]:
 		if segment in (".", "..") or unquote(segment) in (".", ".."):
 			return None
 	return portion
+
+
+_FQDN_RE = re.compile(
+	r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
+	r"(?:\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$"
+)
+_PRIVATE_V4_RE = re.compile(
+	r"^(?:10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2[0-9]|3[0-1])\.)"
+)
+
+
+def _valid_public_build_host(hostname: str) -> bool:
+	"""True when a Device Builder would be pairing with a public compile host.
+
+	Loopback, ``.local``, and RFC1918 addresses would pair this home with
+	whatever answered on the house LAN — not a Vome box.
+	"""
+	host = (hostname or "").strip().lower().rstrip(".")
+	if not host or len(host) > 253:
+		return False
+	if host in ("localhost", "localhost.localdomain") or host.endswith(".local"):
+		return False
+	if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", host):
+		if _PRIVATE_V4_RE.match(host):
+			return False
+		return all(0 <= int(part) <= 255 for part in host.split("."))
+	return bool(_FQDN_RE.match(host))
 
 
 async def async_ensure_local_access_token(hass: HomeAssistant) -> Optional[str]:
@@ -929,10 +959,15 @@ class RelayClient:
 				"code": 1008, "reason": "Full-UI forwarding is disabled.",
 			})
 			return
-		# Only the frontend's own socket is bridgeable; refuse anything else
-		# (exact match on the path portion, not a spoofable prefix).
+		# Only the frontend's own socket, or an add-on's ingress WebSocket
+		# (e.g. the ESPHome Device Builder dashboard), is bridgeable; refuse
+		# anything else (exact match or the ingress shape, not a spoofable
+		# prefix).
 		portion = _safe_path_portion(str(path))
-		if portion is None or portion not in RELAY_FORWARD_WS_PATHS:
+		if portion is None or (
+			portion not in RELAY_FORWARD_WS_PATHS
+			and not RELAY_FORWARD_WS_INGRESS_RE.match(portion)
+		):
 			await self._send(ws, {
 				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
 				"code": 1008, "reason": "WebSocket path not permitted.",
@@ -1608,8 +1643,11 @@ class RelayClient:
 		"""Proxy one ESPHome dashboard REST call (list / version / read+write YAML).
 
 		Only the allow-listed REST paths/methods are permitted; the streaming build
-		commands are not tunnelled.  ``body`` for a YAML write is sent verbatim as
-		``application/yaml``; reads carry no body.
+		The ESPHome dashboard REST subset (list / version / YAML read-write),
+		plus Vome's ``/migrate`` and ``/vome-remote-build`` translations.
+		Streaming compile/upload is not tunnelled.  ``body`` for a YAML write
+		is sent verbatim as ``application/yaml``; a remote-build pair is a
+		JSON object; reads carry no body.
 		"""
 		# Exact match on the path portion (query excluded) — a prefix check would
 		# let /devices-x or /edit/../delete slip through.
@@ -1628,6 +1666,8 @@ class RelayClient:
 		# /edit was removed when ESPHome split the dashboard out; the path now
 		# serves the single-page app, so a read returned HTML and a write went
 		# nowhere. Keep the relay's stable contract and translate here.
+		if portion == ESPHOME_REMOTE_BUILD_PATH:
+			return await self._esphome_remote_build(method, body)
 		if portion in ("/edit", "/migrate"):
 			return await self._esphome_config_via_ws(base, path, method, body)
 		url = base + path
@@ -1655,6 +1695,72 @@ class RelayClient:
 				f"ESPHome dashboard error: {err}. "
 				"Check the ESPHome add-on is running, then retry."
 			)
+
+	async def _esphome_remote_build(
+		self, method: str, body: Any
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""Drive Device Builder pairing against a Vome compile box.
+
+		The house dashboard dials the compile host; we only send the local
+		``remote_build/preview_pair`` + ``request_pair`` commands. Hostname
+		must be a public FQDN — a LAN or loopback target would pair this
+		home with whatever answered, which is not a Vome compile box.
+		"""
+		if method != "POST":
+			return 0, None, f"Unsupported ESPHome method: {method}"
+		payload = body
+		if isinstance(body, str):
+			try:
+				payload = json.loads(body)
+			except (ValueError, TypeError):
+				return 0, None, "Pairing body must be JSON."
+		if not isinstance(payload, dict):
+			return 0, None, "Pairing body must be a JSON object."
+		hostname = str(payload.get("hostname") or "").strip().lower().rstrip(".")
+		try:
+			port = int(payload.get("port"))
+		except (TypeError, ValueError):
+			return 0, None, "Pairing port must be an integer."
+		pairing_key = str(payload.get("pairing_key") or "").strip()
+		if not _valid_public_build_host(hostname):
+			return 0, None, "Refusing to pair with a host that is not a public DNS name."
+		if port < 1024 or port > 65535:
+			return 0, None, "Pairing port is out of range."
+		if not 8 <= len(pairing_key) <= 40 or not re.match(r"^[A-Za-z0-9-]+$", pairing_key):
+			return 0, None, "Pairing key is not the shape Device Builder prints."
+		base, problem = await self._resolve_esphome_base()
+		if not base:
+			return 0, None, problem or (
+				"ESPHome dashboard not found. Install the ESPHome add-on (2026.6 "
+				"or newer), or set the ESPHome dashboard URL in the Vome relay options."
+			)
+		try:
+			local = await self._get_session().ws_connect(
+				_to_ws_url(base, WS_PATH), heartbeat=30
+			)
+		except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+			self._esphome_base_cache = None
+			return 0, None, f"ESPHome dashboard error: {err}"
+		try:
+			session = EsphomeWsSession(local)
+			await session.handshake(ESPHOME_REMOTE_BUILD_TIMEOUT)
+			result = await session.pair_remote_build(
+				hostname, port, pairing_key, ESPHOME_REMOTE_BUILD_TIMEOUT,
+			)
+			return 200, json.dumps(result), None
+		except EsphomeWsError as err:
+			detail = str(err)
+			if "unknown command" in detail.lower() or "not found" in detail.lower():
+				return 0, None, (
+					"This ESPHome add-on does not support remote compile. Update "
+					"ESPHome Device Builder to 2026.6 or newer."
+				)
+			return 0, None, detail
+		except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+			return 0, None, f"ESPHome dashboard error: {err}"
+		finally:
+			with suppress(Exception):
+				await local.close()
 
 	async def _esphome_config_via_ws(
 		self, base: str, path: str, method: str, body: Any
@@ -1913,6 +2019,17 @@ async def _agent_request(
 	endpoints answer meaningfully with 202 (a check is running) and 404
 	(there has never been one) — treating either as a failure would turn
 	"not yet" into "broken".
+
+	That "not yet" 404 is bodyless-of-an-error (``{"status": ..., "report":
+	None}``) — the *only* other 404 either endpoint sends is health-check's
+	"Unknown server" (an entry whose credentials belong to a different Vome
+	than its stored ``portal_url``, e.g. staging credentials with a
+	production URL), which carries an ``error`` key. So checking for that
+	key, not the status code, is what tells the two apart: without it, an
+	"Unknown server" body sailed through as a 404 the code above already
+	let pass, ``async_run_check`` read no ``status`` field off it and
+	defaulted to ``"queued"``, and the button reported success while doing
+	nothing.
 	"""
 	url = (portal_url or DEFAULT_PORTAL_URL).rstrip("/") + path
 	headers = {"Authorization": f"Bearer {secret}"}
@@ -1927,6 +2044,8 @@ async def _agent_request(
 		except Exception:  # noqa: BLE001 - a proxy error page, say
 			data = {}
 		data = dict(data or {})
+		if data.get("error"):
+			raise RuntimeError(f"Vome returned HTTP {resp.status} for {url}: {data['error']}")
 		data["_status"] = resp.status
 		return data
 

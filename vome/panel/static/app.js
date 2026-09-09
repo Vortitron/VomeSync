@@ -112,8 +112,11 @@
 		const serverId = (state && state.server_id) || "";
 		const forwardUrl = (state && state.forward_url) || "";
 		const openHref = forwardUrl || (serverId ? `${portal}/servers/${encodeURIComponent(serverId)}` : portal);
-		const label = forwardUrl ? forwardUrl.replace(/^https?:\/\//, "") : (serverId ? `server ${serverId}` : "your Vome account");
-		return `<p class="muted" style="margin-top:0.5rem">Linked as <code>${escapeHtml(label)}</code> — <a class="link" href="${escapeHtml(openHref)}" target="_blank" rel="noopener">open in Vome</a></p>`;
+		const label = forwardUrl ? forwardUrl.replace(/^https?:\/\//, "").replace(/\/$/, "") : (serverId || "your Vome account");
+		// One plain link rather than a code chip glued to prose — a bare
+		// server id or friendly domain reads fine on its own, it does not
+		// need a monospace box drawn around it to be legible.
+		return `<p class="muted" style="margin-top:0.5rem"><a class="link" href="${escapeHtml(openHref)}" target="_blank" rel="noopener">Open ${escapeHtml(label)} in Vome ›</a></p>`;
 	}
 
 	function syncChrome() {
@@ -356,11 +359,11 @@
 				<div class="row">
 					${pill(vomeHomeLinked(), "Linked to Vome", "Not linked")}
 					${pill(!!(state && state.forward_ui), (state && state.hosted) ? "HA UI forwarding on (hosted by Vome)" : "HA UI forwarding on", "HA UI forwarding off")}
-					${(state && !state.forward_ui) ? `<a class="link" href="#" id="ov-device-urls">A friendly domain still works for devices — manage device URLs</a>` : ""}
 					${pill(enabled > 0, `${enabled} LAN tunnel${enabled === 1 ? "" : "s"} on`, "No LAN tunnels")}
 					${pill(!!(state && state.addon_marker), "Add-on install", "HACS-only install")}
 				</div>
 				${vomeIdentityLine()}
+				${(state && !state.forward_ui) ? `<p class="muted" style="margin-top:0.5rem">Full-UI forwarding is off, but a friendly domain still reaches devices — <a class="link" href="#" id="ov-device-urls">manage device URLs</a>.</p>` : ""}
 			</div>
 			<div class="card">
 				<h2>Quick actions</h2>
@@ -1273,12 +1276,22 @@
 		const report = (healthData && healthData.report) || null;
 		if (!report) return "";
 		const urls = healthUrls();
-		const doctor = urls.health || urls.claim || urls.online;
+		const doctorBase = urls.health || urls.claim || urls.online;
+		// Each finding gets its own #finding-<id> anchor on the report page
+		// (health_report.html scrolls to and highlights it) — without this
+		// every "Ask the AI Doctor about this" link was identical and just
+		// dropped the visitor at the top of the report, not at the finding
+		// they clicked from.
+		const doctorFor = (findingId) => {
+			if (!doctorBase) return "";
+			return findingId ? `${doctorBase}#finding-${encodeURIComponent(findingId)}` : doctorBase;
+		};
 		// Critical/warn findings open by default — those are the ones worth
 		// seeing without a tap. Everything else (advice/unknown/info) starts
 		// collapsed so a long, healthy-ish report still reads as tidy.
 		const rows = (report.findings || []).map((f) => {
 			const openAttr = (f.severity === "critical" || f.severity === "warn") ? " open" : "";
+			const doctor = doctorFor(f.id);
 			return `
 			<li>
 				<details${openAttr}>

@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.33"
+INTEGRATION_VERSION = "0.9.34"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -228,6 +228,13 @@ RELAY_FORWARD_MAX_BODY = 25 * 1024 * 1024
 RELAY_FORWARD_BODY_TIMEOUT = 20
 # Exact path portions (query excluded) a browser WebSocket bridge may open.
 RELAY_FORWARD_WS_PATHS = ("/api/websocket",)
+# The one non-exact case: Home Assistant's own ingress proxy mounts each
+# add-on's WebSocket(s) under a per-session token
+# (/api/hassio_ingress/<token>/...), so no fixed path can list them. The
+# token is HA-issued and Core's own ingress handler already 404s an
+# unknown/expired one; this only constrains the shape so nothing outside
+# that namespace is reachable this way.
+RELAY_FORWARD_WS_INGRESS_RE = re.compile(r"^/api/hassio_ingress/[A-Za-z0-9_-]+(?:/.*)?$")
 # Hop-by-hop headers are connection-scoped and must not be forwarded across the
 # tunnel (RFC 7230 §6.1); Host/Content-Length are re-derived by each hop.
 RELAY_FORWARD_STRIP_HEADERS = frozenset({
@@ -328,8 +335,20 @@ ESPHOME_WEB_PORT_KEY = "6052/tcp"  # the add-on's optional direct web port mappi
 # the dashboard which rename rules a device's YAML still needs. ESPHome shows
 # these as a "Config migration available" banner in its own UI, which an agent
 # never sees — so it silently keeps editing deprecated spellings.
-ESPHOME_ALLOWED_PATHS = ("/devices", "/version", "/edit", "/migrate")
+ESPHOME_ALLOWED_PATHS = (
+	"/devices",
+	"/version",
+	"/edit",
+	"/migrate",
+	# Vome-invented: the component turns this into Device Builder
+	# ``remote_build/preview_pair`` + ``remote_build/request_pair``.
+	"/vome-remote-build",
+)
 ESPHOME_ALLOWED_METHODS = ("GET", "POST")
+# Pairing a WAN build server is a Noise handshake from the house to Vome;
+# 30s (RELAY_RPC_TIMEOUT) is tight once the Pi is on a slow uplink.
+ESPHOME_REMOTE_BUILD_TIMEOUT = 45
+ESPHOME_REMOTE_BUILD_PATH = "/vome-remote-build"
 # The ESPHome commands Vome exposes.  Each maps to a command on the dashboard's
 # multiplexed ``/ws`` API (see esphome_ws.py), which replaced the old
 # per-command WebSockets; output is translated back into the

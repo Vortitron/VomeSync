@@ -28,8 +28,10 @@ from custom_components.vomesync.relay_client import (
 	_safe_path_portion,
 	_to_ws_url,
 	async_ensure_local_access_token,
+	async_fetch_health_report,
 	async_poll_device_token,
 	async_request_device_code,
+	async_start_health_check,
 	resolve_local_core_url,
 )
 from custom_components.vomesync.const import (
@@ -274,10 +276,97 @@ class TestEsphome:
 			"/versions",
 			"/editanything",
 			"/edit/../delete?configuration=x.yaml",
+			"/vome-remote-build-x",
 		):
 			status, _body, error = await client.execute("GET", hostile, None, "esphome")
 			assert status == 0 and "non-allowlisted" in error, hostile
 		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_remote_build_pair_drives_preview_then_request(self):
+		pin = "a" * 64
+
+		def responder(command, mid, args):
+			if command == "remote_build/preview_pair":
+				assert args == {"hostname": "esphome-build.vome.io", "port": 16100}
+				return [{
+					"message_id": mid,
+					"result": {"pin_sha256": pin, "requires_pairing_key": True},
+				}]
+			if command == "remote_build/request_pair":
+				assert args["hostname"] == "esphome-build.vome.io"
+				assert args["port"] == 16100
+				assert args["pairing_key"] == "8MC5-KAXV-NN6N-PWAA"
+				assert args["pin_sha256"] == pin
+				return [{"message_id": mid, "result": {"status": "APPROVED"}}]
+			return [{"message_id": mid, "error_code": "unknown", "details": command}]
+
+		dash = _FakeWsDashboard(responder=responder)
+		session = _session_for_ws(dash)
+		client = _client(session, esphome_url="http://esp:6052")
+		status, body, error = await client.execute(
+			"POST",
+			"/vome-remote-build",
+			{
+				"hostname": "esphome-build.vome.io",
+				"port": 16100,
+				"pairing_key": "8MC5-KAXV-NN6N-PWAA",
+			},
+			"esphome",
+		)
+		assert status == 200 and error is None
+		assert json.loads(body)["pin_sha256"] == pin
+		assert [frame["command"] for frame in dash.sent] == [
+			"remote_build/preview_pair",
+			"remote_build/request_pair",
+		]
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_remote_build_refuses_localhost_and_rfc1918(self):
+		session, _ = _mock_session_with_response()
+		client = _client(session, esphome_url="http://esp:6052")
+		payload = {"port": 16100, "pairing_key": "8MC5-KAXV-NN6N-PWAA"}
+		for host in ("localhost", "box.local", "192.168.1.5", "10.0.0.2", "127.0.0.1"):
+			status, _body, error = await client.execute(
+				"POST",
+				"/vome-remote-build",
+				{**payload, "hostname": host},
+				"esphome",
+			)
+			assert status == 0 and "public" in error, host
+		session.ws_connect.assert_not_called()
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_remote_build_refuses_a_junk_key_and_privileged_port(self):
+		session, _ = _mock_session_with_response()
+		client = _client(session, esphome_url="http://esp:6052")
+		status, _body, error = await client.execute(
+			"POST",
+			"/vome-remote-build",
+			{"hostname": "esphome-build.vome.io", "port": 80, "pairing_key": "8MC5-KAXV-NN6N-PWAA"},
+			"esphome",
+		)
+		assert status == 0 and "port" in error.lower()
+		status, _body, error = await client.execute(
+			"POST",
+			"/vome-remote-build",
+			{"hostname": "esphome-build.vome.io", "port": 16100, "pairing_key": "nope!!"},
+			"esphome",
+		)
+		assert status == 0 and "key" in error.lower()
+		session.ws_connect.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_remote_build_get_is_refused(self):
+		session, _ = _mock_session_with_response()
+		client = _client(session, esphome_url="http://esp:6052")
+		status, _body, error = await client.execute(
+			"GET", "/vome-remote-build", None, "esphome"
+		)
+		assert status == 0 and "Unsupported ESPHome method" in error
+		session.ws_connect.assert_not_called()
 
 	@pytest.mark.asyncio
 	async def test_rejects_unsupported_method(self):
@@ -711,6 +800,43 @@ class TestDeviceHelpers:
 		assert kwargs["json"] == {"device_code": "dc"}
 
 
+class TestAgentRequest:
+	"""``_agent_request`` backs the health-check start/fetch endpoints.
+
+	A relay secret issued by one Vome (e.g. staging) presented to a
+	*different* one (e.g. production, if an entry's stored ``portal_url``
+	ever drifts from where its credentials actually came from) gets a 404
+	"Unknown server" body from health-check's POST — a real failure, not
+	the harmless "no report yet" 404 the GET endpoint also sends. Both used
+	to be treated alike (only 401/403/5xx raised), so the health-check POST
+	quietly no-op'd, ``async_run_check`` read no ``status`` off the error
+	body and defaulted to "queued", and the button reported success while
+	nothing happened server-side.
+	"""
+
+	@pytest.mark.asyncio
+	async def test_an_error_body_raises_even_on_404(self):
+		session, resp = _mock_session_with_response(status=404, text='{"error": "Unknown server."}')
+		resp.json.return_value = {"error": "Unknown server."}
+		with pytest.raises(RuntimeError, match="Unknown server"):
+			await async_start_health_check(session, "https://vome.io", "sek")
+
+	@pytest.mark.asyncio
+	async def test_a_bodyless_404_is_the_legitimate_not_yet_case(self):
+		session, resp = _mock_session_with_response(status=404, text='{"status": "none", "report": null}')
+		resp.json.return_value = {"status": "none", "report": None}
+		result = await async_fetch_health_report(session, "https://vome.io", "sek")
+		assert result["_status"] == 404
+		assert result["status"] == "none"
+
+	@pytest.mark.asyncio
+	async def test_a_normal_success_passes_through(self):
+		session, resp = _mock_session_with_response(status=202, text='{"status": "queued"}')
+		resp.json.return_value = {"status": "queued"}
+		result = await async_start_health_check(session, "https://vome.io", "sek")
+		assert result == {"status": "queued", "_status": 202}
+
+
 # ── Full-UI forwarding (the paid friendly-domain remote access) ──────────────
 
 def _mock_session_for_http(status=200, headers=None, body=b""):
@@ -1031,6 +1157,31 @@ class TestForwardWebSocket:
 			ws = AsyncMock()
 			await client._handle_ws_open(ws, {"socketId": "s1", "path": hostile})
 			assert _sent_payloads(ws)[0]["type"] == "ws_close", hostile
+		session.ws_connect.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_ws_open_permits_hassio_ingress_path(self):
+		local = _FakeLocalWS()
+		session = _session_for_ws(local)
+		client = _client(session, forward_ui=True, local_url="http://127.0.0.1:8123")
+		ws = AsyncMock()
+		path = "/api/hassio_ingress/GSGu9YdR_f9Nnr1Fl5VUjae319uBrmWy9Oq9qsLahlU/ws"
+		await client._handle_ws_open(ws, {"socketId": "s1", "path": path})
+		assert session.ws_connect.call_args[0][0] == f"ws://127.0.0.1:8123{path}"
+
+	@pytest.mark.asyncio
+	async def test_ws_open_rejects_hostile_ingress_lookalikes(self):
+		session = _session_for_ws(_FakeLocalWS())
+		client = _client(session, forward_ui=True)
+		hostile = (
+			"/api/hassio_ingress/",  # no token
+			"/api/hassio_ingressX/tok/ws",  # not the ingress prefix
+			"/api/hassio_ingress/tok/../../auth",  # traversal out of the namespace
+		)
+		for path in hostile:
+			ws = AsyncMock()
+			await client._handle_ws_open(ws, {"socketId": "s1", "path": path})
+			assert _sent_payloads(ws)[0]["type"] == "ws_close", path
 		session.ws_connect.assert_not_called()
 
 	@pytest.mark.asyncio
