@@ -33,6 +33,31 @@ def test_remote_status_payload_strips_secrets():
 	assert "must-not-appear" not in str(payload)
 
 
+def test_a_hosted_vm_reports_linked_and_forwarding_on():
+	"""A VomeHome-hosted VM has no relay tunnel to itself, so it holds a
+	backup key rather than a relay secret — and previously read as
+	unlinked with forwarding off, even though the portal always serves its
+	friendly domain's HA UI. GamlaBio (a real hosted home) surfaced this:
+	its friendly domain forwarded fine while the panel said otherwise."""
+	entry = _FakeEntry("abc", {
+		"backup": {"secret": "vbk_srv-hosted-1.token123"},
+	})
+	payload = remote_status_payload(None, entry)
+	assert payload["hosted"] is True
+	assert payload["linked"] is True
+	assert payload["server_id"] == "srv-hosted-1"
+	assert payload["forward_ui"] is True
+
+
+def test_a_relay_linked_home_is_not_reported_as_hosted():
+	entry = _FakeEntry("abc", {
+		"relay": {"server_id": "rly-1", "secret": "s", "forward_ui": False},
+	})
+	payload = remote_status_payload(None, entry)
+	assert payload["hosted"] is False
+	assert payload["forward_ui"] is False
+
+
 def _register_and_capture(hass):
 	import custom_components.vomesync.services_remote as sr
 	sr.async_register_remote_services(hass)

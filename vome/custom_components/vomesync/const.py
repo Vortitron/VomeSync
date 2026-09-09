@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.30"
+INTEGRATION_VERSION = "0.9.33"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -114,6 +114,11 @@ RELAY_GUEST_PATH = "/api/v1/relay/guest"
 # Vome's website.
 AGENT_HEALTH_REPORT_PATH = "/api/sync/agent/health-report"
 AGENT_HEALTH_CHECK_PATH = "/api/sync/agent/health-check"
+# Count recorder writes locally. The portal used to GET /api/history/period
+# for every entity over 24 h, which is why Chatty devices always failed on
+# a busy house. This path returns ``{entity_id: count}`` instead.
+RECORDER_COUNTS_PATH = "/api/vomesync/health/recorder_counts"
+HISTORY_WINDOW_HOURS = 24
 
 # ``options[CONF_RELAY]`` keys written only by a guest run.
 CONF_RELAY_GUEST = "guest"

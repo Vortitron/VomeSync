@@ -49,6 +49,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 	# call surfaces as a bare "400: Bad Request" (ServiceNotFound) in the
 	# add-on panel, with no hint of the real problem.
 	_register_services(hass)
+	_register_http_views(hass)
 	return True
 
 
@@ -80,6 +81,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	hass.data[DOMAIN][entry.entry_id] = coordinator
 
 	_register_services(hass)
+	_register_http_views(hass)
 
 	# Start the outbound relay FIRST: remote access (the panel, LAN tunnels,
 	# UI forwarding) must never be hostage to the switch-sync API. It only
@@ -151,6 +153,16 @@ def _get_coordinator_for_service(hass: HomeAssistant, entry_id: str | None) -> V
 		return next(iter(coordinators.values()))
 
 	raise ValueError("Multiple VomeSync entries found; provide entry_id in service data")
+
+
+def _register_http_views(hass: HomeAssistant) -> None:
+	"""HTTP views the portal health check calls. Idempotent."""
+	if hass.data.setdefault(DOMAIN, {}).get("_http_views"):
+		return
+	from .recorder_counts import async_register_view
+
+	if async_register_view(hass):
+		hass.data[DOMAIN]["_http_views"] = True
 
 
 def _register_services(hass: HomeAssistant) -> None:
