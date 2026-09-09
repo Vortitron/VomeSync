@@ -115,6 +115,58 @@ def test_in_app_link_flow(monkeypatch):
 	assert "relay" not in entry.options
 
 
+def test_linking_against_staging_is_remembered(monkeypatch):
+	"""A link made against staging must stay pointed at staging afterwards.
+
+	Before this fix, ``link_poll`` stored the granted relay credentials but
+	never *which Vome* granted them — every later call (health checks, the
+	AI Doctor link, ...) fell back to ``_entry_portal_url``'s production
+	default regardless. A house linked against staging would then ask
+	production about a server id production has never heard of, get back
+	"Unknown server", and (before a matching fix to
+	``relay_client._agent_request``) that error quietly read as success —
+	the reported bug: "Running the check" flashes, no score ever appears.
+	"""
+	import asyncio
+	from types import SimpleNamespace
+	from unittest.mock import AsyncMock, MagicMock
+	import custom_components.vomesync.services_remote as sr
+
+	entry = SimpleNamespace(entry_id="e1", options={})
+	hass = MagicMock()
+	hass.data = {}
+	hass.config_entries.async_entries.return_value = [entry]
+	hass.config.location_name = "Home"
+
+	def _update(e, options=None):
+		e.options = options
+	hass.config_entries.async_update_entry.side_effect = _update
+
+	monkeypatch.setattr(sr, "async_get_clientsession", lambda h: MagicMock())
+	monkeypatch.setattr(sr, "async_request_device_code", AsyncMock(return_value={
+		"device_code": "dev-123", "user_code": "WXYZ-1234",
+		"verification_uri": "https://staging.vome.io/account/link-ha",
+		"interval": 5, "expires_in": 900,
+	}))
+	monkeypatch.setattr(sr, "async_start_relay", AsyncMock())
+
+	handlers = _register_and_capture(hass)
+	call = SimpleNamespace(data={"portal_url": "https://staging.vome.io"})
+	started = asyncio.run(handlers["link_start"](call))
+	assert started["portal_url"] == "https://staging.vome.io"
+
+	monkeypatch.setattr(sr, "async_poll_device_token", AsyncMock(return_value={
+		"status": "approved", "server_id": "rly-8b6e4c3c8283", "relay_secret": "s",
+		"relay_ws_url": "wss://dev.sync.vome.io/ws/relay",
+	}))
+	linked = asyncio.run(handlers["link_poll"](call))
+	assert linked == {"status": "linked", "server_id": "rly-8b6e4c3c8283"}
+	assert entry.options["portal_url"] == "https://staging.vome.io"
+
+	from custom_components.vomesync.services_remote import _entry_portal_url
+	assert _entry_portal_url(entry) == "https://staging.vome.io"
+
+
 def test_two_unlinked_entries_status_returns_an_id():
 	"""HACS + adding the integration again left a blank entry_id, so the panel
 	Connect button failed with 'pass entry_id' while Devices still worked."""

@@ -185,9 +185,19 @@ def _store_report(hass: HomeAssistant, entry_id: str, report: Optional[dict]) ->
 	async_dispatcher_send(hass, SIGNAL_HEALTH_UPDATED, entry_id)
 
 
-async def _save_relay(hass: HomeAssistant, entry: ConfigEntry, relay: dict) -> None:
+async def _save_relay(
+	hass: HomeAssistant, entry: ConfigEntry, relay: dict, *, portal_url: Optional[str] = None,
+) -> None:
 	options = dict(entry.options or {})
 	options[CONF_RELAY] = relay
+	if portal_url:
+		# The credentials in ``relay`` only work against the Vome that just
+		# issued them. Without recording it here, _portal_url() falls back
+		# to the default (production) for every later call regardless of
+		# which site actually granted this link — e.g. a guest run opened
+		# against staging would have every subsequent health check silently
+		# asking production about a server id it has never heard of.
+		options["portal_url"] = portal_url
 	hass.config_entries.async_update_entry(entry, options=options)
 
 
@@ -212,7 +222,7 @@ async def _open_guest_run(hass: HomeAssistant, entry: ConfigEntry, use_ai: bool)
 		CONF_RELAY_GUEST_EXPIRES: opened.get("expires_at"),
 		CONF_RELAY_GUEST_CLAIM_URL: opened.get("claim_url"),
 	})
-	await _save_relay(hass, entry, relay)
+	await _save_relay(hass, entry, relay, portal_url=portal_url)
 	# The check Vome queued needs the tunnel up to read anything.
 	await async_start_relay(hass, entry)
 	_LOGGER.info(

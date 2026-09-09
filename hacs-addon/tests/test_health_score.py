@@ -175,6 +175,38 @@ class TestRunningItFromAnUnlinkedHouse:
 		assert relay[CONF_RELAY_GUEST_CLAIM_URL].endswith("k=tok")
 
 	@pytest.mark.asyncio
+	async def test_a_guest_run_against_staging_stays_pointed_at_staging(self):
+		"""``_open_guest_run`` must record which Vome issued the credentials.
+
+		Before this fix, only the relay dict (server id / secret / ws url)
+		was persisted — not which portal granted them. Every later call
+		(``_portal_url(entry)``) then fell back to production regardless,
+		so a guest run opened against staging would have its own
+		"check again" and "refresh the report" calls ask *production*
+		about a server id production has never heard of.
+		"""
+		entry = _Entry({"portal_url": "https://staging.vome.io"})
+		hass = _hass(entry)
+		opened = {
+			"server_id": "rly-8b6e4c3c8283", "relay_secret": "rly_rly-8b6e4c3c8283.s",
+			"relay_ws_url": "wss://dev.sync.vome.io/ws/relay",
+			"claim_url": "https://staging.vome.io/score/try?k=tok",
+			"expires_at": 4_100_000_000, "report_id": "r1",
+		}
+		with patch.object(hs, "async_get_clientsession", return_value=MagicMock()), \
+				patch.object(hs, "async_request_guest_run", AsyncMock(return_value=opened)) as guest_run, \
+				patch.object(hs, "async_start_relay", AsyncMock()), \
+				patch.object(hs.persistent_notification, "async_create"):
+			await hs.async_run_check(hass, entry)
+
+		# Opened against the site this entry already pointed at, not the default.
+		assert guest_run.call_args[0][1] == "https://staging.vome.io"
+		# And that site is still what a later call would use — it must not
+		# have been dropped when the relay credentials were saved.
+		assert entry.options["portal_url"] == "https://staging.vome.io"
+		assert hs._portal_url(entry) == "https://staging.vome.io"
+
+	@pytest.mark.asyncio
 	async def test_a_linked_house_does_not_open_a_second_link(self, linked_entry):
 		hass = _hass(linked_entry)
 		with patch.object(hs, "async_get_clientsession", return_value=MagicMock()), \

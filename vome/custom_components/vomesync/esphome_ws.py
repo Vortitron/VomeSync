@@ -278,6 +278,49 @@ class EsphomeWsSession:
 			"changes": changes,
 		}
 
+	async def pair_remote_build(
+		self,
+		hostname: str,
+		port: int,
+		pairing_key: str,
+		timeout: float,
+	) -> dict[str, Any]:
+		"""Pair this dashboard with a headless ``--remote-build-only`` receiver.
+
+		The dashboard (on the house) dials ``hostname:port`` itself. We only
+		drive the Device Builder ``remote_build/*`` commands over local ``/ws``.
+		"""
+		preview = await self.call(
+			"remote_build/preview_pair",
+			{"hostname": hostname, "port": port},
+			timeout,
+		)
+		if not isinstance(preview, dict) or not preview.get("pin_sha256"):
+			raise EsphomeWsError(
+				"ESPHome did not return a pairing fingerprint. Device Builder "
+				"2026.6 or newer is required for remote compile."
+			)
+		pin = str(preview["pin_sha256"])
+		result = await self.call(
+			"remote_build/request_pair",
+			{
+				"hostname": hostname,
+				"port": port,
+				"pin_sha256": pin,
+				"receiver_label": "Vome compile",
+				"offloader_label": "Home Assistant",
+				"pairing_key": pairing_key,
+				"offloader_label_auto": False,
+				"receiver_label_auto": False,
+			},
+			timeout,
+		)
+		if isinstance(result, dict):
+			out = dict(result)
+			out.setdefault("pin_sha256", pin)
+			return out
+		return {"pin_sha256": pin}
+
 	async def run_build_command(
 		self,
 		command: str,

@@ -55,8 +55,13 @@ class VomeSyncOptionsFlowRelayMixin:
 		return isinstance(relay, dict) and bool(relay.get(CONF_RELAY_SERVER_ID))
 
 	def _relay_portal_url(self) -> str:
-		# Overridable later; the portal returns the WS URL so only this is needed.
-		return DEFAULT_PORTAL_URL
+		# Whatever this entry already links against (e.g. staging, if that
+		# is what a previous link — guest run or otherwise — recorded),
+		# rather than always production: this is the *only* read of the
+		# Vome site before a link exists, so getting it wrong here means
+		# linking against the wrong one from the very first request.
+		merged = {**(self._config_entry.data or {}), **(self._config_entry.options or {})}
+		return str(merged.get("portal_url") or DEFAULT_PORTAL_URL).rstrip("/")
 
 	async def _relay_clear_pending(self) -> None:
 		for key in (_SD_DEVICE_CODE, _SD_USER_CODE, _SD_VERIFICATION_URI):
@@ -136,6 +141,10 @@ class VomeSyncOptionsFlowRelayMixin:
 				relay[CONF_RELAY_ESPHOME_URL] = esphome_url
 			options = dict(self._config_entry.options or {})
 			options[CONF_RELAY] = relay
+			# See the matching note in services_remote._link_poll: without
+			# this, every later call falls back to production regardless
+			# of which site actually granted these credentials.
+			options["portal_url"] = self._relay_portal_url()
 			await self._async_update_entry_options(options)
 			await async_start_relay(self.hass, self._config_entry)
 			await self._relay_clear_pending()
