@@ -2076,3 +2076,84 @@ class TestSendAccessEvents:
 		client._ws = object()
 		client._send = AsyncMock(side_effect=RuntimeError("socket closed"))
 		assert await client.send_access_events([{"event": "login_failed"}]) is False
+
+
+# ── WebSocket error codes (they are strings, not numbers) ──────────────────
+
+class TestWsErrorStatus:
+	"""Home Assistant reports WebSocket failures with a string code.
+
+	`int(err["code"])` raised ValueError on every one of them. That escaped the
+	per-request handler and reached the reconnect loop, so an unsupported
+	command tore down the whole tunnel rather than failing the one call --
+	which is what made remote access flap while an add-on update was running.
+	"""
+
+	@pytest.mark.parametrize(
+		"code,expected",
+		[
+			("unknown_command", 400),
+			("unknown_error", 500),
+			("not_found", 404),
+			("unauthorized", 401),
+			("not_allowed", 403),
+			("timeout", 504),
+			("home_assistant_error", 500),
+		],
+	)
+	def test_home_assistants_own_codes_map_to_a_status(self, code, expected):
+		assert rc._ws_error_status({"code": code}) == expected
+
+	def test_a_code_nobody_has_seen_yet_does_not_raise(self):
+		# The whole point: an unrecognised code must degrade, never raise.
+		assert rc._ws_error_status({"code": "some_future_code"}) == 400
+
+	def test_a_numeric_code_is_still_usable(self):
+		assert rc._ws_error_status({"code": 404}) == 404
+		assert rc._ws_error_status({"code": "409"}) == 409
+
+	def test_a_nonsense_status_is_not_passed_through(self):
+		assert rc._ws_error_status({"code": 99}) == 400
+		assert rc._ws_error_status({"code": 700}) == 400
+
+	def test_a_bool_is_not_a_status(self):
+		# bool subclasses int, so True would otherwise sail through as 1.
+		assert rc._ws_error_status({"code": True}) == 400
+
+	def test_a_missing_or_malformed_payload_is_a_bad_request(self):
+		assert rc._ws_error_status({}) == 400
+		assert rc._ws_error_status(None) == 400
+		assert rc._ws_error_status("not a dict") == 400
+		assert rc._ws_error_status({"code": None}) == 400
+
+
+class TestRpcFailureIsContained:
+	"""One bad request must not take the tunnel down with it."""
+
+	@pytest.mark.asyncio
+	async def test_a_raising_execute_answers_the_request_instead_of_escaping(self):
+		client = _client(AsyncMock())
+		client.execute = AsyncMock(side_effect=ValueError("boom"))
+		sent = []
+
+		async def _send(ws, payload):
+			sent.append(payload)
+
+		client._send = _send
+
+		# Must not raise: anything escaping here reaches the reconnect loop.
+		await client._handle_rpc(MagicMock(), {"requestId": "r1", "method": "GET"})
+
+		assert len(sent) == 1
+		assert sent[0]["requestId"] == "r1"
+		assert sent[0]["status"] == 0
+		assert "boom" in sent[0]["error"]
+
+	@pytest.mark.asyncio
+	async def test_cancellation_still_propagates(self):
+		client = _client(AsyncMock())
+		client.execute = AsyncMock(side_effect=asyncio.CancelledError())
+		client._send = AsyncMock()
+
+		with pytest.raises(asyncio.CancelledError):
+			await client._handle_rpc(MagicMock(), {"requestId": "r1"})

@@ -315,6 +315,25 @@ LOVELACE_WS_ALLOWED_COMMANDS = LOVELACE_WS_READ_COMMANDS | LOVELACE_WS_WRITE_COM
 # Portal validates scope before dispatch; the relay accepts any well-formed HA
 # WebSocket command type (full mode for registries, etc.).
 WS_COMMAND_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*/[a-z0-9_./-]{0,120}$")
+
+# Home Assistant's WebSocket API reports errors with *string* codes --
+# "unknown_command", "not_found" and so on -- never numbers. Relaying one as an
+# HTTP status therefore needs a mapping; calling int() on it raises, and because
+# that escaped the per-request handler it used to tear down the whole tunnel
+# rather than failing the single call that caused it.
+WS_ERROR_STATUS: dict[str, int] = {
+	"unauthorized": 401,
+	"not_allowed": 403,
+	"not_found": 404,
+	"id_reuse": 400,
+	"invalid_format": 400,
+	"unknown_command": 400,
+	"not_supported": 501,
+	"template_error": 500,
+	"home_assistant_error": 500,
+	"unknown_error": 500,
+	"timeout": 504,
+}
 RELAY_WS_MAX_COMMAND_BYTES = 2_000_000
 
 # ESPHome dashboard: discovered via the Supervisor add-on API on HAOS / Supervised
