@@ -1139,12 +1139,24 @@
 		}
 		let host = linkFlow.uri;
 		try { host = new URL(linkFlow.uri).host; } catch (_err) { /* keep full uri */ }
+		// Carrying the code in the link means clicking it is the whole flow:
+		// sign in if needed, then Vome submits this code itself — no coming
+		// back here to paste it. The code stays shown too, for a link opened
+		// on a different device than the one that will type it.
+		let linkUrl = linkFlow.uri;
+		if (linkFlow.userCode) {
+			try {
+				const u = new URL(linkFlow.uri);
+				u.searchParams.set("code", linkFlow.userCode);
+				linkUrl = u.toString();
+			} catch (_err) { /* keep bare uri */ }
+		}
 		viewEl.innerHTML = `
 			<div class="card">
 				<h2>Approve this Home Assistant</h2>
 				<ol class="steps">
-					<li>Open <a href="${escapeHtml(linkFlow.uri)}" target="_blank" rel="noreferrer">${escapeHtml(host)}</a> and sign in to Vome.</li>
-					<li>Enter this code when asked:
+					<li>Open <a href="${escapeHtml(linkUrl)}" target="_blank" rel="noreferrer">${escapeHtml(host)}</a> and sign in to Vome — it links this code automatically.</li>
+					<li>On a different device? Enter this code by hand instead:
 						<div class="cmd-row"><input class="mono cmd" id="link-code" readonly value="${escapeHtml(linkFlow.userCode)}" onclick="this.select()"><button type="button" id="copy-code">Copy</button></div>
 					</li>
 					<li><span class="pill warn">Waiting for approval…</span> This page updates itself the moment you approve — leave it open.</li>
