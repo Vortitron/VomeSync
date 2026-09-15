@@ -340,6 +340,7 @@ See `docs/DEV_NOTES.md` for local Home Assistant testing notes and helper script
 - User counts are tracked from authenticated interactions (toggles/comments) to help filter active/public switches.
 - Website runs on port **8111** in Docker; served externally via nginx SSL proxy (`sync.vome.io`).
 - CAPTCHA support: set `HCAPTCHA_SECRET`/`HCAPTCHA_SITEKEY` (and optional `HCAPTCHA_BYPASS_TOKEN` for staging) to require a captcha token whenever `publicize` is set to true on create/patch. Without these env vars, captcha is disabled.
+- **Staff catalogue:** illustrated community switches (bridges, holidays, governments, rare events) live in the server repo. Style guide and the add/apply CLI: [VomeSync-server/catalogue](https://github.com/Vortitron/VomeSync-server/tree/main/catalogue). `node catalogue/cli.js add --apply --json '{…}'` is the fast path; do not create nameless test rows on the public directory. Live listings include the 2026 Swedish election (count and government formation as one switch) and the Øresund / Great Belt road crossings.
 
 ### Relay (outbound tunnel) — backend env
 
