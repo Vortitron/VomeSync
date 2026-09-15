@@ -535,6 +535,64 @@ def build_v2_my_switches_request(master_seed_b64url: str, ts: Optional[int] = No
 	}
 
 
+def build_v2_get_owner_tier_request(
+	master_seed_b64url: str,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	if ts is None:
+		import time
+		ts_i = int(time.time() * 1000)
+	else:
+		ts_i = int(ts)
+	nonce_s = nonce or new_nonce()
+	owner_pub = owner_pubkey_b64url(master_seed_b64url)
+	payload = {
+		"v": 2,
+		"action": "get_owner_tier",
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+	}
+	canon = canonical_json(payload)
+	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
+	return {
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"sigOwner": sig_owner,
+	}
+
+
+def build_v2_premium_checkout_request(
+	master_seed_b64url: str,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	if ts is None:
+		import time
+		ts_i = int(time.time() * 1000)
+	else:
+		ts_i = int(ts)
+	nonce_s = nonce or new_nonce()
+	owner_pub = owner_pubkey_b64url(master_seed_b64url)
+	payload = {
+		"v": 2,
+		"action": "premium_checkout",
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+	}
+	canon = canonical_json(payload)
+	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
+	return {
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"sigOwner": sig_owner,
+	}
+
+
 def build_v2_set_state_request(
 	master_seed_b64url: str,
 	uid: str,

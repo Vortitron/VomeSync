@@ -342,6 +342,7 @@ async def test_options_flow_subscribe_switch_auto_imports(hass, config_entry):
 	"""Test subscribing to a switch automatically imports it."""
 	mock_coordinator = MagicMock()
 	mock_coordinator.subscribe_to_switch = AsyncMock(return_value=True)
+	mock_coordinator.owner_is_premium = AsyncMock(return_value=False)
 	mock_coordinator.subscriptions = {}
 
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
@@ -373,6 +374,7 @@ async def test_options_flow_subscribe_switch_limit_reached(hass, config_entry):
 		"imported_switches": imported_switches
 	}
 	mock_coordinator = MagicMock()
+	mock_coordinator.owner_is_premium = AsyncMock(return_value=False)
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
 
 	flow = VomeSyncOptionsFlow(config_entry)
@@ -715,6 +717,7 @@ async def test_options_flow_subscribe_composite_uid_key(hass, config_entry):
 	"""Subscribe with a uid/key composite should parse and pass both."""
 	mock_coordinator = MagicMock()
 	mock_coordinator.subscribe_to_switch = AsyncMock(return_value=True)
+	mock_coordinator.owner_is_premium = AsyncMock(return_value=False)
 	mock_coordinator.subscriptions = {}
 
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
@@ -739,6 +742,7 @@ async def test_options_flow_subscribe_composite_explicit_key_wins(hass, config_e
 	"""When explicit access_key field is filled, it should override composite key."""
 	mock_coordinator = MagicMock()
 	mock_coordinator.subscribe_to_switch = AsyncMock(return_value=True)
+	mock_coordinator.owner_is_premium = AsyncMock(return_value=False)
 	mock_coordinator.subscriptions = {}
 
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}

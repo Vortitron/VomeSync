@@ -25,6 +25,7 @@ from .const import (
 	AUTH_MODE_CRYPTO,
 	UPDATE_INTERVAL_SECONDS,
 	DEFAULT_SWITCH_NAME,
+	FREE_TIER_MAX_SUBSCRIPTIONS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -865,6 +866,24 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			_LOGGER.error("Failed to update v2 access key permissions uid=%s: %s", uid, ex)
 			return False
 
+	async def owner_is_premium(self) -> bool:
+		"""True when this install's owner has a live premium tier."""
+		if not self.crypto_enabled:
+			return False
+		try:
+			tier = await self.api_client.get_owner_tier()
+			return str((tier or {}).get("tier") or "") == "premium"
+		except VomeSyncAPIError:
+			return False
+
+	def _remote_subscription_count(self) -> int:
+		imported = (self.config_entry.options or {}).get(_OPT_IMPORTED_SWITCHES, {}) or {}
+		return sum(
+			1
+			for info in imported.values()
+			if isinstance(info, dict) and not info.get("is_owner", False)
+		)
+
 	async def subscribe_to_switch(self, uid: str, access_key: Optional[str] = None) -> bool:
 		"""Subscribe to an existing switch."""
 		try:
@@ -897,6 +916,14 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				await self._ensure_websocket_connection(uid)
 				self.async_update_listeners()
 				return True
+
+			if not await self.owner_is_premium() and self._remote_subscription_count() >= FREE_TIER_MAX_SUBSCRIPTIONS:
+				_LOGGER.warning(
+					"Subscribe refused: free watch limit is %s switches (uid=%s)",
+					FREE_TIER_MAX_SUBSCRIPTIONS,
+					uid,
+				)
+				return False
 			
 			# If entity already exists in HA registry, also skip add (prevents duplicate unique_id errors)
 			try:

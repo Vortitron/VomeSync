@@ -247,6 +247,7 @@ class MockHASSFactory:
         coordinator.create_switch = AsyncMock(return_value="new-uid-123")
         coordinator.delete_switch = AsyncMock(return_value=True)
         coordinator.subscribe_to_switch = AsyncMock(return_value=True)
+        coordinator.owner_is_premium = AsyncMock(return_value=False)
         coordinator.update_switch_metadata = AsyncMock(return_value=True)
         coordinator.list_v2_access_keys = AsyncMock(return_value={"keys": [], "count": 0})
         coordinator.create_v2_access_key = AsyncMock(return_value={"apiKey": "test-key-123"})

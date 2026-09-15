@@ -42,7 +42,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
 - **Privacy First**: Optional anonymized fields (description, city-level location, category). Clear warnings for public mode. GDPR-compliant.
 - **Minimal Requirements**: Only requires Home Assistant and the add-on. No external MQTT or port forwarding needed (WebSocket-based).
 - **Scalable**: Future support for private mode (secure instance-to-instance syncing) and MQTT for advanced users.
-- **Monetization**: Free add-on for basic use; premium subscription (€5-15/month) for unlimited switches, analytics, or future private mode.
+- **Monetisation**: Free add-on for basic use. Server-side caps on how many switches you may create or publicize; Stripe premium and promo-code premium. Paid directory promotion is live when Stripe keys are set. See [docs/MONETISATION.md](docs/MONETISATION.md).
 
 ## Why VomeSync?
 - **Unique**: No Home Assistant add-on offers plug-and-play public switch sharing with a community focus.
@@ -165,11 +165,15 @@ Supervisor builds the add-on image on your machine. That build pulls Home Assist
    - Users browse sync.vome.io for public switches (e.g., "Festival Light, Stockholm").
    - Copy UID to subscribe in their add-on.
 
-## Monetization
-- **Free Tier**: Up to 8 switches (4 public listings) and up to 16 subscriptions per Home Assistant installation, plus rate limits.
-- **Premium Tier**: €5-15/month for higher limits, private switches, analytics (e.g., trigger history), and priority support.
-- **Payments**: Stripe planned; interim crypto payments (Base/Solana) are under consideration.
-- **Premium Listings**: Paid featured placement in the public directory for community events or organisations.
+## Monetisation
+
+What the code does today vs what we still owe: [docs/MONETISATION.md](docs/MONETISATION.md).
+
+- **Free (enforced on the server):** 5 private and 10 public listings (15 total).
+- **Free (HA):** 10 watched switches. Options flow and the subscribe service both check this. Skipped when the owner is premium. The server does not count watchers per install.
+- **Premium:** 50 switches / 25 public, via Stripe Checkout (€9 / month), promo code, or admin grant.
+- **Paid promotion:** Stripe Checkout for a Promoted badge and top-of-directory placement.
+- **Still planned:** DIY payment/webhook hooks on a listing → Stripe Connect commission only if owners want us to collect for them.
 
 
 ## Privacy and Security
@@ -340,7 +344,7 @@ See `docs/DEV_NOTES.md` for local Home Assistant testing notes and helper script
 - User counts are tracked from authenticated interactions (toggles/comments) to help filter active/public switches.
 - Website runs on port **8111** in Docker; served externally via nginx SSL proxy (`sync.vome.io`).
 - CAPTCHA support: set `HCAPTCHA_SECRET`/`HCAPTCHA_SITEKEY` (and optional `HCAPTCHA_BYPASS_TOKEN` for staging) to require a captcha token whenever `publicize` is set to true on create/patch. Without these env vars, captcha is disabled.
-- **Staff catalogue:** illustrated community switches (bridges, holidays, governments, rare events) live in the server repo. Style guide and the add/apply CLI: [VomeSync-server/catalogue](https://github.com/Vortitron/VomeSync-server/tree/main/catalogue). `node catalogue/cli.js add --apply --json '{…}'` is the fast path; do not create nameless test rows on the public directory. Live listings include the 2026 Swedish election (count and government formation as one switch) and the Øresund / Great Belt road crossings.
+- **Staff catalogue:** illustrated community switches (bridges, holidays, governments, rare events) live in the server repo. Style guide and the add/apply CLI: [VomeSync-server/catalogue](https://github.com/Vortitron/VomeSync-server/tree/main/catalogue). `node catalogue/cli.js add --apply --json '{…}'` is the fast path; do not create nameless test rows on the public directory. Live listings include the 2026 Swedish election (count and government formation as one switch) and the Øresund / Great Belt road crossings. A five-minute timer (`catalogue/cli.js observe`) scrapes or calls the public sources so nobody has to flip them.
 
 ### Relay (outbound tunnel) — backend env
 

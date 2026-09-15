@@ -507,7 +507,7 @@ class VomeSyncOptionsFlow(
 				ex
 			)
 			error_detail = str(ex)
-			errors["base"] = "create_failed"
+			errors["base"] = "tier_limit_reached" if getattr(ex, "code", None) == "tier_limit" else "create_failed"
 		except Exception as ex:
 			_LOGGER.error("Failed to create switch (unexpected): %s", ex)
 			error_detail = str(ex)
@@ -942,14 +942,13 @@ class VomeSyncOptionsFlow(
 					1 for info in imported_switches.values()
 					if isinstance(info, dict) and not info.get("is_owner", False)
 				)
-				if subscription_count >= FREE_TIER_MAX_SUBSCRIPTIONS:
+				coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+				premium = await coordinator.owner_is_premium()
+				if not premium and subscription_count >= FREE_TIER_MAX_SUBSCRIPTIONS:
 					errors["base"] = "subscription_limit_reached"
 				else:
 					# Use composite key if present, otherwise fall back to the explicit field
 					access_key = composite_key or str(user_input.get(CONF_ACCESS_KEY, "") or "").strip()
-					
-					# Get coordinator
-					coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
 					
 					# Subscribe via coordinator (handles API check + dynamic entity addition)
 					success = await coordinator.subscribe_to_switch(uid, access_key=access_key)
