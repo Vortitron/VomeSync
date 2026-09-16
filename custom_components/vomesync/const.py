@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.34"
+INTEGRATION_VERSION = "0.9.35"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -445,6 +445,9 @@ API_V2_ACCESS_KEYS_REVOKE = "/api/v2/switch/{uid}/access-keys/revoke"
 API_V2_ACCESS_KEYS_PAUSE = "/api/v2/switch/{uid}/access-keys/pause"
 API_V2_ACCESS_KEYS_PERMISSIONS = "/api/v2/switch/{uid}/access-keys/permissions"
 API_V2_TOGGLE = "/api/v2/switch/{uid}/toggle"
+API_V2_OWNER_TIER = "/api/v2/owner/tier"
+API_V2_OWNER_PREMIUM = "/api/v2/owner/premium"
+API_V2_OWNER_BILLING_PORTAL = "/api/v2/owner/billing-portal"
 
 # WebSocket message types
 WS_MSG_STATE_UPDATE = "state_update"
@@ -475,7 +478,7 @@ ATTR_LAST_TOGGLED_TS = "last_toggled_ts"
 ATTR_CREATED_AT_TS = "created_at_ts"
 ATTR_IS_OWNER = "is_owner"
 DEFAULT_SWITCH_NAME = "Unnamed switch"
-FREE_TIER_MAX_SUBSCRIPTIONS = 16
+FREE_TIER_MAX_SUBSCRIPTIONS = 10
 
 # Device info
 DEVICE_MANUFACTURER = "Vortitron"

@@ -31,6 +31,7 @@ from custom_components.vomesync.const import (
 	DOMAIN,
 	FREE_TIER_MAX_SUBSCRIPTIONS,
 )
+from custom_components.vomesync.api_client import VomeSyncAPIError
 from flow_test_framework import MockHASSFactory
 
 
@@ -342,6 +343,7 @@ async def test_options_flow_subscribe_switch_auto_imports(hass, config_entry):
 	"""Test subscribing to a switch automatically imports it."""
 	mock_coordinator = MagicMock()
 	mock_coordinator.subscribe_to_switch = AsyncMock(return_value=True)
+	mock_coordinator.owner_is_premium = AsyncMock(return_value=False)
 	mock_coordinator.subscriptions = {}
 
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
@@ -373,6 +375,7 @@ async def test_options_flow_subscribe_switch_limit_reached(hass, config_entry):
 		"imported_switches": imported_switches
 	}
 	mock_coordinator = MagicMock()
+	mock_coordinator.owner_is_premium = AsyncMock(return_value=False)
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
 
 	flow = VomeSyncOptionsFlow(config_entry)
@@ -715,6 +718,7 @@ async def test_options_flow_subscribe_composite_uid_key(hass, config_entry):
 	"""Subscribe with a uid/key composite should parse and pass both."""
 	mock_coordinator = MagicMock()
 	mock_coordinator.subscribe_to_switch = AsyncMock(return_value=True)
+	mock_coordinator.owner_is_premium = AsyncMock(return_value=False)
 	mock_coordinator.subscriptions = {}
 
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
@@ -739,6 +743,7 @@ async def test_options_flow_subscribe_composite_explicit_key_wins(hass, config_e
 	"""When explicit access_key field is filled, it should override composite key."""
 	mock_coordinator = MagicMock()
 	mock_coordinator.subscribe_to_switch = AsyncMock(return_value=True)
+	mock_coordinator.owner_is_premium = AsyncMock(return_value=False)
 	mock_coordinator.subscriptions = {}
 
 	hass.data = {DOMAIN: {config_entry.entry_id: mock_coordinator}}
@@ -1149,6 +1154,7 @@ async def test_options_flow_init_shows_menu(hass, config_entry):
 	assert result["step_id"] == "init"
 	assert "create_switch" in result["menu_options"]
 	assert "subscribe_switch" in result["menu_options"]
+	assert "upgrade_premium" in result["menu_options"]
 	assert "manage_switches" in result["menu_options"]
 	assert "more" in result["menu_options"]
 	# Connect to Vome Home is a headline option, top-level (not under More…).
@@ -1179,6 +1185,7 @@ async def test_options_flow_more_shows_submenu(hass, config_entry):
 	assert result["type"] == FlowResultType.MENU
 	assert result["step_id"] == "more"
 	assert "backup_signing_key" in result["menu_options"]
+	assert "manage_billing" in result["menu_options"]
 	assert "import_switches" in result["menu_options"]
 	assert "edit_connection" in result["menu_options"]
 	assert "back" in result["menu_options"]
@@ -1209,6 +1216,80 @@ async def test_options_flow_backup_signing_key_shows_key(hass):
 	assert result["type"] == FlowResultType.FORM
 	assert result["step_id"] == "backup_signing_key"
 	assert "my-secret-seed" in result["description_placeholders"]["info"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_upgrade_premium_shows_checkout_url(hass):
+	"""Upgrade step should show the Stripe Checkout URL."""
+	config_entry = MockHASSFactory.create_crypto_config_entry()
+	coordinator = MockHASSFactory.create_coordinator()
+	hass.data = {DOMAIN: {config_entry.entry_id: coordinator}}
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_upgrade_premium(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "upgrade_premium"
+	assert "https://checkout.stripe.com/c/pay/cs_test" in result["description_placeholders"]["info"]
+	coordinator.start_premium_checkout.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_options_flow_upgrade_premium_skips_when_already_paid(hass):
+	"""Paid premium should not start another Checkout Session."""
+	config_entry = MockHASSFactory.create_crypto_config_entry()
+	coordinator = MockHASSFactory.create_coordinator()
+	coordinator.get_owner_tier_info = AsyncMock(return_value={"tier": "premium", "hasStripeCustomer": True})
+	hass.data = {DOMAIN: {config_entry.entry_id: coordinator}}
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_upgrade_premium(None)
+	assert result["type"] == FlowResultType.FORM
+	assert "already on premium" in result["description_placeholders"]["info"].lower()
+	coordinator.start_premium_checkout.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_options_flow_manage_billing_shows_portal_url(hass):
+	"""Manage billing should show the Stripe Customer Portal URL."""
+	config_entry = MockHASSFactory.create_crypto_config_entry()
+	coordinator = MockHASSFactory.create_coordinator()
+	hass.data = {DOMAIN: {config_entry.entry_id: coordinator}}
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_manage_billing(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["step_id"] == "manage_billing"
+	assert "https://billing.stripe.com/p/session/test" in result["description_placeholders"]["info"]
+
+
+@pytest.mark.asyncio
+async def test_options_flow_manage_billing_handles_missing_customer(hass):
+	"""Promo grants have no Stripe customer to manage."""
+	config_entry = MockHASSFactory.create_crypto_config_entry()
+	coordinator = MockHASSFactory.create_coordinator()
+	coordinator.start_billing_portal = AsyncMock(
+		side_effect=VomeSyncAPIError("No Stripe customer", status=404)
+	)
+	hass.data = {DOMAIN: {config_entry.entry_id: coordinator}}
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+
+	result = await flow.async_step_manage_billing(None)
+	assert result["type"] == FlowResultType.FORM
+	assert result["errors"]["base"] == "billing_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_options_flow_upgrade_premium_aborts_without_crypto(hass, config_entry):
+	"""Legacy entries cannot start signed Checkout."""
+	flow = VomeSyncOptionsFlow(config_entry)
+	flow.hass = hass
+	result = await flow.async_step_upgrade_premium(None)
+	assert result["type"] == FlowResultType.ABORT
+	assert result["reason"] == "crypto_required"
 
 
 @pytest.mark.asyncio

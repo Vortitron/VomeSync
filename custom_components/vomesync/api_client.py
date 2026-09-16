@@ -22,12 +22,18 @@ from .const import (
 	API_V2_ACCESS_KEYS_PAUSE,
 	API_V2_ACCESS_KEYS_PERMISSIONS,
 	API_V2_TOGGLE,
+	API_V2_OWNER_TIER,
+	API_V2_OWNER_PREMIUM,
+	API_V2_OWNER_BILLING_PORTAL,
 	AUTH_MODE_CRYPTO,
 )
 
 from .crypto import (
 	build_v2_create_switch_request,
 	build_v2_my_switches_request,
+	build_v2_get_owner_tier_request,
+	build_v2_premium_checkout_request,
+	build_v2_billing_portal_request,
 	build_v2_set_state_request,
 	build_v2_update_switch_request,
 	build_v2_create_access_key_request,
@@ -42,6 +48,18 @@ _LOGGER = logging.getLogger(__name__)
 
 class VomeSyncAPIError(Exception):
 	"""VomeSync API error."""
+
+	def __init__(
+		self,
+		message: str,
+		code: Optional[str] = None,
+		details: Any = None,
+		status: Optional[int] = None,
+	) -> None:
+		super().__init__(message)
+		self.code = code
+		self.details = details
+		self.status = status
 
 
 class VomeSyncAPIClient:
@@ -126,10 +144,12 @@ class VomeSyncAPIClient:
 
 				if response.status >= 400:
 					error_msg = response_data.get("error", f"HTTP {response.status}")
-					details = response_data.get("details")
-					if isinstance(details, list) and details:
+					code = response_data.get("code") if isinstance(response_data, dict) else None
+					details = response_data.get("details") if isinstance(response_data, dict) else None
+					details_list = details
+					if isinstance(details_list, list) and details_list:
 						detail_messages = []
-						for detail in details:
+						for detail in details_list:
 							if isinstance(detail, dict):
 								message = detail.get("message") or detail.get("field")
 							else:
@@ -139,12 +159,22 @@ class VomeSyncAPIClient:
 						if detail_messages:
 							error_msg = f"{error_msg} ({'; '.join(detail_messages)})"
 					_LOGGER.error("API request failed (%s %s): %s", method, url, error_msg)
-					raise VomeSyncAPIError(f"API request failed: {error_msg}")
+					raise VomeSyncAPIError(
+						f"API request failed: {error_msg}",
+						code=code,
+						details=details,
+						status=response.status,
+					)
 
 				if not response_data.get("success", True):
 					error_msg = response_data.get("error", "Unknown error")
+					code = response_data.get("code") if isinstance(response_data, dict) else None
 					_LOGGER.error("API returned error (%s %s): %s", method, url, error_msg)
-					raise VomeSyncAPIError(f"API error: {error_msg}")
+					raise VomeSyncAPIError(
+						f"API error: {error_msg}",
+						code=code,
+						details=response_data.get("details") if isinstance(response_data, dict) else None,
+					)
 
 				return response_data.get("data", response_data)
 
@@ -436,6 +466,27 @@ class VomeSyncAPIClient:
 			return response.get("switches", [])
 		except VomeSyncAPIError:
 			return []
+
+	async def get_owner_tier(self) -> Dict[str, Any]:
+		"""Return the signed owner's current tier and limits."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode required")
+		payload = build_v2_get_owner_tier_request(self.crypto_seed)
+		return await self._make_request("POST", API_V2_OWNER_TIER, payload, require_auth=False)
+
+	async def start_premium_checkout(self) -> Dict[str, Any]:
+		"""Start Stripe Checkout for VomeSync premium."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode required")
+		payload = build_v2_premium_checkout_request(self.crypto_seed)
+		return await self._make_request("POST", API_V2_OWNER_PREMIUM, payload, require_auth=False)
+
+	async def start_billing_portal(self) -> Dict[str, Any]:
+		"""Open Stripe Customer Portal for this owner's subscription."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode required")
+		payload = build_v2_billing_portal_request(self.crypto_seed)
+		return await self._make_request("POST", API_V2_OWNER_BILLING_PORTAL, payload, require_auth=False)
 
 	async def get_public_switches(self) -> list[Dict[str, Any]]:
 		"""Get public switches."""

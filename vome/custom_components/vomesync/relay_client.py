@@ -100,6 +100,7 @@ from .const import (
 	RELAY_RPC_TIMEOUT,
 	RELAY_WS_MAX_COMMAND_BYTES,
 	WS_COMMAND_TYPE_RE,
+	WS_ERROR_STATUS,
 	RELAY_WS_MSG_HA_RPC,
 	RELAY_WS_MSG_HA_RPC_RESPONSE,
 	RELAY_WS_MSG_HELLO,
@@ -456,6 +457,38 @@ def describe_local_core_url(
 	return DEFAULT_LOCAL_CORE_URL, "fallback"
 
 
+def _ws_error_status(err: Any) -> int:
+	"""HTTP status for a Home Assistant WebSocket error payload.
+
+	Home Assistant reports WebSocket failures with a *string* code --
+	``unknown_command``, ``not_found``, ``unauthorized`` -- so there is nothing
+	to parse as a number. This used to be ``int(err["code"])``, which raised
+	ValueError on every one of them; that escaped the per-request handler and
+	reached the reconnect loop, so an unsupported command dropped the whole
+	tunnel instead of failing the one call.
+
+	Unrecognised codes fall back to 400 rather than raising, because a status
+	nobody anticipated is still better than no remote access.
+	"""
+	if not isinstance(err, dict):
+		return 400
+	code = err.get("code")
+	if isinstance(code, bool):  # bool is an int subclass; not a status
+		return 400
+	if isinstance(code, int):
+		return code if 100 <= code <= 599 else 400
+	if isinstance(code, str):
+		mapped = WS_ERROR_STATUS.get(code.strip().lower())
+		if mapped is not None:
+			return mapped
+		try:  # a numeric string is still a usable status
+			numeric = int(code)
+		except ValueError:
+			return 400
+		return numeric if 100 <= numeric <= 599 else 400
+	return 400
+
+
 def _to_ws_url(base_url: Optional[str], path: str) -> str:
 	"""Map an ``http(s)`` base + path to the matching ``ws(s)://`` URL."""
 	base = (base_url or DEFAULT_LOCAL_CORE_URL).rstrip("/")
@@ -735,9 +768,21 @@ class RelayClient:
 
 	async def _handle_rpc(self, ws: aiohttp.ClientWebSocketResponse, data: dict) -> None:
 		request_id = data.get("requestId")
-		status, body, error = await self.execute(
-			data.get("method"), data.get("path"), data.get("body"), data.get("target")
-		)
+		try:
+			status, body, error = await self.execute(
+				data.get("method"), data.get("path"), data.get("body"), data.get("target")
+			)
+		except asyncio.CancelledError:
+			raise
+		except Exception as err:  # noqa: BLE001 - one bad request, not one bad tunnel
+			# Anything escaping here used to reach the reconnect loop, so a
+			# single malformed or unsupported call dropped remote access for
+			# everything sharing the tunnel. Fail the request instead.
+			_LOGGER.exception(
+				"Relay (%s) could not execute %s %s",
+				self._server_id, data.get("method"), data.get("path"),
+			)
+			status, body, error = 0, None, f"Relay could not execute the request: {err}"
 		response: dict[str, Any] = {
 			"type": RELAY_WS_MSG_HA_RPC_RESPONSE,
 			"requestId": request_id,
@@ -1596,7 +1641,7 @@ class RelayClient:
 						if result.get("success"):
 							return 200, json.dumps(result.get("result")), None
 						err = result.get("error") or {}
-						code = int(err.get("code") or 400) if isinstance(err, dict) else 400
+						code = _ws_error_status(err)
 						return code, json.dumps({"error": err}), None
 		except asyncio.TimeoutError:
 			return 0, None, "Local Home Assistant WebSocket timed out."
