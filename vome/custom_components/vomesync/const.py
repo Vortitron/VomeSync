@@ -420,8 +420,12 @@ CONF_SHOW_SIGNING_KEY_AFTER = "show_signing_key_after"
 # Categories
 SWITCH_CATEGORIES = [
 	"Community",
-	"Personal", 
+	"Personal",
 	"Event",
+	"Transport",
+	"Government",
+	"Holiday",
+	"Weather",
 	"Test",
 	"Other"
 ]

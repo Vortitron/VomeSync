@@ -9,7 +9,7 @@ British English. No marketing voice. Do not promise a paid feature the code does
 | Piece | Where | Status |
 |---|---|---|
 | Free cap: 5 private + 10 public (15 total) | Server `checkFreeTierLimits` | Enforced on create and when publicize actually changes |
-| Premium cap: 50 switches, 25 public | Same, after `owner_tier:*` | Enforced |
+| Premium cap: 150 switches, 120 public | Same, after `owner_tier:*` | Enforced |
 | How you become premium | Stripe Checkout, promo code, or admin grant | **Sold.** Hosted subscription Checkout + webhook. HA options flow **Upgrade to premium** |
 | “Pay to subscribe to more than a few” | HA `FREE_TIER_MAX_SUBSCRIPTIONS = 10` | Options flow **and** `subscribe_to_switch`. Skipped when `POST /v2/owner/tier` says premium. The server still does not count watchers per install. |
 | Paid promotion | Stripe Checkout + `promotedUntil` | **Sold.** Hosted Checkout, Promoted badge, directory sort |
@@ -19,6 +19,8 @@ British English. No marketing voice. Do not promise a paid feature the code does
 | Owner “shop” | Public `link` field | A URL on the card. No payment, no webhook, no commission |
 
 Catalogue and public holidays stay free to watch. Directory views are not charged.
+
+The 150 / 120 premium cap is **per owner**, the same knob for a paying customer and for the staff catalogue. The public directory is one Ed25519 seed, so one hundred illustrated listings all count against that owner. We raised the cap so `cli.js apply` could finish, not because a household needs 120 public switches. A catalogue exemption (unlimited public for that owner only) would be cleaner if we want a tighter paid cap later. Watching a catalogue UID does not use these create limits.
 
 ## Three different products
 
