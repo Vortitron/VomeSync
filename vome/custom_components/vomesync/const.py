@@ -428,6 +428,7 @@ API_V2_ACCESS_KEYS_PERMISSIONS = "/api/v2/switch/{uid}/access-keys/permissions"
 API_V2_TOGGLE = "/api/v2/switch/{uid}/toggle"
 API_V2_OWNER_TIER = "/api/v2/owner/tier"
 API_V2_OWNER_PREMIUM = "/api/v2/owner/premium"
+API_V2_OWNER_BILLING_PORTAL = "/api/v2/owner/billing-portal"
 
 # WebSocket message types
 WS_MSG_STATE_UPDATE = "state_update"

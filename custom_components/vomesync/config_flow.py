@@ -571,7 +571,7 @@ class VomeSyncOptionsFlow(
 	) -> FlowResult:
 		"""Manage the options."""
 		# Keep the highest-frequency actions near the top; move the rest under "More…"
-		menu_options = ["create_switch", "subscribe_switch", "manage_switches"]
+		menu_options = ["create_switch", "subscribe_switch", "upgrade_premium", "manage_switches"]
 		# Connecting this HA to a Vome account is a headline feature — keep it
 		# top-level rather than buried in "More…".
 		if self._relay_is_linked():
@@ -591,6 +591,7 @@ class VomeSyncOptionsFlow(
 		"""Secondary menu to reduce clutter."""
 		menu_options = [
 			"backup_signing_key",
+			"manage_billing",
 			"import_switches",
 			"reannounce_owned_switches",
 			"cleanup_orphaned_devices",
@@ -607,6 +608,117 @@ class VomeSyncOptionsFlow(
 	) -> FlowResult:
 		"""Return to the main options menu."""
 		return await self.async_step_init()
+
+	def _crypto_ready(self) -> bool:
+		return (
+			self._config_entry.data.get(CONF_AUTH_MODE) == AUTH_MODE_CRYPTO
+			and bool(self._config_entry.data.get(CONF_CRYPTO_SEED))
+		)
+
+	def _show_stripe_link_form(self, step_id: str, info: str, errors: Optional[Dict[str, str]] = None) -> FlowResult:
+		return self.async_show_form(
+			step_id=step_id,
+			data_schema=vol.Schema({}),
+			errors=errors or {},
+			description_placeholders={"info": info},
+		)
+
+	async def async_step_upgrade_premium(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Start Stripe Checkout for VomeSync premium (VAT-inclusive)."""
+		if not self._crypto_ready():
+			return self.async_abort(reason="crypto_required")
+		if user_input is not None:
+			return await self.async_step_init()
+
+		coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+		tier = await coordinator.get_owner_tier_info()
+		if str((tier or {}).get("tier") or "") == "premium" and (tier or {}).get("hasStripeCustomer"):
+			return self._show_stripe_link_form(
+				"upgrade_premium",
+				"This install is already on premium. Open **More → Manage billing** to change or cancel the subscription.\n\nPrices include VAT.",
+			)
+
+		try:
+			session = await coordinator.start_premium_checkout()
+		except VomeSyncAPIError as ex:
+			if getattr(ex, "status", None) == 409:
+				return self._show_stripe_link_form(
+					"upgrade_premium",
+					"This install is already on premium. Open **More → Manage billing** to change or cancel the subscription.",
+				)
+			if getattr(ex, "status", None) == 503:
+				return self._show_stripe_link_form(
+					"upgrade_premium",
+					"Premium checkout is not configured on this server.",
+					{"base": "checkout_unavailable"},
+				)
+			_LOGGER.error("Premium checkout failed: %s", ex)
+			return self._show_stripe_link_form(
+				"upgrade_premium",
+				"Could not start Stripe Checkout. Try again, or upgrade from the switch page at sync.vome.io.",
+				{"base": "checkout_failed"},
+			)
+
+		url = str((session or {}).get("url") or "").strip()
+		if not url:
+			return self._show_stripe_link_form(
+				"upgrade_premium",
+				"Could not start Stripe Checkout. Try again, or upgrade from the switch page at sync.vome.io.",
+				{"base": "checkout_failed"},
+			)
+		return self._show_stripe_link_form(
+			"upgrade_premium",
+			f"[Pay with Stripe]({url})\n\n`{url}`\n\n"
+			"€9 a month including VAT. Opens Stripe Checkout in your browser. "
+			"Come back here after you finish — premium usually applies within a minute.",
+		)
+
+	async def async_step_manage_billing(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Open Stripe Customer Portal to change or cancel premium."""
+		if not self._crypto_ready():
+			return self.async_abort(reason="crypto_required")
+		if user_input is not None:
+			return await self.async_step_more()
+
+		coordinator = self.hass.data[DOMAIN][self._config_entry.entry_id]
+		try:
+			session = await coordinator.start_billing_portal()
+		except VomeSyncAPIError as ex:
+			if getattr(ex, "status", None) in (404, 400):
+				return self._show_stripe_link_form(
+					"manage_billing",
+					"No Stripe customer for this owner. Pay for premium first — a promo grant has nothing to manage here.",
+					{"base": "billing_unavailable"},
+				)
+			if getattr(ex, "status", None) == 503:
+				return self._show_stripe_link_form(
+					"manage_billing",
+					"Billing is not configured on this server.",
+					{"base": "checkout_unavailable"},
+				)
+			_LOGGER.error("Billing portal failed: %s", ex)
+			return self._show_stripe_link_form(
+				"manage_billing",
+				"Could not open Stripe billing. Try again from the switch page at sync.vome.io.",
+				{"base": "billing_unavailable"},
+			)
+
+		url = str((session or {}).get("url") or "").strip()
+		if not url:
+			return self._show_stripe_link_form(
+				"manage_billing",
+				"Could not open Stripe billing. Try again from the switch page at sync.vome.io.",
+				{"base": "billing_unavailable"},
+			)
+		return self._show_stripe_link_form(
+			"manage_billing",
+			f"[Open Stripe billing]({url})\n\n`{url}`\n\n"
+			"Change payment method or cancel premium. Changes can take a minute to apply.",
+		)
 
 	async def async_step_vome_backups(
 		self, user_input: Optional[Dict[str, Any]] = None

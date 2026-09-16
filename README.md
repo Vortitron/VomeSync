@@ -171,7 +171,7 @@ What the code does today vs what we still owe: [docs/MONETISATION.md](docs/MONET
 
 - **Free (enforced on the server):** 5 private and 10 public listings (15 total).
 - **Free (HA):** 10 watched switches. Options flow and the subscribe service both check this. Skipped when the owner is premium. The server does not count watchers per install.
-- **Premium:** 50 switches / 25 public, via Stripe Checkout (€9 / month), promo code, or admin grant.
+- **Premium:** 50 switches / 25 public, via Stripe Checkout (€9 / month including VAT), promo code, or admin grant. Cancel or change card from the switch page or **More → Manage billing** in Home Assistant.
 - **Paid promotion:** Stripe Checkout for a Promoted badge and top-of-directory placement.
 - **Still planned:** DIY payment/webhook hooks on a listing → Stripe Connect commission only if owners want us to collect for them.
 

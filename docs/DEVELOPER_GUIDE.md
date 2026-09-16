@@ -189,7 +189,9 @@ Endpoints are split across focused route modules in `webserver/src/routes/`. The
 | POST | `/api/v2/owner/redeem-promo` | Ed25519 signed | Redeem a promo code for premium tier |
 | POST | `/api/v2/owner/tier` | Ed25519 signed | Check current owner tier & limits |
 | POST | `/api/v2/owner/premium` | Ed25519 signed | Start Stripe Checkout for premium |
+| POST | `/api/v2/owner/billing-portal` | Ed25519 signed | Open Stripe Customer Portal |
 | POST | `/api/v2/switch/:uid/premium` | Access key (`metadata`) | Start Stripe Checkout for premium |
+| POST | `/api/v2/switch/:uid/billing-portal` | Access key (`metadata`) | Open Stripe Customer Portal |
 
 ### Admin
 
@@ -318,7 +320,7 @@ All data is stored in Redis. Key patterns (from `webserver/src/utils/redis.js`):
 | `admin:redirects` | Hash | UID redirects |
 | `admin:overrides:<uid>` | Hash | Admin listing overrides |
 | `admin_challenge:<challenge>` | String (TTL 30s) | HMAC admin auth challenge (P2) |
-| `owner_tier:<ownerId>` | Hash (TTL) | Owner premium tier record (`tier`, `expiresAt`, `promoCode`, `redeemedAt`) |
+| `owner_tier:<ownerId>` | Hash (TTL) | Owner premium tier record (`tier`, `expiresAt`, `promoCode`, `redeemedAt`, `stripeCustomerId`, `stripeSubscriptionId`) |
 | `promo:<code>` | Hash | Promo code record (`code`, `tier`, `durationDays`, `maxRedemptions`, `redemptions`, `createdBy`, `createdAt`) |
 
 ---
@@ -391,6 +393,10 @@ pytest tests/e2e/ -v
 | `STRIPE_WEBHOOK_SECRET` | — | Signing secret for `POST /api/stripe/webhook` |
 | `STRIPE_PRICE_PROMOTE` | — | Dashboard Price ID; if empty, `STRIPE_PROMOTE_AMOUNT` (cents) is used |
 | `STRIPE_PRICE_PREMIUM` | — | Dashboard Price ID; if empty, `STRIPE_PREMIUM_AMOUNT` (cents / month) is used |
+| `STRIPE_TAX_ENABLED` | true | Send `automatic_tax` + `tax_id_collection` on Checkout (account Tax is already on) |
+| `STRIPE_TAX_CODE` | `txcd_10103000` | SaaS personal — same as vome.io |
+| `STRIPE_TAX_BEHAVIOR` | inclusive | Advertised prices include VAT |
+| `STRIPE_ADAPTIVE_PRICING` | true | Presentment currency on Checkout |
 | `VOMESYNC_PUBLIC_BASE_URL` | `https://sync.vome.io` | Checkout success/cancel origin |
 | `HCAPTCHA_SECRET` | — | hCaptcha verification |
 | `ENABLE_SSL` | false | In-app TLS (usually handled by proxy) |
@@ -746,6 +752,7 @@ The `checkFreeTierLimits` function now:
 | POST | `/api/v2/owner/redeem-promo` | Ed25519 signed | Redeem promo code → upgrade to premium |
 | POST | `/api/v2/owner/tier` | Ed25519 signed | Check current tier & expiry |
 | POST | `/api/v2/owner/premium` | Ed25519 signed | Start Stripe Checkout for premium |
+| POST | `/api/v2/owner/billing-portal` | Ed25519 signed | Open Stripe Customer Portal |
 
 **Files changed:** `config.js`, `redis.js`, `route-helpers.js`, `v2-routes.js`, `admin-routes.js`, `legacy-routes.js`, `validation.js`.
 

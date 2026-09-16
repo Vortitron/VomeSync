@@ -868,13 +868,29 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 
 	async def owner_is_premium(self) -> bool:
 		"""True when this install's owner has a live premium tier."""
+		tier = await self.get_owner_tier_info()
+		return str((tier or {}).get("tier") or "") == "premium"
+
+	async def get_owner_tier_info(self) -> Dict[str, Any]:
+		"""Return the signed owner's tier payload, or {} if unavailable."""
 		if not self.crypto_enabled:
-			return False
+			return {}
 		try:
-			tier = await self.api_client.get_owner_tier()
-			return str((tier or {}).get("tier") or "") == "premium"
+			return await self.api_client.get_owner_tier() or {}
 		except VomeSyncAPIError:
-			return False
+			return {}
+
+	async def start_premium_checkout(self) -> Dict[str, Any]:
+		"""Start Stripe Checkout for VomeSync premium."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode required")
+		return await self.api_client.start_premium_checkout()
+
+	async def start_billing_portal(self) -> Dict[str, Any]:
+		"""Open Stripe Customer Portal for this owner."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode required")
+		return await self.api_client.start_billing_portal()
 
 	def _remote_subscription_count(self) -> int:
 		imported = (self.config_entry.options or {}).get(_OPT_IMPORTED_SWITCHES, {}) or {}

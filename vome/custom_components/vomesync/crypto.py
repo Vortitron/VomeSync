@@ -540,6 +540,17 @@ def build_v2_get_owner_tier_request(
 	ts: Optional[int] = None,
 	nonce: Optional[str] = None,
 ) -> Dict[str, Any]:
+	return _build_owner_signed_action(
+		master_seed_b64url, "get_owner_tier", ts=ts, nonce=nonce
+	)
+
+
+def _build_owner_signed_action(
+	master_seed_b64url: str,
+	action: str,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
 	if ts is None:
 		import time
 		ts_i = int(time.time() * 1000)
@@ -549,7 +560,7 @@ def build_v2_get_owner_tier_request(
 	owner_pub = owner_pubkey_b64url(master_seed_b64url)
 	payload = {
 		"v": 2,
-		"action": "get_owner_tier",
+		"action": action,
 		"ownerPubKey": owner_pub,
 		"ts": ts_i,
 		"nonce": nonce_s,
@@ -569,28 +580,19 @@ def build_v2_premium_checkout_request(
 	ts: Optional[int] = None,
 	nonce: Optional[str] = None,
 ) -> Dict[str, Any]:
-	if ts is None:
-		import time
-		ts_i = int(time.time() * 1000)
-	else:
-		ts_i = int(ts)
-	nonce_s = nonce or new_nonce()
-	owner_pub = owner_pubkey_b64url(master_seed_b64url)
-	payload = {
-		"v": 2,
-		"action": "premium_checkout",
-		"ownerPubKey": owner_pub,
-		"ts": ts_i,
-		"nonce": nonce_s,
-	}
-	canon = canonical_json(payload)
-	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
-	return {
-		"ownerPubKey": owner_pub,
-		"ts": ts_i,
-		"nonce": nonce_s,
-		"sigOwner": sig_owner,
-	}
+	return _build_owner_signed_action(
+		master_seed_b64url, "premium_checkout", ts=ts, nonce=nonce
+	)
+
+
+def build_v2_billing_portal_request(
+	master_seed_b64url: str,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	return _build_owner_signed_action(
+		master_seed_b64url, "billing_portal", ts=ts, nonce=nonce
+	)
 
 
 def build_v2_set_state_request(

@@ -10,11 +10,12 @@ British English. No marketing voice. Do not promise a paid feature the code does
 |---|---|---|
 | Free cap: 5 private + 10 public (15 total) | Server `checkFreeTierLimits` | Enforced on create and when publicize actually changes |
 | Premium cap: 50 switches, 25 public | Same, after `owner_tier:*` | Enforced |
-| How you become premium | Stripe Checkout, promo code, or admin grant | **Sold.** Hosted subscription Checkout + webhook |
+| How you become premium | Stripe Checkout, promo code, or admin grant | **Sold.** Hosted subscription Checkout + webhook. HA options flow **Upgrade to premium** |
 | “Pay to subscribe to more than a few” | HA `FREE_TIER_MAX_SUBSCRIPTIONS = 10` | Options flow **and** `subscribe_to_switch`. Skipped when `POST /v2/owner/tier` says premium. The server still does not count watchers per install. |
 | Paid promotion | Stripe Checkout + `promotedUntil` | **Sold.** Hosted Checkout, Promoted badge, directory sort |
 | Directory ranking | `GET /public-switches` | Promoted listings first, then the rest. Organic catalogue is not sold. |
-| Stripe | Same live account as vome.io | Hosting plans on vome.io; VomeSync promotion + premium on sync.vome.io. Separate webhook URL. |
+| Stripe | Same live account as vome.io | Hosting plans on vome.io; VomeSync promotion + premium on sync.vome.io. Separate webhook URL. **VAT:** Stripe Tax already registered; Checkout sends `automatic_tax`. |
+| Manage billing | Stripe Customer Portal | Website **Manage billing** + HA **More → Manage billing**. Needs a paid Checkout customer, not a promo grant. |
 | Owner “shop” | Public `link` field | A URL on the card. No payment, no webhook, no commission |
 
 Catalogue and public holidays stay free to watch. Directory views are not charged.
@@ -27,14 +28,16 @@ Do not mash them into one Checkout button. They have different merchants of reco
 
 Lift **create / publicize / subscribe** caps.
 
-- **Checkout Sessions** (`mode: subscription`, €9 / month unless `STRIPE_PRICE_PREMIUM` is set). Metadata: `kind=vomesync_premium`, `ownerId`. Also on `subscription_data.metadata`.
+- **Checkout Sessions** (`mode: subscription`, €9 / month including VAT unless `STRIPE_PRICE_PREMIUM` is set). Metadata: `kind=vomesync_premium`, `ownerId`. Also on `subscription_data.metadata`.
 - Website: `POST /v2/switch/:uid/premium` with a metadata access key.
-- Home Assistant: signed `POST /v2/owner/premium`.
+- Home Assistant: signed `POST /v2/owner/premium` from **Upgrade to premium** in the options menu.
 - Webhook `checkout.session.completed` → `setOwnerTier(ownerId, 'premium')`. `customer.subscription.deleted` / `updated` (canceled, unpaid, incomplete_expired) clears it unless a time-limited promo remains. `past_due` keeps premium for Smart Retries.
 - HA options flow calls `POST /v2/owner/tier` and skips the 10-watch cap when `tier === 'premium'`. The subscribe service enforces the same cap.
 - Server still cannot honestly cap “subscriptions” until HA registers a watcher list. Until then, premium is “we trust the client on watches + we raise the create/publicize caps which we do enforce.”
+- **VAT:** same Stripe account as vome.io already has Tax (Sweden small seller, inclusive, SaaS personal `txcd_10103000`). Checkout must send `automatic_tax` + `tax_id_collection` or it silently collects 0. Dashboard Prices need `tax_behavior=inclusive` and Products that tax code.
+- **Cancel / change:** Stripe Customer Portal (`POST /v2/switch/:uid/billing-portal` or signed `POST /v2/owner/billing-portal`). Promo grants have no `stripeCustomerId`.
 
-No Stripe Tax until we have a registration. No Connect. We are the merchant.
+No Connect. We are the merchant.
 
 ### 2. Paid promotion (owner pays us)
 
@@ -87,7 +90,7 @@ Do not use Connect for (1) or (2). Mixing SaaS subscriptions with destination ch
 ## Recommended order
 
 1. **Paid promotion** — Checkout + `promotedUntil` + sort + badge. **Done.**
-2. **Paid premium** — Checkout + `owner_tier` + HA respects `/v2/owner/tier` for the 10-cap (and the subscribe service). **Done.**
+2. **Paid premium** — Checkout + `owner_tier` + HA **Upgrade to premium** + Customer Portal. **Done.** VAT is collected on Checkout via Stripe Tax on the existing vome.io registration.
 3. **DIY commerce fields** — webhooks + copy. Zero payouts, zero KYC.
 4. **Connect commission** — only if DIY owners say they want us to collect for them.
 

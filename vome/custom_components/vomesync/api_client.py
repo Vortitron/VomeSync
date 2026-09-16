@@ -24,6 +24,7 @@ from .const import (
 	API_V2_TOGGLE,
 	API_V2_OWNER_TIER,
 	API_V2_OWNER_PREMIUM,
+	API_V2_OWNER_BILLING_PORTAL,
 	AUTH_MODE_CRYPTO,
 )
 
@@ -32,6 +33,7 @@ from .crypto import (
 	build_v2_my_switches_request,
 	build_v2_get_owner_tier_request,
 	build_v2_premium_checkout_request,
+	build_v2_billing_portal_request,
 	build_v2_set_state_request,
 	build_v2_update_switch_request,
 	build_v2_create_access_key_request,
@@ -478,6 +480,13 @@ class VomeSyncAPIClient:
 			raise VomeSyncAPIError("Crypto mode required")
 		payload = build_v2_premium_checkout_request(self.crypto_seed)
 		return await self._make_request("POST", API_V2_OWNER_PREMIUM, payload, require_auth=False)
+
+	async def start_billing_portal(self) -> Dict[str, Any]:
+		"""Open Stripe Customer Portal for this owner's subscription."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode required")
+		payload = build_v2_billing_portal_request(self.crypto_seed)
+		return await self._make_request("POST", API_V2_OWNER_BILLING_PORTAL, payload, require_auth=False)
 
 	async def get_public_switches(self) -> list[Dict[str, Any]]:
 		"""Get public switches."""

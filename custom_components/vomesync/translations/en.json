@@ -37,6 +37,7 @@
 				"menu_options": {
 					"create_switch": "➕ Create switch",
 					"subscribe_switch": "👁️ Subscribe to switch",
+					"upgrade_premium": "⭐ Upgrade to premium",
 					"manage_switches": "🛠️ Manage switches",
 					"link_vome": "🏠 Connect to Vome Home",
 					"unlink_vome": "🔌 Disconnect from Vome Home",
@@ -48,6 +49,7 @@
 				"title": "More",
 				"menu_options": {
 					"backup_signing_key": "🔐 Backup signing key",
+					"manage_billing": "💳 Manage billing",
 					"import_switches": "⬇️ Import switches from API",
 					"reannounce_owned_switches": "📣 Re-announce owned switches",
 					"cleanup_orphaned_devices": "🧹 Clean up orphaned devices",
@@ -59,6 +61,14 @@
 			},
 			"backup_signing_key": {
 				"title": "Backup signing key",
+				"description": "{info}"
+			},
+			"upgrade_premium": {
+				"title": "Upgrade to premium",
+				"description": "{info}"
+			},
+			"manage_billing": {
+				"title": "Manage billing",
 				"description": "{info}"
 			},
 			"import_switches": {
@@ -403,7 +413,7 @@
 		},
 		"error": {
 			"create_failed": "Failed to create switch. Check the error above for the invalid field(s).",
-			"tier_limit_reached": "Free limit reached (10 public and 5 private switches). Upgrade to premium on the switch page at sync.vome.io.",
+			"tier_limit_reached": "Free limit reached (10 public and 5 private switches). Upgrade to premium from this menu, or on the switch page at sync.vome.io.",
 			"update_failed": "Failed to update switch. Check the error above for the invalid field(s).",
 			"captcha_required": "CAPTCHA token required to publicise this switch on this server.",
 			"backup_required": "Please confirm you have backed up your signing key.",
@@ -413,7 +423,10 @@
 			"access_key_permissions_failed": "Failed to update access key permissions. Check connectivity and try again.",
 			"access_key_permissions_empty": "At least one permission must be selected.",
 			"subscribe_failed": "Failed to subscribe to switch.",
-			"subscription_limit_reached": "Free installs can watch 10 switches. Upgrade to premium on sync.vome.io, then try again.",
+			"subscription_limit_reached": "Free installs can watch 10 switches. Upgrade to premium from this menu, then try again.",
+			"checkout_failed": "Could not start Stripe Checkout. Try again, or upgrade from the switch page at sync.vome.io.",
+			"checkout_unavailable": "Premium checkout is not configured on this server.",
+			"billing_unavailable": "Could not open Stripe billing. Pay for premium first — a promo grant has nothing to manage here.",
 			"connect_failed": "Failed to create session token. Check server URL/key and try again.",
 			"fetch_failed": "Failed to fetch API keys from server.",
 			"delete_failed": "Failed to delete API key.",

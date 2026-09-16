@@ -66,6 +66,8 @@ class TestOptionsFlowDiscovery:
 		"confirm_backup_signing_key", "confirm_backup_signing_key_done",
 		"reveal_signing_key", "post_create_signing_key",
 		"subscribe_switch",
+		"upgrade_premium",
+		"manage_billing",
 		"manage_switches", "manage_switch_action",
 		"view_switch", "edit_switch",
 		"manage_on_website",
