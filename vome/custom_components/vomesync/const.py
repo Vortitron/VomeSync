@@ -426,6 +426,7 @@ SWITCH_CATEGORIES = [
 	"Government",
 	"Holiday",
 	"Weather",
+	"IsUp",
 	"Test",
 	"Other"
 ]

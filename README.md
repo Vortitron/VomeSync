@@ -81,6 +81,7 @@ The project is maintained by Vortitron, with monetization via subscriptions for 
   - Static site (vanilla HTML/CSS/JavaScript) served via Nginx.
 - **Features**:
   - Lists switches (UID, description, city-level location, category) for users to browse/copy UIDs.
+  - **IsUp** category: GitHub, Claude, OpenAI, Gemini, Home Assistant Cloud and other official status-page lamps. ON while the vendor reports operational; OFF for any incident.
   - Optional theming: per-switch `iconUrl` + `bannerUrl` shown on switch pages (and `https://sync.vome.io/switch/<uid>` deep links).
   - Simple table view (e.g., "Porch Light Event, Stockholm, Community").
   - No user accounts—public read-only access.

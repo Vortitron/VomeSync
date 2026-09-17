@@ -290,7 +290,7 @@ The website is a **single-page application** built with vanilla JS, CSS variable
 
 ### Key features
 
-- **Switch directory**: paginated grid of public switches with search, category filter, and sort.
+- **Switch directory**: paginated grid of public switches with search, category filter, and sort. **IsUp** is the status-page category (GitHub, AI APIs, Home Assistant Cloud, and similar).
 - **Quick-view panel**: click a card to see details, toggle, comment.
 - **"Manage on website" links**: the HA integration generates short-lived session/access keys that allow web-based management; the website redeems these tokens.
 - **Dark theme only** (currently): uses CSS custom properties in `:root`.
