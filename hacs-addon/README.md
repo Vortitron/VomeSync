@@ -63,7 +63,7 @@ Your personal key will be stored securely and used to authenticate your switches
    - **Name**: Local entity name (e.g., "Community Light")
    - **Description**: Public description (e.g., "Festival Event Light")
    - **Location**: City-level location (e.g., "Stockholm")
-   - **Category**: Type of switch (Community, Personal, Event, Test, Other)
+   - **Category**: Type of switch (Community, Personal, Event, Transport, Government, Holiday, Weather, Test, Other)
    - **Publicise**: Whether to list publicly for discovery
    - **Link** (optional): External link shown on the switch page
    - **Icon URL** (optional): Icon image shown on the switch page

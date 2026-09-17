@@ -389,6 +389,7 @@ pytest tests/e2e/ -v
 | `FREE_TIER_MAX_PRIVATE_SWITCHES` | 5 | Max private switches per owner (free tier) |
 | `PREMIUM_MAX_SWITCHES` | 50 | Max switches per owner (premium tier) |
 | `PREMIUM_MAX_PUBLIC_SWITCHES` | 25 | Max public switches per owner (premium tier) |
+| `CATALOGUE_OWNER_ID` | — | Staff catalogue owner; skipped by create/publicize caps |
 | `STRIPE_SECRET_KEY` | — | Restricted or secret key for Checkout |
 | `STRIPE_WEBHOOK_SECRET` | — | Signing secret for `POST /api/stripe/webhook` |
 | `STRIPE_PRICE_PROMOTE` | — | Dashboard Price ID; if empty, `STRIPE_PROMOTE_AMOUNT` (cents) is used |
@@ -706,6 +707,7 @@ A tiered system allowing owners to be upgraded from the default `free` tier to `
 ```
 limits.premiumMaxSwitches         → PREMIUM_MAX_SWITCHES (default 50)
 limits.premiumMaxPublicSwitches   → PREMIUM_MAX_PUBLIC_SWITCHES (default 25)
+limits.catalogueOwnerId           → CATALOGUE_OWNER_ID (exempt from those caps)
 ```
 
 #### Redis data model

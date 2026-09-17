@@ -10,6 +10,7 @@ British English. No marketing voice. Do not promise a paid feature the code does
 |---|---|---|
 | Free cap: 5 private + 10 public (15 total) | Server `checkFreeTierLimits` | Enforced on create and when publicize actually changes |
 | Premium cap: 50 switches, 25 public | Same, after `owner_tier:*` | Enforced |
+
 | How you become premium | Stripe Checkout, promo code, or admin grant | **Sold.** Hosted subscription Checkout + webhook. HA options flow **Upgrade to premium** |
 | “Pay to subscribe to more than a few” | HA `FREE_TIER_MAX_SUBSCRIPTIONS = 10` | Options flow **and** `subscribe_to_switch`. Skipped when `POST /v2/owner/tier` says premium. The server still does not count watchers per install. |
 | Paid promotion | Stripe Checkout + `promotedUntil` | **Sold.** Hosted Checkout, Promoted badge, directory sort |
@@ -19,6 +20,8 @@ British English. No marketing voice. Do not promise a paid feature the code does
 | Owner “shop” | Public `link` field | A URL on the card. No payment, no webhook, no commission |
 
 Catalogue and public holidays stay free to watch. Directory views are not charged.
+
+The public directory is one Ed25519 seed. That owner is exempt from create/publicize caps (`CATALOGUE_OWNER_ID`). Paying customers stay on 50 switches / 25 public. Watching a catalogue UID is free and does not use these limits.
 
 ## Three different products
 

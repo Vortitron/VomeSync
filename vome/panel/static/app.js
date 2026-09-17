@@ -991,7 +991,7 @@
 					<label class="field">Name<input id="sw-name" placeholder="Porch light status"></label>
 					<label class="field">Category
 						<select id="sw-category">
-							<option>Other</option><option>Community</option><option>Personal</option><option>Event</option><option>Test</option>
+							<option>Other</option><option>Community</option><option>Personal</option><option>Event</option><option>Transport</option><option>Government</option><option>Holiday</option><option>Weather</option><option>Test</option>
 						</select>
 					</label>
 				</div>
