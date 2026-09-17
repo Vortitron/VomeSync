@@ -17,7 +17,7 @@ British English. No marketing voice. Do not promise a paid feature the code does
 | Directory ranking | `GET /public-switches` | Promoted listings first, then the rest. Organic catalogue is not sold. |
 | Stripe | Same live account as vome.io | Hosting plans on vome.io; VomeSync promotion + premium on sync.vome.io. Separate webhook URL. **VAT:** Stripe Tax already registered; Checkout sends `automatic_tax`. |
 | Manage billing | Stripe Customer Portal | Website **Manage billing** + HA **More → Manage billing**. Needs a paid Checkout customer, not a promo grant. |
-| Owner “shop” | Public `link` field | A URL on the card. No payment, no webhook, no commission |
+| Owner “shop” | Public `link` field | A URL on the card. No payment, no webhook, no commission. Amazon Associates tagged hardware links are a later option with disclosure — not a live inventory feed. |
 
 Catalogue and public holidays stay free to watch. Directory views are not charged.
 
