@@ -2046,6 +2046,66 @@ class TestConfigFiles:
 		assert status == 0 and "content" in error
 		assert cfg.read_text() == "homeassistant:\n"
 
+	@pytest.mark.asyncio
+	async def test_writes_and_reads_binary_content_via_base64(self, tmp_path):
+		# A packaged asset (an icon, a compiled data pack) is not UTF-8, so the
+		# default text path can't carry it — this is the deliberate opt-in.
+		client = self._client_with_config(tmp_path)
+		raw = bytes(range(256))
+		encoded = base64.b64encode(raw).decode("ascii")
+
+		status, body, error = await client.execute(
+			"POST", "/write?path=assets/pack.bin", {"content": encoded, "encoding": "base64"}, "files"
+		)
+		assert status == 200 and error is None
+		assert json.loads(body)["bytes"] == len(raw)
+		assert (tmp_path / "assets" / "pack.bin").read_bytes() == raw
+
+		status, body, error = await client.execute(
+			"GET", "/read?path=assets/pack.bin&encoding=base64", None, "files"
+		)
+		assert status == 200 and error is None
+		read_back = json.loads(body)
+		assert read_back["encoding"] == "base64"
+		assert base64.b64decode(read_back["content"]) == raw
+
+	@pytest.mark.asyncio
+	async def test_reading_a_binary_file_as_text_gives_a_helpful_error(self, tmp_path):
+		(tmp_path / "pack.bin").write_bytes(bytes([0xFF, 0xFE, 0x00, 0x01]))
+		client = self._client_with_config(tmp_path)
+
+		status, _body, error = await client.execute("GET", "/read?path=pack.bin", None, "files")
+		assert status == 0
+		assert "not UTF-8" in error
+		assert "encoding=base64" in error
+
+	@pytest.mark.asyncio
+	async def test_rejects_invalid_base64_on_write(self, tmp_path):
+		client = self._client_with_config(tmp_path)
+
+		status, _body, error = await client.execute(
+			"POST", "/write?path=pack.bin", {"content": "not-valid-base64!!", "encoding": "base64"}, "files"
+		)
+		assert status == 0
+		assert "base64" in error.lower()
+		assert not (tmp_path / "pack.bin").exists()
+
+	@pytest.mark.asyncio
+	async def test_binary_size_cap_is_checked_on_decoded_bytes_not_the_base64_string(self, tmp_path):
+		# Base64 inflates size by ~33%: a payload just under the 2 MiB cap
+		# produces an encoded string well *over* it, so the check must run
+		# against the decoded bytes or this legitimate write would be refused.
+		raw = b"x" * (2 * 1024 * 1024 - 100)
+		encoded = base64.b64encode(raw).decode("ascii")
+		assert len(encoded) > 2 * 1024 * 1024
+		client = self._client_with_config(tmp_path)
+
+		status, body, error = await client.execute(
+			"POST", "/write?path=pack.bin", {"content": encoded, "encoding": "base64"}, "files"
+		)
+		assert status == 200 and error is None
+		assert json.loads(body)["bytes"] == len(raw)
+
 
 # ── Access-event reporting (the home's own failed-login notifications) ──────
 

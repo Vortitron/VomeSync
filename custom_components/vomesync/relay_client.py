@@ -1507,25 +1507,28 @@ class RelayClient:
 			return 0, None, f"Unsupported file method: {method}"
 
 		rel = ""
+		read_encoding = "utf8"
 		if "?" in (path or ""):
 			for part in path.split("?", 1)[1].split("&"):
 				key, _, value = part.partition("=")
 				if key == "path":
 					rel = unquote(value)
+				elif key == "encoding":
+					read_encoding = unquote(value)
 		target, problem = self._resolve_config_path(rel)
 		if target is None:
 			return 0, None, problem
 
 		try:
 			return await self._hass.async_add_executor_job(
-				self._files_op, portion, target, body
+				self._files_op, portion, target, body, read_encoding
 			)
 		except Exception as err:  # pragma: no cover - defensive
 			_LOGGER.debug("Relay (%s) file op failed: %s", self._server_id, err)
 			return 0, None, f"File operation failed: {err}"
 
 	def _files_op(
-		self, portion: str, target: Path, body: Any
+		self, portion: str, target: Path, body: Any, read_encoding: str = "utf8"
 	) -> tuple[int, Optional[str], Optional[str]]:
 		"""Blocking half of :meth:`_execute_files`, run in an executor."""
 		base = self._config_dir()
@@ -1561,23 +1564,46 @@ class RelayClient:
 			if size > FILES_MAX_READ_BYTES:
 				return 0, None, (
 					f"File is {size} bytes; the limit is {FILES_MAX_READ_BYTES}. "
-					"This target is for configuration files, not media."
+					"This target is for configuration files and small packaged "
+					"assets, not a media library."
 				)
+			if read_encoding == "base64":
+				try:
+					data = target.read_bytes()
+				except OSError as err:
+					return 0, None, f"Could not read the file: {err}"
+				return 200, json.dumps({
+					"path": str(target.relative_to(base)),
+					"content": base64.b64encode(data).decode("ascii"),
+					"encoding": "base64",
+				}), None
 			try:
 				text = target.read_text(encoding="utf-8")
 			except (UnicodeDecodeError, ValueError):
-				return 0, None, "File is not UTF-8 text."
+				return 0, None, (
+					"File is not UTF-8 text. Pass ?encoding=base64 to read it as binary."
+				)
 			except OSError as err:
 				return 0, None, f"Could not read the file: {err}"
 			return 200, json.dumps({
-				"path": str(target.relative_to(base)), "content": text
+				"path": str(target.relative_to(base)), "content": text, "encoding": "utf8"
 			}), None
 
 		# /write
 		content = body.get("content") if isinstance(body, dict) else None
 		if not isinstance(content, str):
 			return 0, None, "Body must be JSON with a 'content' string."
-		if len(content.encode("utf-8")) > FILES_MAX_WRITE_BYTES:
+		write_encoding = body.get("encoding") if isinstance(body, dict) else None
+		if write_encoding not in (None, "utf8", "base64"):
+			return 0, None, "encoding must be 'utf8' or 'base64'."
+		if write_encoding == "base64":
+			try:
+				payload = base64.b64decode(content, validate=True)
+			except ValueError as err:
+				return 0, None, f"Invalid base64 content: {err}"
+		else:
+			payload = content.encode("utf-8")
+		if len(payload) > FILES_MAX_WRITE_BYTES:
 			return 0, None, f"Content exceeds {FILES_MAX_WRITE_BYTES} bytes."
 		if target.exists() and target.is_dir():
 			return 0, None, "Path is a directory."
@@ -1587,13 +1613,13 @@ class RelayClient:
 			# failure part-way cannot leave configuration.yaml truncated — the
 			# file Home Assistant refuses to start without.
 			tmp = target.with_name(f".{target.name}.vome-tmp")
-			tmp.write_text(content, encoding="utf-8")
+			tmp.write_bytes(payload)
 			os.replace(tmp, target)
 		except OSError as err:
 			return 0, None, f"Could not write the file: {err}"
 		return 200, json.dumps({
 			"path": str(target.relative_to(base)), "written": True,
-			"bytes": len(content.encode("utf-8")),
+			"bytes": len(payload),
 		}), None
 
 	async def _execute_websocket(
