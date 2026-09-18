@@ -6,7 +6,7 @@ The flow being pinned here is the one a stranger walks:
 1. Press the button in a Home Assistant that has never heard of Vome.
 2. It gets a temporary link, a queued check, and one URL to open.
 3. The report comes back and lives here — on a sensor, with the findings.
-4. Sign in from that URL to keep it, or Vome deletes the lot in two hours.
+4. Sign in from that URL to keep it, or Vome deletes the lot in a day.
 
 The two things that would be unforgivable to get wrong are both here: a
 temporary link must never be presented as a permanent one (step 4 is a
@@ -25,9 +25,11 @@ from custom_components.vomesync.const import (
 	CONF_BACKUP,
 	CONF_BACKUP_SECRET,
 	CONF_RELAY,
+	CONF_RELAY_FORWARD_UI,
 	CONF_RELAY_GUEST,
 	CONF_RELAY_GUEST_CLAIM_URL,
 	CONF_RELAY_GUEST_EXPIRES,
+	CONF_RELAY_REMOTE_URL,
 	CONF_RELAY_SECRET,
 	CONF_RELAY_SERVER_ID,
 	DOMAIN,
@@ -36,6 +38,7 @@ from custom_components.vomesync.const import (
 from custom_components.vomesync.relay_client import (
 	async_fetch_health_report,
 	async_request_guest_run,
+	async_request_remote_address,
 	async_start_health_check,
 )
 
@@ -113,6 +116,16 @@ class TestTheCalls:
 		assert args[0] == "POST"
 		assert args[1] == "https://vome.io/api/sync/agent/health-check"
 
+	@pytest.mark.asyncio
+	async def test_a_linked_house_asks_for_a_remote_address_itself(self):
+		session = _session_returning({"remote_url": "https://k7m2xq9p.home.vome.io"})
+		result = await async_request_remote_address(session, "https://vome.io", "rly_x.y")
+		assert result["remote_url"].endswith(".home.vome.io")
+		args, kwargs = session.request.call_args
+		assert args[0] == "POST"
+		assert args[1] == "https://vome.io/api/sync/agent/remote-address"
+		assert kwargs["headers"]["Authorization"] == "Bearer rly_x.y"
+
 
 # ── The flow ────────────────────────────────────────────────────────────────
 
@@ -155,6 +168,7 @@ class TestRunningItFromAnUnlinkedHouse:
 			"relay_ws_url": "wss://sync.vome.io/ws/relay",
 			"claim_url": "https://vome.io/score/try?k=tok",
 			"expires_at": 4_100_000_000, "report_id": "r1",
+			"remote_url": "https://k7m2xq9p.home.vome.io",
 		}
 		with patch.object(hs, "async_get_clientsession", return_value=MagicMock()), \
 				patch.object(hs, "async_request_guest_run", AsyncMock(return_value=opened)), \
@@ -164,15 +178,19 @@ class TestRunningItFromAnUnlinkedHouse:
 
 		assert result["guest"] is True
 		assert result["claim_url"] == "https://vome.io/score/try?k=tok"
+		assert result["remote_url"] == "https://k7m2xq9p.home.vome.io"
 		# The tunnel has to come up or the queued check has nothing to read.
 		start_relay.assert_awaited_once()
 		# The link is the flow, so it is put in front of the person.
 		assert "score/try?k=tok" in notify.call_args[0][1]
+		assert "k7m2xq9p.home.vome.io" in notify.call_args[0][1]
 
 		relay = entry.options[CONF_RELAY]
 		assert relay[CONF_RELAY_SERVER_ID] == "rly-1"
 		assert relay[CONF_RELAY_GUEST] is True
 		assert relay[CONF_RELAY_GUEST_CLAIM_URL].endswith("k=tok")
+		assert relay[CONF_RELAY_REMOTE_URL] == "https://k7m2xq9p.home.vome.io"
+		assert relay[CONF_RELAY_FORWARD_UI] is True
 
 	@pytest.mark.asyncio
 	async def test_a_guest_run_against_staging_stays_pointed_at_staging(self):
@@ -276,7 +294,13 @@ class TestTheClockIsHonest:
 			CONF_RELAY_SERVER_ID: "rly-1", CONF_RELAY_SECRET: "rly_rly-1.s",
 			CONF_RELAY_GUEST: True, CONF_RELAY_GUEST_EXPIRES: expires,
 			CONF_RELAY_GUEST_CLAIM_URL: "https://vome.io/score/try?k=tok",
+			CONF_RELAY_REMOTE_URL: "https://k7m2xq9p.home.vome.io",
+			CONF_RELAY_FORWARD_UI: True,
 		}})
+
+	def test_a_day_long_clock_reads_as_a_day(self):
+		entry = self._guest_entry()
+		assert hs.clock_phrase(entry, now=4_100_000_000 - 86_400) == "a day"
 
 	def test_a_guest_link_says_it_is_one(self):
 		entry = self._guest_entry()
@@ -306,6 +330,8 @@ class TestTheClockIsHonest:
 		assert CONF_RELAY_GUEST_CLAIM_URL not in relay
 		# The same secret and server survive: no reconnection, no re-link.
 		assert relay[CONF_RELAY_SECRET] == "rly_rly-1.s"
+		assert relay[CONF_RELAY_REMOTE_URL] == "https://k7m2xq9p.home.vome.io"
+		assert relay[CONF_RELAY_FORWARD_UI] is True
 		dismiss.assert_called_once()
 
 	@pytest.mark.asyncio
@@ -324,6 +350,7 @@ class TestTheClockIsHonest:
 		relay = entry.options[CONF_RELAY]
 		assert CONF_RELAY_SECRET not in relay
 		assert CONF_RELAY_GUEST not in relay
+		assert CONF_RELAY_REMOTE_URL not in relay
 		start_relay.assert_awaited_once()  # stops the tunnel
 		assert "not saved" in notify.call_args[0][1]
 
@@ -421,6 +448,7 @@ class TestPanelLinks:
 		assert links["online_url"].endswith("k=tok")
 		assert links["health_url"] == ""
 		assert links["card_url"].endswith("k=tok")
+		assert links["remote_url"] == ""
 
 
 class TestSayingWhichHouseThisIs:

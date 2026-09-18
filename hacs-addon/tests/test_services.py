@@ -32,6 +32,7 @@ EXPECTED_SERVICES = frozenset({
 	# The health score: the one action that works before an account does.
 	"health_score_run",
 	"health_score_get",
+	"get_remote_address",
 })
 
 

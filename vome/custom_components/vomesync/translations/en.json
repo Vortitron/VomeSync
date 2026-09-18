@@ -41,6 +41,7 @@
 					"manage_switches": "🛠️ Manage switches",
 					"link_vome": "🏠 Connect to Vome Home",
 					"unlink_vome": "🔌 Disconnect from Vome Home",
+					"get_remote_address": "🌍 Get a remote address",
 					"remote_access": "🌐 Remote access & LAN tunnels",
 					"more": "⋯ More"
 				}
@@ -335,6 +336,10 @@
 				"title": "Disconnect from Vome Home",
 				"description": "This will stop the relay and remove this Home Assistant from your Vome account's relay access."
 			},
+			"get_remote_address": {
+				"title": "Get a remote address",
+				"description": "{info}"
+			},
 			"relay_server": {
 				"title": "Relay server URL",
 				"description": "The address this Home Assistant dials out to reach Vome. It is set for you when you connect your account, so you only need this to point at a different relay — testing against a staging server, for example. Leave blank to go back to the standard relay (`{default_url}`).",
@@ -443,7 +448,9 @@
 			"lan_scheme_invalid": "Scheme must be http or https.",
 			"lan_route_invalid": "That LAN route is not valid.",
 			"lan_too_many": "You already have the maximum number of LAN routes.",
-			"invalid_backup_key": "That does not look like a Vome connection key — they start with \"vbk_\". Copy the whole value from vome.io."
+			"invalid_backup_key": "That does not look like a Vome connection key — they start with \"vbk_\". Copy the whole value from vome.io.",
+			"remote_address_failed": "Could not get a remote address. Try again in a minute.",
+			"remote_address_unavailable": "Vome could not issue a random address for this Home Assistant. A house already reached at its own URL does not need one."
 		},
 		"abort": {
 			"no_switches": "No switches to manage. Create or subscribe to switches first.",

@@ -231,6 +231,37 @@ class VomeSyncOptionsFlowRelayMixin:
 			"link_vome_alt", errors, include_alt_fields=True
 		)
 
+	async def async_step_get_remote_address(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""A random ``*.home.vome.io``, including while this house is unlinked.
+
+		The portal mints the hostname on the same guest call the health
+		score already uses.  This step exists so that button is not buried
+		under options that currently require ``_relay_is_linked()``.
+		"""
+		from . import guest_remote as gr
+
+		errors: Dict[str, str] = {}
+		result = None
+		if user_input is not None:
+			try:
+				result = await gr.async_ensure_address(self.hass, self._config_entry)
+			except Exception as err:  # noqa: BLE001 - surface it on the form
+				_LOGGER.warning("Could not get a remote address: %s", err)
+				errors["base"] = "remote_address_failed"
+			else:
+				if result.get("status") == "no_address":
+					errors["base"] = "remote_address_unavailable"
+		return self.async_show_form(
+			step_id="get_remote_address",
+			data_schema=vol.Schema({}),
+			errors=errors,
+			description_placeholders={
+				"info": gr.step_info(self._config_entry, result=result),
+			},
+		)
+
 	async def async_step_relay_server(
 		self, user_input: Optional[Dict[str, Any]] = None
 	) -> FlowResult:

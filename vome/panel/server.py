@@ -514,6 +514,7 @@ class PanelHandler(BaseHTTPRequestHandler):
 			# anything: it links itself temporarily, runs the check, and
 			# hands back a URL to see it and decide.
 			"/api/health_score/run": ("health_score_run", body),
+			"/api/remote_address": ("get_remote_address", body),
 		}
 		if path not in mapping:
 			self._send_json(404, {"error": "not found"})

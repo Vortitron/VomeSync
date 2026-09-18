@@ -430,7 +430,7 @@ health_score_run:
     Run Vome's health check on this Home Assistant. No account needed —
     if this instance is not linked to Vome yet, it opens a temporary link,
     runs the check and gives you a link to see the score and decide
-    whether to keep it. Vome deletes an unclaimed run after two hours;
+    whether to keep it. Vome deletes an unclaimed run after a day;
     the report stays here either way.
   fields:
     entry_id:
@@ -467,3 +467,19 @@ health_score_get:
       default: true
       selector:
         boolean:
+
+get_remote_address:
+  name: Get a remote address
+  description: >-
+    Get a private web address for this Home Assistant. No domain, no
+    router ports. If this instance is not linked yet, it opens a
+    temporary link that lasts a day unless you sign in from the page
+    it gives you. If it is already linked, Vome issues the same kind
+    of random address on the tunnel you already have.
+  fields:
+    entry_id:
+      name: Vome integration
+      description: Which Vome config entry to use (only needed if you have more than one).
+      required: false
+      selector:
+        text:

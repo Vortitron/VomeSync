@@ -47,11 +47,11 @@ which is a fine answer for somebody who already lives in there and a
 poor first impression for anybody else — so vome.io/score/try leads
 with the add-on and keeps HACS as a link underneath.
 
-## The two-hour clock, and why it is said out loud
+## The day-long clock, and why it is said out loud
 
-A guest run is temporary. Vome deletes the check, the findings and the
-link to this Home Assistant two hours after it starts, unless somebody
-opens the URL and signs in.
+A guest run is temporary. Vome deletes the check, the findings, the
+random web address and the link to this Home Assistant a day after it
+starts, unless somebody opens the URL and signs in.
 
 That deal only works if it is visible, so it is stated in three places:
 the notification when the run starts, the notification when the score
@@ -85,7 +85,8 @@ the house still has one.
 | Service | What it does |
 |---|---|
 | `vomesync.health_score_run` | Runs a check (linking first if needed). Returns immediately; the score arrives on the sensor and in a notification. `use_ai: false` asks for a locally-written summary instead. |
-| `vomesync.health_score_get` | The last report as data, refreshing from Vome first unless `refresh: false`. Includes `online_url`, `health_url`, `card_url` and `share_url` so the add-on panel can open the score, the AI Doctor and the shareable card without reconstructing them. |
+| `vomesync.health_score_get` | The last report as data, refreshing from Vome first unless `refresh: false`. Includes `online_url`, `health_url`, `card_url`, `share_url` and `remote_url` so the add-on panel can open the score, the AI Doctor, the shareable card and the companion-app address without reconstructing them. |
+| `vomesync.get_remote_address` | A private `*.home.vome.io` for this instance. Opens a guest run if unlinked; mints onto the existing tunnel if already linked. |
 
 After a check finishes, the notification and `sensor.vome_health_score` carry those URLs. A guest run's `online_url` is the keep-it link; a linked house's is `/servers/<id>/health`. A **hosted VomeHome VM** has no relay tunnel, so the check authenticates with the backup key and opens that same health page — it must not fall through to a throwaway guest run. Hosting and Connect customers publish the shareable card without the 49 kr; everyone else can pay or redeem a limited voucher.
 

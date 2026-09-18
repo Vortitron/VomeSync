@@ -78,8 +78,8 @@ class VomeHealthScoreSensor(SensorEntity):
 
 	Vome computes the score (the collectors and the write-up are its), but
 	the answer is about *this* system, so it belongs here — and for a
-	login-free run it is the copy that survives: Vome deletes its own two
-	hours later.  See health_score.py.
+	login-free run it is the copy that survives: Vome deletes its own a
+	day later.  See health_score.py.
 
 	Unavailable rather than zero when there has been no check: a health
 	score of nothing is not a health score of 0.
@@ -163,6 +163,8 @@ class VomeHealthScoreSensor(SensorEntity):
 			attributes["share_url"] = links["share_url"]
 		if links.get("card_url"):
 			attributes["card_url"] = links["card_url"]
+		if links.get("remote_url"):
+			attributes["remote_url"] = links["remote_url"]
 		return attributes
 
 

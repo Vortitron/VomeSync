@@ -9,10 +9,11 @@ was a reason to stop.
 So the button is here instead, and it works before there is an account:
 
 * **Not linked** — :func:`async_run_check` asks Vome for a guest run
-  (``POST /api/v1/relay/guest``).  That returns relay credentials and a
-  ``claim_url``, so the tunnel comes up, the check runs, and the owner
-  gets one link to open.  The whole thing deletes itself at Vome's end
-  in two hours unless they sign in from that link.
+  (``POST /api/v1/relay/guest``).  That returns relay credentials, a
+  random web address, and a ``claim_url``, so the tunnel comes up, the
+  check runs, and the owner gets one link to open.  The whole thing
+  deletes itself at Vome's end in a day unless they sign in from that
+  link.
 * **Linked** — the same button just asks for a check on the account
   that already owns this instance.
 
@@ -43,9 +44,11 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
 	CONF_RELAY,
+	CONF_RELAY_FORWARD_UI,
 	CONF_RELAY_GUEST,
 	CONF_RELAY_GUEST_CLAIM_URL,
 	CONF_RELAY_GUEST_EXPIRES,
+	CONF_RELAY_REMOTE_URL,
 	CONF_RELAY_SECRET,
 	CONF_RELAY_SERVER_ID,
 	CONF_RELAY_WS_URL,
@@ -131,6 +134,26 @@ def claim_url(entry: ConfigEntry) -> str:
 	return str(_relay(entry).get(CONF_RELAY_GUEST_CLAIM_URL) or "")
 
 
+def remote_url(entry: ConfigEntry) -> str:
+	return str(_relay(entry).get(CONF_RELAY_REMOTE_URL) or "")
+
+
+def clock_phrase(entry: ConfigEntry, *, now: Optional[float] = None) -> str:
+	"""How long this guest run has left, in words a person can use.
+
+	A day-long TTL should read as "a day", not "1440 minutes".  Tests
+	use a far-future expiry; that still lands on "a day".
+	"""
+	secs = guest_seconds_left(entry, now=now)
+	if secs >= 20 * 3600:
+		return "a day"
+	if secs >= 90 * 60:
+		hours = max(1, round(secs / 3600))
+		return "an hour" if hours == 1 else f"{hours} hours"
+	mins = max(1, secs // 60)
+	return f"{mins} minutes"
+
+
 def panel_links(entry: ConfigEntry, report: Optional[dict] = None) -> dict:
 	"""URLs the add-on panel, the sensor and the notification can show.
 
@@ -167,6 +190,7 @@ def panel_links(entry: ConfigEntry, report: Optional[dict] = None) -> dict:
 		"card_url": card_out,
 		"online_url": online,
 		"keep_it_url": claim,
+		"remote_url": remote_url(entry),
 	}
 
 
@@ -221,7 +245,13 @@ async def _open_guest_run(hass: HomeAssistant, entry: ConfigEntry, use_ai: bool)
 		CONF_RELAY_GUEST: True,
 		CONF_RELAY_GUEST_EXPIRES: opened.get("expires_at"),
 		CONF_RELAY_GUEST_CLAIM_URL: opened.get("claim_url"),
+		# The companion app talks HTTP to Core.  Without this the hostname
+		# Vome just published is a 502.
+		CONF_RELAY_FORWARD_UI: True,
 	})
+	url = str(opened.get("remote_url") or "")
+	if url:
+		relay[CONF_RELAY_REMOTE_URL] = url
 	await _save_relay(hass, entry, relay, portal_url=portal_url)
 	# The check Vome queued needs the tunnel up to read anything.
 	await async_start_relay(hass, entry)
@@ -243,13 +273,14 @@ async def async_run_check(
 	"""
 	if not is_linked(entry):
 		opened = await _open_guest_run(hass, entry, use_ai)
-		await _notify_guest_run(hass, entry, opened.get("claim_url") or "")
+		await _notify_guest_run(hass, entry, opened)
 		return {
 			"status": "queued",
 			"guest": True,
 			"claim_url": opened.get("claim_url"),
 			"expires_at": opened.get("expires_at"),
 			"server_id": opened.get("server_id") or "",
+			"remote_url": opened.get("remote_url") or remote_url(entry),
 		}
 
 	session = async_get_clientsession(hass)
@@ -263,6 +294,7 @@ async def async_run_check(
 		"claim_url": claim_url(entry),
 		"expires_at": _relay(entry).get(CONF_RELAY_GUEST_EXPIRES),
 		"server_id": server_id,
+		"remote_url": remote_url(entry),
 	}
 
 
@@ -339,19 +371,35 @@ async def async_watch_for_report(
 
 # ── Telling the person what happened ────────────────────────────────────────
 
-async def _notify_guest_run(hass: HomeAssistant, entry: ConfigEntry, url: str) -> None:
-	"""One notification with the link, because the link is the whole flow."""
-	if not url:
+async def _notify_guest_run(hass: HomeAssistant, entry: ConfigEntry, opened: dict) -> None:
+	"""One notification: the address if we have one, and the keep-it link."""
+	url = str(opened.get("remote_url") or remote_url(entry) or "")
+	claim = str(opened.get("claim_url") or "")
+	if not url and not claim:
 		return
+	clock = clock_phrase(entry)
+	lines = []
+	if url:
+		lines.append(
+			f"Your Home Assistant is reachable at:\n\n{url}\n\n"
+			"Point the Home Assistant app at it. Sign in to Home Assistant as "
+			"you usually would — no router ports, no domain to buy."
+		)
+	if claim:
+		lead = (
+			"A health check is running. Open it online here:"
+			if url else
+			"Your health check is running. Open it online here:"
+		)
+		lines.append(f"{lead}\n\n{claim}")
+	lines.append(
+		f"This is not tied to an account yet — Vome deletes the address, the "
+		f"check, and the link to this Home Assistant in {clock} unless you "
+		"sign in from that page and keep it. The report stays here either way."
+	)
 	persistent_notification.async_create(
 		hass,
-		(
-			f"Your health check is running. Open it online here:\n\n"
-			f"{url}\n\n"
-			"It is not tied to an account yet — Vome deletes the check, and the "
-			"link to this Home Assistant, in two hours unless you sign in from "
-			"that page and keep it. The report stays here either way."
-		),
+		"\n\n".join(lines),
 		title="Vome health score",
 		notification_id=NOTIFICATION_ID,
 	)
@@ -364,11 +412,10 @@ async def _notify_result(hass: HomeAssistant, entry: ConfigEntry, report: dict) 
 		lines.append(str(report["summary"]))
 	links = panel_links(entry, report)
 	if is_guest(entry) and links.get("keep_it_url"):
-		mins = guest_seconds_left(entry) // 60
 		lines.append(
 			f"This run is not saved to an account. Keep it (and this link to "
-			f"Home Assistant) by signing in at {links['keep_it_url']} — about "
-			f"{mins} minutes left."
+			f"Home Assistant) by signing in at {links['keep_it_url']} — "
+			f"{clock_phrase(entry)} left."
 		)
 	elif links.get("online_url"):
 		lines.append(f"Open this score online: {links['online_url']}")
@@ -404,6 +451,7 @@ async def _forget_expired_guest(hass: HomeAssistant, entry: ConfigEntry) -> None
 	for key in (
 		CONF_RELAY_SERVER_ID, CONF_RELAY_SECRET, CONF_RELAY_WS_URL,
 		CONF_RELAY_GUEST, CONF_RELAY_GUEST_EXPIRES, CONF_RELAY_GUEST_CLAIM_URL,
+		CONF_RELAY_REMOTE_URL, CONF_RELAY_FORWARD_UI,
 	):
 		relay.pop(key, None)
 	await _save_relay(hass, entry, relay)
