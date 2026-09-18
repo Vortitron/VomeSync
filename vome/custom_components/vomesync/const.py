@@ -57,6 +57,10 @@ CONF_RELAY_ESPHOME_URL = "esphome_url"  # optional explicit ESPHome dashboard ba
 # assistant uses.  The owner opts in explicitly; Vome still gates who may reach
 # the address (login + active subscription) before any byte is tunnelled.
 CONF_RELAY_FORWARD_UI = "forward_ui"
+# Random ``https://….home.vome.io`` issued with a guest (or free) relay.
+# Persisted so the notification, the sensor and the panel can show it after
+# the provision call returns.  Distinct from a paid friendly-domain slug.
+CONF_RELAY_REMOTE_URL = "remote_url"
 # Path-based LAN tunnels on the same friendly domain: ``/t/<slug>/…`` is
 # proxied to a configured LAN host:port.  List of route dicts (see lan_routes.py).
 # Independent of forward_ui — you can expose a NAS without opening the HA UI.
@@ -105,15 +109,21 @@ RELAY_DEVICE_TOKEN_PATH = "/api/v1/relay/device/token"
 # The health score, for a Home Assistant whose owner has not signed up.
 # ``/api/v1/relay/guest`` opens a throwaway link and queues a check in one
 # call, so nobody reads a code off one screen and types it into another;
-# it answers with relay credentials and a ``claim_url`` its owner can open
-# to see the result and decide whether to keep it.  Vome deletes the whole
-# run in two hours unless they sign in — see docs/HEALTH_SCORE.md.
+# it answers with relay credentials, a random web address, and a
+# ``claim_url`` its owner can open to see the result and decide whether
+# to keep it.  Vome deletes the whole run in a day unless they sign in
+# — see docs/HEALTH_SCORE.md.
 RELAY_GUEST_PATH = "/api/v1/relay/guest"
 # The report itself, authenticated by the relay secret we already hold, so
 # the findings can live in the house they are about rather than only on
 # Vome's website.
 AGENT_HEALTH_REPORT_PATH = "/api/sync/agent/health-report"
 AGENT_HEALTH_CHECK_PATH = "/api/sync/agent/health-check"
+# A free random hostname on a house that is already linked.  Guest
+# provision mints one in the same breath as the tunnel; this is the
+# retry / device-code-linked path so they still get the URL without
+# opening a second shell account.
+AGENT_REMOTE_ADDRESS_PATH = "/api/sync/agent/remote-address"
 # Count recorder writes locally. The portal used to GET /api/history/period
 # for every entity over 24 h, which is why Chatty devices always failed on
 # a busy house. This path returns ``{entity_id: count}`` instead.

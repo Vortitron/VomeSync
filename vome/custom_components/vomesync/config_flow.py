@@ -573,7 +573,10 @@ class VomeSyncOptionsFlow(
 		# Keep the highest-frequency actions near the top; move the rest under "More…"
 		menu_options = ["create_switch", "subscribe_switch", "upgrade_premium", "manage_switches"]
 		# Connecting this HA to a Vome account is a headline feature — keep it
-		# top-level rather than buried in "More…".
+		# top-level rather than buried in "More…".  A remote address is the
+		# setup leader: it works before there is an account, so it sits on
+		# this menu whether or not a link already exists.
+		menu_options.append("get_remote_address")
 		if self._relay_is_linked():
 			menu_options.append("remote_access")
 			menu_options.append("unlink_vome")

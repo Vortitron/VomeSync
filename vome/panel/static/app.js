@@ -363,12 +363,14 @@
 					${pill(!!(state && state.addon_marker), "Add-on install", "HACS-only install")}
 				</div>
 				${vomeIdentityLine()}
+				${currentRemoteUrl() ? `<p class="muted" style="margin-top:0.5rem">Reachable at <code>${escapeHtml(currentRemoteUrl())}</code></p>` : ""}
 				${(state && !state.forward_ui) ? `<p class="muted" style="margin-top:0.5rem">Full-UI forwarding is off, but a friendly domain still reaches devices — <a class="link" href="#" id="ov-device-urls">manage device URLs</a>.</p>` : ""}
 			</div>
 			<div class="card">
 				<h2>Quick actions</h2>
 				<div class="row">
 					${hideConnect ? "" : `<button type="button" class="primary" id="qa-connect">Connect to Vome</button>`}
+					<button type="button" id="qa-remote">Get a remote address</button>
 					<button type="button" id="qa-health">Check my health score</button>
 					<button type="button" id="qa-rdp">Set up Remote Desktop</button>
 					<button type="button" id="qa-lan">LAN tunnels</button>
@@ -379,6 +381,8 @@
 		const deviceUrlsLink = document.getElementById("ov-device-urls");
 		if (deviceUrlsLink) deviceUrlsLink.onclick = (e) => { e.preventDefault(); setView("lan"); };
 		document.getElementById("qa-health").onclick = () => setView("health");
+		const qaRemote = document.getElementById("qa-remote");
+		if (qaRemote) qaRemote.onclick = () => setView("health");
 		document.getElementById("qa-lan").onclick = () => setView("lan");
 		document.getElementById("qa-forward").onclick = () => setView("forward");
 		document.getElementById("qa-rdp").onclick = () => {
@@ -1204,11 +1208,10 @@
 	}
 
 	// ── Health score ────────────────────────────────────────────────────
-	// The only thing in this panel that works before the home is linked to
-	// anything: it links itself temporarily, runs the check, and hands back
-	// a URL to see the result and decide whether to keep it.  That deal has
-	// a two-hour clock on it, so every state that shows a score also shows
-	// the clock — see custom_components/vomesync/health_score.py.
+	// The only things in this panel that work before the home is linked to
+	// anything: a random web address, and a health check on the same tunnel.
+	// That deal has a day-long clock on it, so every state that shows a
+	// guest run also shows the clock — see health_score.py / guest_remote.py.
 
 	let healthData = null;
 	let healthBusy = false;
@@ -1230,14 +1233,48 @@
 		return "bad";
 	}
 
+	function currentRemoteUrl() {
+		return (healthData && healthData.remote_url)
+			|| (state && state.remote_url)
+			|| "";
+	}
+
+	function remoteAddressCard() {
+		const url = currentRemoteUrl();
+		if (url) {
+			return `
+			<div class="card">
+				<h2>A web address, without a domain</h2>
+				<p class="muted">This Home Assistant is reachable at</p>
+				<p><code>${escapeHtml(url)}</code></p>
+				<p class="muted">Point the Home Assistant app at it. Sign in to Home Assistant as you usually would — no router ports, no domain to buy.</p>
+				<div class="row">
+					<a class="btn primary" href="${escapeHtml(url)}" target="_blank" rel="noopener">Open</a>
+				</div>
+			</div>`;
+		}
+		return `
+			<div class="card">
+				<h2>Get a remote address</h2>
+				<p class="muted">A private web address for this Home Assistant. No domain to buy, no router ports, no Vome account until you want to keep it. It lasts a day unless you sign in from the link that appears with it.</p>
+				<div class="row">
+					<button type="button" class="primary" id="remote-run"${healthBusy ? " disabled" : ""}>${healthBusy ? "Working…" : "Get a remote address"}</button>
+				</div>
+			</div>`;
+	}
+
 	function healthClockCard() {
 		if (!healthData || healthData.saved_to_account !== false) return "";
 		const url = healthData.keep_it_url || healthData.online_url || "";
-		const mins = Math.max(0, Math.round((healthData.deleted_in_seconds || 0) / 60));
+		const secs = healthData.deleted_in_seconds || 0;
+		const hours = Math.round(secs / 3600);
+		const left = hours >= 20
+			? "a day"
+			: (hours >= 2 ? `about ${hours} hours` : `about ${Math.max(0, Math.round(secs / 60))} minutes`);
 		return `
 		<div class="card warn-card">
 			<h2>This check is not saved</h2>
-			<p class="muted">Vome deletes it — and the temporary link to this Home Assistant — in about ${mins} minute${mins === 1 ? "" : "s"} unless you sign in and keep it. The report stays here either way.</p>
+			<p class="muted">Vome deletes it — and the temporary link to this Home Assistant — in ${left} unless you sign in and keep it. The report stays here either way.</p>
 			${url ? `<div class="row"><a class="btn primary" href="${escapeHtml(url)}" target="_blank" rel="noopener">Open it online and sign in</a></div>` : ""}
 		</div>`;
 	}
@@ -1332,6 +1369,7 @@
 		const report = (healthData && healthData.report) || null;
 		const linked = vomeHomeLinked();
 		viewEl.innerHTML = `
+			${remoteAddressCard()}
 			${healthClockCard()}
 			<div class="card">
 				<h2>Check this Home Assistant</h2>
@@ -1362,6 +1400,7 @@
 						keep_it_url: started.claim_url,
 						online_url: started.claim_url,
 						card_url: started.claim_url,
+						remote_url: started.remote_url || (healthData && healthData.remote_url) || "",
 						server_id: started.server_id || (healthData && healthData.server_id) || "",
 						deleted_in_seconds: Math.max(
 							0, (started.expires_at || 0) - Math.floor(Date.now() / 1000),
@@ -1378,6 +1417,40 @@
 				watchHealth();
 			} catch (err) {
 				showBanner(err.message || "Could not start the check", true);
+			} finally {
+				healthBusy = false;
+				render();
+			}
+		};
+
+		const remoteRun = document.getElementById("remote-run");
+		if (remoteRun) remoteRun.onclick = async () => {
+			healthBusy = true;
+			render();
+			showBanner("Asking Vome for an address…", "info");
+			try {
+				const started = await api("/api/remote_address", {
+					method: "POST",
+					body: JSON.stringify(withEntry({})),
+				});
+				healthData = Object.assign({}, healthData, {
+					remote_url: (started && started.remote_url) || (healthData && healthData.remote_url) || "",
+					keep_it_url: (started && started.claim_url) || (healthData && healthData.keep_it_url) || "",
+					online_url: (started && started.claim_url) || (healthData && healthData.online_url) || "",
+					saved_to_account: !(started && started.guest),
+					server_id: (started && started.server_id) || (healthData && healthData.server_id) || "",
+					deleted_in_seconds: started && started.expires_at
+						? Math.max(0, started.expires_at - Math.floor(Date.now() / 1000))
+						: (healthData && healthData.deleted_in_seconds) || 0,
+				});
+				try {
+					const next = await api("/api/status");
+					state = next;
+					syncChrome();
+				} catch (_err) { /* keep the last status if this races HA */ }
+				if (started && started.status === "opened") watchHealth();
+			} catch (err) {
+				showBanner(err.message || "Could not get a remote address", true);
 			} finally {
 				healthBusy = false;
 				render();

@@ -23,6 +23,7 @@ from .const import (
 	CONF_RELAY_FORWARD_UI,
 	CONF_RELAY_LAN_ROUTES,
 	CONF_RELAY_LOCAL_URL,
+	CONF_RELAY_REMOTE_URL,
 	CONF_RELAY_SECRET,
 	CONF_RELAY_WEBHOOKS,
 	CONF_RELAY_SERVER_ID,
@@ -383,6 +384,12 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 		# so the panel can show exactly *which* Vome address this is, not
 		# just that some link exists. Blank until it has been visited once.
 		"forward_url": _observed_forward_url(hass),
+		# Random guest/free hostname, if this house has one.  Blank until
+		# someone presses Get a remote address (or runs the health score
+		# from an unlinked install).  A house that linked through the
+		# device-code dance can still mint one afterwards.
+		"remote_url": relay.get(CONF_RELAY_REMOTE_URL) or "",
+		"guest": bool(relay.get("guest")),
 	}
 
 
@@ -906,6 +913,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			"share_url": links["share_url"],
 			"card_url": links["card_url"],
 			"online_url": links["online_url"],
+			"remote_url": links["remote_url"],
 			"card_included": bool((report or {}).get("card_included")),
 		}
 
@@ -922,6 +930,20 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Optional("refresh", default=True): cv.boolean,
+		}),
+		supports_response=SupportsResponse.ONLY,
+	)
+
+	async def _get_remote_address(call: ServiceCall) -> ServiceResponse:
+		from . import guest_remote
+
+		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
+		return await guest_remote.async_ensure_address(hass, entry)
+
+	hass.services.async_register(
+		DOMAIN, "get_remote_address", _guard(_get_remote_address),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)

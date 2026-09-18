@@ -1159,6 +1159,7 @@ async def test_options_flow_init_shows_menu(hass, config_entry):
 	assert "more" in result["menu_options"]
 	# Connect to Vome Home is a headline option, top-level (not under More…).
 	assert "link_vome" in result["menu_options"]
+	assert "get_remote_address" in result["menu_options"]
 
 
 @pytest.mark.asyncio
@@ -1173,6 +1174,7 @@ async def test_options_flow_init_offers_unlink_when_linked(hass, config_entry):
 	result = await flow.async_step_init(None)
 	assert "unlink_vome" in result["menu_options"]
 	assert "link_vome" not in result["menu_options"]
+	assert "get_remote_address" in result["menu_options"]
 
 
 @pytest.mark.asyncio
@@ -1854,6 +1856,32 @@ def _relay_flow(hass, config_entry):
 	flow.hass = hass
 	hass.config_entries = MagicMock()
 	return flow
+
+
+@pytest.mark.asyncio
+async def test_get_remote_address_works_while_unlinked(hass, config_entry):
+	"""The setup leader must not hide behind a finished Vome link."""
+	flow = _relay_flow(hass, config_entry)
+	first = await flow.async_step_get_remote_address(None)
+	assert first["type"] == FlowResultType.FORM
+	assert first["step_id"] == "get_remote_address"
+	assert "Submit" in first["description_placeholders"]["info"]
+
+	opened = {
+		"status": "opened",
+		"remote_url": "https://k7m2xq9p.home.vome.io",
+		"guest": True,
+		"claim_url": "https://vome.io/score/try?k=tok",
+		"expires_at": 4_100_000_000,
+		"server_id": "rly-1",
+	}
+	with patch(
+		"custom_components.vomesync.guest_remote.async_ensure_address",
+		new=AsyncMock(return_value=opened),
+	):
+		result = await flow.async_step_get_remote_address({})
+	assert result["type"] == FlowResultType.FORM
+	assert "k7m2xq9p.home.vome.io" in result["description_placeholders"]["info"]
 
 
 @pytest.mark.asyncio

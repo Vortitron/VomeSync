@@ -29,6 +29,7 @@ def test_remote_status_payload_strips_secrets():
 	assert payload["server_id"] == "rly-1"
 	assert payload["forward_ui"] is True
 	assert payload["lan_routes"][0]["slug"] == "nas"
+	assert payload["remote_url"] == ""
 	assert "secret" not in payload
 	assert "must-not-appear" not in str(payload)
 

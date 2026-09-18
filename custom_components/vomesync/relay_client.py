@@ -74,6 +74,7 @@ from .const import (
 	RELAY_ALLOWED_METHODS,
 	AGENT_HEALTH_CHECK_PATH,
 	AGENT_HEALTH_REPORT_PATH,
+	AGENT_REMOTE_ADDRESS_PATH,
 	RELAY_DEVICE_CODE_PATH,
 	RELAY_DEVICE_TOKEN_PATH,
 	RELAY_GUEST_PATH,
@@ -2038,9 +2039,9 @@ async def async_request_guest_run(
 	One call does what the device-code dance needs three screens for: Vome
 	opens a throwaway account, provisions the relay link, queues the check,
 	and answers with ``{server_id, relay_secret, relay_ws_url, report_id,
-	claim_url, expires_at}``.  Nothing is typed and nobody signs up; the
-	whole run deletes itself in two hours unless its owner opens
-	``claim_url`` and does.
+	claim_url, expires_at, remote_url}``.  Nothing is typed and nobody
+	signs up; the whole run deletes itself in a day unless its owner
+	opens ``claim_url`` and does.
 	"""
 	url = (portal_url or DEFAULT_PORTAL_URL).rstrip("/") + RELAY_GUEST_PATH
 	return await _post_portal_json(session, url, {
@@ -2111,6 +2112,15 @@ async def async_start_health_check(
 	return await _agent_request(
 		session, "POST", portal_url, AGENT_HEALTH_CHECK_PATH, secret,
 		{"use_ai": use_ai},
+	)
+
+
+async def async_request_remote_address(
+	session: aiohttp.ClientSession, portal_url: str, secret: str,
+) -> dict:
+	"""Mint or return a ``*.home.vome.io`` for a house that is already linked."""
+	return await _agent_request(
+		session, "POST", portal_url, AGENT_REMOTE_ADDRESS_PATH, secret, {},
 	)
 
 
