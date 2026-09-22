@@ -1,10 +1,17 @@
 name: VomeSync HA tests
 
 on:
-  push:
-    branches: [ main, Develop ]
-  pull_request:
-    branches: [ main, Develop ]
+  # Manual only.  Jenkins owns CI: a push runs vomesync-ci, vome-addon-ci
+  # and vomesync-e2e, and those are the results anybody acts on.  This ran
+  # a second, smaller suite beside them on every push -- a duplicate signal
+  # on the one repository of the pair that is public, and none at all on
+  # the private one, where Actions is billing-blocked and fails in seconds.
+  # One place to look is worth more than two that mostly agree.
+  #
+  # Note this is deliberately narrower than "no workflows here":
+  # release.yml still runs on main, because that is what cuts the tag HACS
+  # reads to offer people an integration update.  Turning that off would
+  # stop shipping, not stop testing.
   workflow_dispatch:
 
 env:
