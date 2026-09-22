@@ -287,3 +287,13 @@ def test_the_json_box_scrolls_rather_than_widening_the_panel():
 	assert ".pre-scroll" in PANEL_CSS
 	assert "overflow-x: auto" in PANEL_CSS
 	assert ".scope-row" in PANEL_CSS
+
+
+def test_an_expired_key_is_not_offered_buttons_that_cannot_work():
+	"""The clock is Vome's. Once it runs out nothing in the panel can
+	revive the key, so Save permissions and Replace key must not be the
+	things on offer — clearing up and starting again are."""
+	view = _agent_view()
+	assert "data.active === false" in view
+	assert "This key has expired" in view
+	assert "Clear it and start again" in view

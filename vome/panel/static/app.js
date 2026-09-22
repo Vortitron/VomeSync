@@ -1600,6 +1600,35 @@
 			return;
 		}
 
+		if (offer === "manage" && (data.active === false || !(data.seconds_left > 0))) {
+			// The clock is Vome's, and it has run out. The key stopped
+			// working the moment it did — nothing here can revive it — so
+			// the only honest buttons are clearing up and starting again.
+			viewEl.innerHTML = `
+				${agentIntro()}
+				<div class="card info-card">
+					<h2>This key has expired <span class="pill off">two days up</span></h2>
+					<p class="muted">It stopped working at Vome's end. Clearing it releases the temporary link and the throwaway account behind it, and you can issue another — or connect a Vome account, where keys have no clock.</p>
+					<div class="row">
+						<button type="button" class="primary" id="agent-revoke"${agentBusy ? " disabled" : ""}>Clear it and start again</button>
+						<button type="button" class="ghost" id="agent-connect">Connect to Vome</button>
+					</div>
+				</div>`;
+
+			const connectExpired = document.getElementById("agent-connect");
+			if (connectExpired) connectExpired.onclick = () => document.querySelector("[data-view=link]").click();
+			const clear = document.getElementById("agent-revoke");
+			if (clear) clear.onclick = () => agentAction(
+				"/api/agent_key/revoke", {}, "Clearing up…",
+				() => {
+					agentIssued = null;
+					showBanner("Cleared. You can issue a new key.", "info");
+					return null;
+				},
+			);
+			return;
+		}
+
 		if (offer === "manage") {
 			const scopes = data.scopes || [];
 			const left = data.seconds_left || 0;
