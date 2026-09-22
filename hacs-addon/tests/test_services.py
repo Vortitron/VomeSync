@@ -33,6 +33,13 @@ EXPECTED_SERVICES = frozenset({
 	"health_score_run",
 	"health_score_get",
 	"get_remote_address",
+	# The coding-agent key: the other action that works before an
+	# account does, and is driven entirely from the panel.
+	"agent_key_state",
+	"agent_key_issue",
+	"agent_key_scopes",
+	"agent_key_reissue",
+	"agent_key_revoke",
 })
 
 

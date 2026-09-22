@@ -24,6 +24,13 @@ PANEL_SERVICES = {
 	"set_webhooks",
 	"add_webhook",
 	"remove_webhook",
+	# The coding-agent key, which the panel drives end to end so that
+	# nobody has to open a browser — see custom_components/vomesync/agent_key.py.
+	"agent_key_state",
+	"agent_key_issue",
+	"agent_key_scopes",
+	"agent_key_reissue",
+	"agent_key_revoke",
 }
 
 

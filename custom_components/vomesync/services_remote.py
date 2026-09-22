@@ -948,4 +948,83 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		supports_response=SupportsResponse.ONLY,
 	)
 
+	# ── The coding-agent key ────────────────────────────────────────────
+	# The other action that works before there is an account: tick the
+	# permissions, get a key and a paste-ready mcp.json, and never open a
+	# browser.  It ends in two days unless somebody signs in.  See
+	# agent_key.py.
+
+	async def _agent_key_state(call: ServiceCall) -> ServiceResponse:
+		from . import agent_key
+
+		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
+		return await agent_key.async_panel_state(hass, entry)
+
+	async def _agent_key_issue(call: ServiceCall) -> ServiceResponse:
+		from . import agent_key
+
+		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
+		issued = await agent_key.async_request_key(
+			hass, entry, scopes=call.data.get("scopes"),
+		)
+		_notify_backup_agents_changed(hass)
+		# The key itself is returned exactly once, to whoever pressed the
+		# button.  Vome keeps a hash and this integration keeps nothing:
+		# anything that stored it would be a second place to steal it from.
+		return {
+			"status": "issued",
+			"token": issued.get("token") or "",
+			"scopes": issued.get("scopes") or [],
+			"expires_at": issued.get("expires_at"),
+			"server_id": issued.get("server_id") or "",
+			"mcp": issued.get("mcp") or {},
+		}
+
+	async def _agent_key_scopes(call: ServiceCall) -> ServiceResponse:
+		from . import agent_key
+
+		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
+		return await agent_key.async_set_scopes(hass, entry, call.data.get("scopes"))
+
+	async def _agent_key_reissue(call: ServiceCall) -> ServiceResponse:
+		from . import agent_key
+
+		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
+		issued = await agent_key.async_reissue(hass, entry)
+		return {
+			"status": "issued",
+			"token": issued.get("token") or "",
+			"scopes": issued.get("scopes") or [],
+			"expires_at": issued.get("expires_at"),
+			"mcp": issued.get("mcp") or {},
+		}
+
+	async def _agent_key_revoke(call: ServiceCall) -> ServiceResponse:
+		from . import agent_key
+
+		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
+		result = await agent_key.async_revoke(hass, entry)
+		_notify_backup_agents_changed(hass)
+		return result
+
+	_agent_scope_schema = vol.Schema({
+		vol.Optional("entry_id"): cv.string,
+		vol.Optional("scopes"): vol.All(cv.ensure_list, [cv.string]),
+	})
+	_agent_plain_schema = vol.Schema({vol.Optional("entry_id"): cv.string})
+	for _name, _handler, _schema in (
+		("agent_key_state", _agent_key_state, _agent_plain_schema),
+		("agent_key_issue", _agent_key_issue, _agent_scope_schema),
+		("agent_key_scopes", _agent_key_scopes, _agent_scope_schema),
+		("agent_key_reissue", _agent_key_reissue, _agent_plain_schema),
+		("agent_key_revoke", _agent_key_revoke, _agent_plain_schema),
+	):
+		hass.services.async_register(
+			DOMAIN, _name, _guard(_handler), schema=_schema,
+			# ONLY, not OPTIONAL: the panel calls every service over REST
+			# with ?return_response, and Home Assistant rejects an
+			# OPTIONAL-response service invoked that way with a bare 400.
+			supports_response=SupportsResponse.ONLY,
+		)
+
 	_LOGGER.debug("Registered Vome remote-access services")

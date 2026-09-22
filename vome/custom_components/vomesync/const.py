@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.35"
+INTEGRATION_VERSION = "0.9.36"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -124,6 +124,16 @@ AGENT_HEALTH_CHECK_PATH = "/api/sync/agent/health-check"
 # retry / device-code-linked path so they still get the URL without
 # opening a second shell account.
 AGENT_REMOTE_ADDRESS_PATH = "/api/sync/agent/remote-address"
+# An MCP key for a coding agent, issued to a Home Assistant with no Vome
+# account at all.  ``/api/v1/relay/agent`` is the one unauthenticated call
+# — it opens a throwaway link and mints a scoped key in one breath, and
+# answers with relay credentials plus a paste-ready ``mcp.json``.  After
+# that the key is managed with the relay secret we now hold, on
+# ``/api/sync/agent/mcp-key``: read what it grants, re-scope it in place,
+# replace a lost one, or revoke the lot.  It ends in two days unless its
+# owner signs in — see docs/AGENT_KEY.md.
+RELAY_AGENT_PATH = "/api/v1/relay/agent"
+AGENT_MCP_KEY_PATH = "/api/sync/agent/mcp-key"
 # Count recorder writes locally. The portal used to GET /api/history/period
 # for every entity over 24 h, which is why Chatty devices always failed on
 # a busy house. This path returns ``{entity_id: count}`` instead.
@@ -134,6 +144,13 @@ HISTORY_WINDOW_HOURS = 24
 CONF_RELAY_GUEST = "guest"
 CONF_RELAY_GUEST_EXPIRES = "guest_expires_at"
 CONF_RELAY_GUEST_CLAIM_URL = "guest_claim_url"
+
+# ``options[CONF_RELAY]`` keys written only by an account-free agent key.
+# Same shape as a guest run and for the same reason: this is a real relay
+# link, but it is on a clock, and the panel must never show a temporary
+# link as a finished one.
+CONF_RELAY_AGENT_TRIAL = "agent_trial"
+CONF_RELAY_AGENT_EXPIRES = "agent_trial_expires_at"
 
 
 def relay_ws_url_for_portal(portal_url: str, offered: str | None = None) -> str:

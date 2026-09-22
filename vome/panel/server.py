@@ -469,6 +469,17 @@ class PanelHandler(BaseHTTPRequestHandler):
 				status = 400
 			self._send_json(status, body)
 			return
+		if path == "/api/agent_key":
+			# Which of the four states this house is in, and — if it has
+			# a key — what Vome says that key grants and how long it has
+			# left.  Asked of Vome rather than remembered, so the panel
+			# cannot show a key as live after it stopped working.
+			status, payload = call_service("agent_key_state", {})
+			body = _unwrap(payload)
+			if isinstance(body, dict) and body.get("error") and status < 400:
+				status = 400
+			self._send_json(status, body)
+			return
 		if path == "/api/switches":
 			status, payload = call_service("list_switches", {})
 			body = _unwrap(payload)
@@ -515,6 +526,13 @@ class PanelHandler(BaseHTTPRequestHandler):
 			# hands back a URL to see it and decide.
 			"/api/health_score/run": ("health_score_run", body),
 			"/api/remote_address": ("get_remote_address", body),
+			# The other action that works before this home is linked to
+			# anything: tick the permissions, get a key and a paste-ready
+			# mcp.json, and never open a browser.
+			"/api/agent_key/issue": ("agent_key_issue", body),
+			"/api/agent_key/scopes": ("agent_key_scopes", body),
+			"/api/agent_key/reissue": ("agent_key_reissue", body),
+			"/api/agent_key/revoke": ("agent_key_revoke", body),
 		}
 		if path not in mapping:
 			self._send_json(404, {"error": "not found"})
