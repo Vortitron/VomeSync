@@ -232,7 +232,8 @@ class FakePortal:
 		self.uploads = []
 		self.reports = []
 
-	def role(self):
+	def role(self, primary_reachable=None):
+		self.reported = primary_reachable
 		return self._role
 
 	def upload(self, blob, meta):
@@ -582,3 +583,86 @@ class TestPanelRoutes:
 	def test_a_bad_code_is_a_400_with_a_reason(self, panel):
 		out = panel("POST", "/api/chap/pair", {"code": "nope"})
 		assert out["status"] == 400 and "vcp_" in out["body"]["error"]
+
+
+class TestLocalFallback:
+	"""This install as the local fallback for a hosted home (reverse mode)."""
+
+	FB = {"probe_url": "https://h.home.vome.io/", "takeover_after": 480}
+
+	def _pass(self, tmp_path, portal, now, reachable, stopped_by_us=True, state=None):
+		data = tmp_path / "data"
+		data.mkdir(exist_ok=True)
+		if state is not None:
+			cs.save_json(data / cs.STATE_FILE, state)
+		cfg = tmp_path / "cfg"
+		if not cfg.exists():
+			make_config(cfg)
+		started = []
+		import unittest.mock as um
+		with um.patch.object(cs.time, "time", return_value=now):
+			out, _ = cs.run_once(portal, cfg, data, core_stopped=lambda: True,
+			                     local_version=lambda: "2026.9.1",
+			                     set_running=lambda r: started.append(r) or True,
+			                     probe=lambda url: reachable)
+		return out, started, cs.load_json(data / cs.STATE_FILE)
+
+	def test_it_reports_what_it_sees_of_the_hosted_home(self, tmp_path):
+		portal = FakePortal({"role": "standby", "fallback": self.FB, "latest": {}})
+		self._pass(tmp_path, portal, 1000, True, state={})  # learns the probe URL
+		self._pass(tmp_path, portal, 1060, False)
+		assert portal.reported is False
+
+	def test_with_both_unreachable_long_enough_it_takes_over(self, tmp_path):
+		state = {"fallback": self.FB, "portal_ok_at": 1000, "core_stopped_by_vome": True}
+		out, started, st = self._pass(tmp_path, FakePortal(None), 1060, False, state=state)
+		assert started == [] and "nothing changed" in out
+		out, started, st = self._pass(tmp_path, FakePortal(None), 1060 + 480, False)
+		assert started == [True] and "took over locally" in out
+		assert st["took_over_locally"] and st["core_stopped_by_vome"] is False
+		out, started, _ = self._pass(tmp_path, FakePortal(None), 2000, False)
+		assert started == []  # once
+
+	def test_a_reachable_hosted_home_means_no_takeover_whatever_the_portal(self, tmp_path):
+		"""The portal being down is not the link being down."""
+		state = {"fallback": self.FB, "portal_ok_at": 1000, "core_stopped_by_vome": True}
+		out, started, _ = self._pass(tmp_path, FakePortal(None), 5000, True, state=state)
+		assert started == []
+
+	def test_without_an_anchor_it_never_takes_over_alone(self, tmp_path):
+		state = {"fallback": {**self.FB, "takeover_after": None}, "portal_ok_at": 1000,
+		         "primary_unreachable_since": 1000, "core_stopped_by_vome": True}
+		_, started, _ = self._pass(tmp_path, FakePortal(None), 9000, False, state=state)
+		assert started == []
+
+	def test_a_core_it_did_not_stop_is_not_its_to_start(self, tmp_path):
+		state = {"fallback": self.FB, "portal_ok_at": 1000,
+		         "primary_unreachable_since": 1000, "core_stopped_by_vome": False}
+		_, started, _ = self._pass(tmp_path, FakePortal(None), 9000, False, state=state)
+		assert started == []
+
+	def test_once_the_portal_answers_its_instruction_rules_again(self, tmp_path):
+		"""The portal did not stand the hosted side down: stop again."""
+		state = {"fallback": self.FB, "portal_ok_at": 1000, "took_over_locally": 1500,
+		         "core_stopped_by_vome": False}
+		portal = FakePortal({"role": "standby", "fallback": self.FB, "core": "stop", "latest": {}})
+		import unittest.mock as um
+		calls = []
+		data = tmp_path / "data"; data.mkdir()
+		cs.save_json(data / cs.STATE_FILE, state)
+		make_config(tmp_path / "cfg")
+		with um.patch.object(cs.time, "time", return_value=2000):
+			cs.run_once(portal, tmp_path / "cfg", data, core_stopped=lambda: False,
+			            local_version=lambda: "2026.9.1",
+			            set_running=lambda r: calls.append(r) or True, probe=lambda u: True)
+		st = cs.load_json(data / cs.STATE_FILE)
+		assert calls == [False] and "took_over_locally" not in st
+
+	def test_a_5xx_from_the_edge_is_not_the_home_answering(self):
+		def gw(req, timeout=None):
+			raise urllib.error.HTTPError(req.full_url, 502, "Bad Gateway", {}, io.BytesIO(b""))
+		assert cs.probe_primary("https://h/", gw) is False
+		def login(req, timeout=None):
+			raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b""))
+		assert cs.probe_primary("https://h/", login) is True
+		assert cs.probe_primary("https://h/", lambda req, timeout=None: FakeResponse(200)) is True

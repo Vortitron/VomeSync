@@ -44,7 +44,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Optional
 
 LOG = logging.getLogger("vome-chap-sync")
 
@@ -541,10 +541,17 @@ class Portal:
 		req = urllib.request.Request(self.base + path, data=body, headers=h, method=method)
 		return self.opener(req, timeout=timeout)
 
-	def role(self) -> Optional[dict]:
-		"""The portal's view of this install, or None when it cannot be asked."""
+	def role(self, primary_reachable: Optional[bool] = None) -> Optional[dict]:
+		"""The portal's view of this install, or None when it cannot be asked.
+
+		A local fallback for a hosted home also says, on each poll, whether
+		it can reach that hosted home — the portal's evidence of the link.
+		"""
+		headers = {}
+		if primary_reachable is not None:
+			headers["X-Primary-Reachable"] = "1" if primary_reachable else "0"
 		try:
-			with self._request("GET", API_ROLE, timeout=30) as resp:
+			with self._request("GET", API_ROLE, timeout=30, headers=headers) as resp:
 				data = json.loads(resp.read().decode("utf-8"))
 				return data if isinstance(data, dict) else None
 		except (urllib.error.URLError, OSError, ValueError) as exc:
@@ -624,20 +631,104 @@ def panel_status(data_dir: Path = DATA_DIR) -> dict:
 	}
 
 
+# ── Local fallback for a hosted home (reverse mode) ───────────────────────
+#
+# chap_plan §10: someone's home runs on a hosted instance and this install is
+# the local fallback. The portal stands the hosted side down and tells this
+# one to start whenever it can hear us; this only matters when it cannot.
+
+PROBE_TIMEOUT = 10
+
+
+def probe_primary(url: str, opener=urllib.request.urlopen) -> bool:
+	"""Can this house reach the hosted home, the way the house reaches it?
+
+	Any answer from Home Assistant counts (2xx-4xx, login pages included).
+	A 5xx does not: that is a proxy in front of it saying it is not there.
+	"""
+	req = urllib.request.Request(url, method="GET")
+	try:
+		with opener(req, timeout=PROBE_TIMEOUT) as resp:
+			return 200 <= resp.status < 500
+	except urllib.error.HTTPError as err:
+		return 200 <= err.code < 500
+	except (urllib.error.URLError, OSError, ValueError):
+		return False
+
+
+def watch_primary(state: dict, now: float, probe: Callable[[str], bool]) -> Optional[bool]:
+	"""Probe the hosted home if this install is its fallback; record the run."""
+	fallback = state.get("fallback") or {}
+	url = fallback.get("probe_url")
+	if not url:
+		return None
+	reachable = probe(url)
+	state["primary_reachable"] = reachable
+	if reachable:
+		state.pop("primary_unreachable_since", None)
+	else:
+		state.setdefault("primary_unreachable_since", now)
+	return reachable
+
+
+def maybe_take_over_locally(state: dict, now: float,
+                            set_running: Callable[[bool], bool]) -> Optional[str]:
+	"""Start Core with nobody to ask — only when it is safe to.
+
+	All of: the portal said this install may (``takeover_after`` is only
+	given when there is an anchor on site to tell a dead Pi from a dark
+	house); the portal has been unreachable that long; the hosted home has
+	been unreachable from here that long; and this worker is the one that
+	stopped Core. The portal stands the hosted side down well inside that
+	time (T_DOWN < T_TAKE), so the two never both run.
+	"""
+	fallback = state.get("fallback") or {}
+	after = fallback.get("takeover_after")
+	if not after or state.get("took_over_locally") or not state.get("core_stopped_by_vome"):
+		return None
+	portal_quiet = now - float(state.get("portal_ok_at") or now)
+	primary_quiet = now - float(state.get("primary_unreachable_since") or now)
+	if portal_quiet < after or primary_quiet < after:
+		return None
+	if not set_running(True):
+		return "could not start Core to take over; will retry"
+	state["core_stopped_by_vome"] = False
+	state["took_over_locally"] = now
+	return "took over locally: neither Vome nor the hosted home could be reached"
+
+
 # ── One pass ──────────────────────────────────────────────────────────────
 
 def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DATA_DIR,
              core_stopped: Callable[[], bool] = core_is_stopped,
              local_version: Callable[[], str] = core_version,
-             set_running: Callable[[bool], bool] = set_core_running) -> tuple[str, int]:
+             set_running: Callable[[bool], bool] = set_core_running,
+             probe: Callable[[str], bool] = probe_primary) -> tuple[str, int]:
 	"""Do whatever this side's role calls for. Returns (what happened, next wait)."""
-	info = portal.role()
-	if info is None:
-		return "portal unreachable; nothing changed", IDLE_INTERVAL
-	role = info.get("role")
-	interval = int(info.get("interval_seconds") or DEFAULT_INTERVAL)
 	state_path = data_dir / STATE_FILE
 	state = load_json(state_path)
+	now = time.time()
+	reachable = watch_primary(state, now, probe)
+
+	info = portal.role(reachable)
+	if info is None:
+		note = maybe_take_over_locally(state, now, set_running)
+		save_json(state_path, state)
+		if note:
+			LOG.warning("%s", note)
+			return note, IDLE_INTERVAL
+		return "portal unreachable; nothing changed", IDLE_INTERVAL
+	# The portal can hear us again, so it decides again: whatever this
+	# install did on its own is now the portal's instruction to confirm.
+	state["portal_ok_at"] = now
+	state["fallback"] = info.get("fallback") or None
+	state.pop("took_over_locally", None)
+	if not state["fallback"]:
+		for key in ("primary_reachable", "primary_unreachable_since"):
+			state.pop(key, None)
+	save_json(state_path, state)
+	role = info.get("role")
+	interval = int(info.get("interval_seconds") or DEFAULT_INTERVAL)
 
 	core_note = enforce_core(info.get("core"), state, state_path, core_stopped, set_running)
 	if core_note:
