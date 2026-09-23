@@ -351,7 +351,7 @@ class TestPairing:
 		assert calls == [("https://p.example/api/sync/chap/config/pair", {"code": "vcp_sb.abc"})]
 		binding = cs.load_binding(tmp_path)
 		assert binding == {"portal_url": "https://p.example", "server_id": "sb", "token": "vcs_sb.xyz"}
-		assert not (tmp_path / "chap_state.json").exists()
+		assert cs.load_json(tmp_path / "chap_state.json") == {}
 		# Nothing left to redeem.
 		assert cs.redeem_pairing(tmp_path, self._opener(calls)) is None
 		assert len(calls) == 1
@@ -425,3 +425,88 @@ class TestUploadNow:
 		                     "latest": {"sha256": meta["sha256"], "created_at": _t.time()}})
 		cs.run_once(portal, active, tmp_path)
 		assert [u["sha256"] for u in portal.uploads] == [meta["sha256"]]
+
+
+class TestCoreDirective:
+	"""Only a home behind the relay gets these; see portal core_directive."""
+
+	def _run(self, tmp_path, directive, stopped, state=None):
+		calls = []
+		data = tmp_path / "data"
+		data.mkdir(exist_ok=True)
+		if state is not None:
+			cs.save_json(data / cs.STATE_FILE, state)
+		standby = tmp_path / "cfg"
+		if not standby.exists():
+			make_config(standby)
+		portal = FakePortal({"role": "standby", "core": directive, "latest": {}})
+		cs.run_once(portal, standby, data, core_stopped=lambda: stopped,
+		            local_version=lambda: "2026.9.1",
+		            set_running=lambda running: calls.append(running) or True)
+		return calls, cs.load_json(data / cs.STATE_FILE)
+
+	def test_stop_stops_a_running_core_once_and_remembers_it(self, tmp_path):
+		calls, state = self._run(tmp_path, "stop", stopped=False)
+		assert calls == [False] and state["core_stopped_by_vome"] is True
+		calls, _ = self._run(tmp_path, "stop", stopped=True)
+		assert calls == []
+
+	def test_a_core_already_down_is_taken_over_so_the_handback_can_start_it(self, tmp_path):
+		calls, state = self._run(tmp_path, "stop", stopped=True, state={})
+		assert calls == [False] and state["core_stopped_by_vome"] is True
+		calls, state = self._run(tmp_path, "start", stopped=True)
+		assert calls == [True] and state["core_stopped_by_vome"] is False
+
+	def test_start_leaves_a_core_its_owner_stopped_alone(self, tmp_path):
+		calls, _ = self._run(tmp_path, "start", stopped=True, state={})
+		assert calls == []
+
+	def test_no_instruction_or_no_portal_changes_nothing(self, tmp_path):
+		calls, _ = self._run(tmp_path, None, stopped=False, state={"core_stopped_by_vome": True})
+		assert calls == []
+		data = tmp_path / "data"
+		out, _ = cs.run_once(FakePortal(None), tmp_path / "cfg", data,
+		                     core_stopped=lambda: True, local_version=lambda: "2026.9.1",
+		                     set_running=lambda r: pytest.fail("acted with no portal"))
+		assert "unreachable" in out
+
+	def test_a_failed_stop_is_retried_and_not_recorded_as_done(self, tmp_path):
+		data = tmp_path / "data"
+		data.mkdir()
+		make_config(tmp_path / "cfg")
+		cs.run_once(FakePortal({"role": "standby", "core": "stop", "latest": {}}), tmp_path / "cfg", data,
+		            core_stopped=lambda: False, local_version=lambda: "2026.9.1",
+		            set_running=lambda r: False)
+		assert not cs.load_json(data / cs.STATE_FILE).get("core_stopped_by_vome")
+
+	def test_re_pairing_keeps_the_fact_that_this_worker_stopped_core(self, tmp_path):
+		cs.save_json(tmp_path / "chap.json", {"portal_url": "https://p", "pairing_code": "vcp_x.y"})
+		cs.save_json(tmp_path / "chap_state.json", {"core_stopped_by_vome": True, "applied_id": "old"})
+		ok = lambda req, timeout=None: FakeResponse(200, json.dumps({"server_id": "x", "secret": "vcs_x.z"}).encode())
+		cs.redeem_pairing(tmp_path, ok)
+		assert cs.load_json(tmp_path / "chap_state.json") == {"core_stopped_by_vome": True}
+
+
+class TestSetCoreRunning:
+	def _opener(self, calls, fail_options=False):
+		def opener(req, timeout=None):
+			calls.append((req.get_method(), req.full_url.rsplit("supervisor", 1)[1], json.loads(req.data or b"{}")))
+			if fail_options and req.full_url.endswith("/core/options"):
+				raise urllib.error.HTTPError(req.full_url, 403, "no", {}, io.BytesIO(b"{}"))
+			return FakeResponse(200, b"{}")
+		return opener
+
+	def test_stop_turns_boot_off_then_stops(self):
+		calls = []
+		assert cs.set_core_running(False, self._opener(calls)) is True
+		assert calls == [("POST", "/core/options", {"boot": False}), ("POST", "/core/stop", {})]
+
+	def test_start_turns_boot_on_then_starts(self):
+		calls = []
+		assert cs.set_core_running(True, self._opener(calls)) is True
+		assert calls == [("POST", "/core/options", {"boot": True}), ("POST", "/core/start", {})]
+
+	def test_a_refused_boot_flag_stops_there(self):
+		calls = []
+		assert cs.set_core_running(False, self._opener(calls, fail_options=True)) is False
+		assert [c[1] for c in calls] == ["/core/options"]

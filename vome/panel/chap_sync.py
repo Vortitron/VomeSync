@@ -385,6 +385,66 @@ def core_is_stopped(opener=urllib.request.urlopen) -> bool:
 	        and body.get("error_key") == "homeassistant_not_running_error")
 
 
+def _supervisor_post(path: str, body: Optional[dict] = None,
+                     opener=urllib.request.urlopen) -> int:
+	req = urllib.request.Request(
+		SUPERVISOR.rstrip("/") + path, method="POST",
+		data=json.dumps(body or {}).encode(),
+		headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"},
+	)
+	try:
+		# Stopping or starting Core can take a minute or two.
+		with opener(req, timeout=300) as resp:
+			return resp.status
+	except urllib.error.HTTPError as err:
+		return err.code
+	except (urllib.error.URLError, OSError):
+		return 0
+
+
+def set_core_running(running: bool, opener=urllib.request.urlopen) -> bool:
+	"""Start or stop Core, with the boot flag to match (as the portal does
+	for a hosted standby), so a reboot mid-failover does not bring it back."""
+	if _supervisor_post("/core/options", {"boot": running}, opener) != 200:
+		return False
+	return _supervisor_post("/core/start" if running else "/core/stop", None, opener) == 200
+
+
+def enforce_core(directive, state: dict, state_path: Path,
+                 core_stopped: Callable[[], bool],
+                 set_running: Callable[[bool], bool] = set_core_running) -> Optional[str]:
+	"""Act on the portal's instruction for this install's own Core.
+
+	Only ever sent to a home the portal cannot reach itself, and only in two
+	forms. ``stop`` while a failover is active: one brain at a time, and a
+	stopped Core is what lets this worker bring the home up to date for the
+	handback. ``start`` afterwards — acted on only if this worker was the one
+	that stopped it, so a Core its owner stopped stays stopped.
+
+	The instruction arrives with every successful poll; when the portal
+	cannot be reached nothing arrives and nothing changes.
+	"""
+	stopped_by_us = bool(state.get("core_stopped_by_vome"))
+	if directive == "stop":
+		if stopped_by_us and core_stopped():
+			return None
+		# Take it over even if Core is already down (it crashed, say): the
+		# home is to stay inert until the handback, and then it is ours to
+		# start again. set_running(False) also turns boot off.
+		if not set_running(False):
+			return "could not stop Core for the failover; will retry"
+		state["core_stopped_by_vome"] = True
+		save_json(state_path, state)
+		return "stopped Core: the hosted standby is the active install"
+	if directive == "start" and stopped_by_us:
+		if not set_running(True):
+			return "could not start Core after the handback; will retry"
+		state["core_stopped_by_vome"] = False
+		save_json(state_path, state)
+		return "started Core: this install is the active one again"
+	return None
+
+
 def core_version(opener=urllib.request.urlopen) -> str:
 	status, body = _supervisor_get("/core/info", opener)
 	if status == 200 and isinstance(body, dict):
@@ -455,10 +515,11 @@ def redeem_pairing(data_dir: Path = DATA_DIR, opener=urllib.request.urlopen) -> 
 	                 "token": got["secret"]})
 	# A fresh pairing is a fresh install as far as sync goes: whatever this
 	# /data says it last applied came with the seed, from the other side.
-	try:
-		(data_dir / STATE_FILE).unlink()
-	except OSError:
-		pass
+	# Except whether this worker stopped Core — that is about this machine,
+	# and losing it mid-failover would leave the home stopped after handback.
+	previous = load_json(data_dir / STATE_FILE)
+	kept = {k: previous[k] for k in ("core_stopped_by_vome",) if k in previous}
+	save_json(data_dir / STATE_FILE, kept)
 	return f"paired as {got['server_id']}"
 
 
@@ -521,7 +582,8 @@ class Portal:
 
 def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DATA_DIR,
              core_stopped: Callable[[], bool] = core_is_stopped,
-             local_version: Callable[[], str] = core_version) -> tuple[str, int]:
+             local_version: Callable[[], str] = core_version,
+             set_running: Callable[[bool], bool] = set_core_running) -> tuple[str, int]:
 	"""Do whatever this side's role calls for. Returns (what happened, next wait)."""
 	info = portal.role()
 	if info is None:
@@ -530,6 +592,10 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	interval = int(info.get("interval_seconds") or DEFAULT_INTERVAL)
 	state_path = data_dir / STATE_FILE
 	state = load_json(state_path)
+
+	core_note = enforce_core(info.get("core"), state, state_path, core_stopped, set_running)
+	if core_note:
+		LOG.info("%s", core_note)
 
 	if role == ROLE_ACTIVE:
 		blob, meta = build_snapshot(config_dir)
