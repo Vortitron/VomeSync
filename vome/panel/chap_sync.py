@@ -535,7 +535,10 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 		blob, meta = build_snapshot(config_dir)
 		latest = info.get("latest") or {}
 		age = time.time() - float(latest.get("created_at") or 0)
-		if meta["sha256"] == latest.get("sha256") and age < REFRESH_SECONDS:
+		# upload_now: a handback is waiting for a snapshot taken after it was
+		# asked for, changed or not.
+		if (meta["sha256"] == latest.get("sha256") and age < REFRESH_SECONDS
+		        and not info.get("upload_now")):
 			return "active: unchanged since the last upload", interval
 		if len(blob) > MAX_SNAPSHOT_BYTES:
 			return f"active: snapshot too large to send ({len(blob)} bytes)", interval

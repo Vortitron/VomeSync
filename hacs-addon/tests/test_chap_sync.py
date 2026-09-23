@@ -414,3 +414,14 @@ class TestVolatileFiles:
 		                     local_version=lambda: "2026.9.1")
 		assert "applied snapshot snap-2" in out
 		assert (standby / ".storage" / "core.restore_state").read_text() == '{"v": 2}'
+
+
+class TestUploadNow:
+	def test_a_handback_gets_a_snapshot_even_when_nothing_changed(self, tmp_path):
+		import time as _t
+		active = make_config(tmp_path / "active")
+		_, meta = cs.build_snapshot(active)
+		portal = FakePortal({"role": "active", "upload_now": True,
+		                     "latest": {"sha256": meta["sha256"], "created_at": _t.time()}})
+		cs.run_once(portal, active, tmp_path)
+		assert [u["sha256"] for u in portal.uploads] == [meta["sha256"]]
