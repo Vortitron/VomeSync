@@ -572,8 +572,14 @@ class Portal:
 			raise ApplyRefused("snapshot is larger than this side accepts")
 		return blob, meta
 
-	def report_applied(self, snapshot_id: str, ok: bool, detail: str = "") -> None:
-		body = json.dumps({"id": snapshot_id, "ok": ok, "detail": detail[:500]}).encode()
+	def report_applied(self, snapshot_id: str, ok: bool, detail: str = "",
+	                   needs_core_version: str = "") -> None:
+		report = {"id": snapshot_id, "ok": ok, "detail": detail[:500]}
+		if needs_core_version:
+			# Structured, so the portal can update a hosted install's Core
+			# without parsing the message.
+			report["needs_core_version"] = needs_core_version
+		body = json.dumps(report).encode()
 		try:
 			with self._request("POST", API_APPLIED, body=body, timeout=30,
 			                   headers={"Content-Type": "application/json"}):
@@ -676,7 +682,8 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 			return "standby: Core is running; not applying", interval
 		blocker = version_blocker(latest.get("ha_version") or "", local_version())
 		if blocker:
-			portal.report_applied(latest["id"], False, blocker)
+			portal.report_applied(latest["id"], False, blocker,
+			                      needs_core_version=(latest.get("ha_version") or "").strip())
 			return f"standby: {blocker}", interval
 		try:
 			blob, meta = portal.download()

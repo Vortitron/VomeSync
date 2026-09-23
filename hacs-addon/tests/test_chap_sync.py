@@ -242,8 +242,9 @@ class FakePortal:
 	def download(self):
 		return self.blob, self.meta
 
-	def report_applied(self, snapshot_id, ok, detail=""):
+	def report_applied(self, snapshot_id, ok, detail="", needs_core_version=""):
 		self.reports.append((snapshot_id, ok, detail))
+		self.needs = needs_core_version
 
 
 class TestRunOnce:
@@ -322,6 +323,7 @@ class TestRunOnce:
 		assert (standby / "automations.yaml").read_text() == "[]\n"
 		assert portal.reports[0][1] is False
 		assert "update Core" in portal.reports[0][2]
+		assert portal.needs == "2026.10.0"
 
 	def test_unknown_role_does_nothing(self, tmp_path):
 		portal, standby, data = self._standby_case(tmp_path)
