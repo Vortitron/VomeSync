@@ -327,3 +327,44 @@ class TestRunOnce:
 		cs.run_once(portal, standby, data, core_stopped=lambda: True,
 		            local_version=lambda: "2026.9.1")
 		assert portal.reports == [] and portal.uploads == []
+
+
+class TestPairing:
+	def _opener(self, calls, answer=None, error=None):
+		def opener(req, timeout=None):
+			calls.append((req.full_url, json.loads(req.data)))
+			if error:
+				raise urllib.error.HTTPError(req.full_url, error, "err", {}, io.BytesIO(b"{}"))
+			return FakeResponse(200, json.dumps(answer).encode())
+		return opener
+
+	def test_a_code_is_redeemed_once_and_replaced_by_the_credential(self, tmp_path):
+		cs.save_json(tmp_path / "chap.json", {"portal_url": "https://p.example/",
+		                                      "pairing_code": "vcp_sb.abc"})
+		cs.save_json(tmp_path / "chap_state.json", {"applied_sha256": "from the seed"})
+		calls = []
+		out = cs.redeem_pairing(tmp_path, self._opener(
+			calls, {"server_id": "sb", "secret": "vcs_sb.xyz"}))
+		assert out == "paired as sb"
+		assert calls == [("https://p.example/api/sync/chap/config/pair", {"code": "vcp_sb.abc"})]
+		binding = cs.load_binding(tmp_path)
+		assert binding == {"portal_url": "https://p.example", "server_id": "sb", "token": "vcs_sb.xyz"}
+		assert not (tmp_path / "chap_state.json").exists()
+		# Nothing left to redeem.
+		assert cs.redeem_pairing(tmp_path, self._opener(calls)) is None
+		assert len(calls) == 1
+
+	def test_a_refused_code_is_dropped_rather_than_retried_forever(self, tmp_path):
+		cs.save_json(tmp_path / "chap.json", {"portal_url": "https://p.example",
+		                                      "pairing_code": "vcp_sb.spent"})
+		out = cs.redeem_pairing(tmp_path, self._opener([], error=403))
+		assert "new one" in out
+		assert "pairing_code" not in cs.load_json(tmp_path / "chap.json")
+		assert cs.load_binding(tmp_path) is None
+
+	def test_a_portal_outage_keeps_the_code_for_the_next_pass(self, tmp_path):
+		cs.save_json(tmp_path / "chap.json", {"portal_url": "https://p.example",
+		                                      "pairing_code": "vcp_sb.abc"})
+		out = cs.redeem_pairing(tmp_path, self._opener([], error=503))
+		assert "retry" in out
+		assert cs.load_json(tmp_path / "chap.json")["pairing_code"] == "vcp_sb.abc"

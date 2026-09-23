@@ -62,6 +62,7 @@ STAGING_NAME = ".vome_chap_staging"
 API_ROLE = "/api/sync/chap/config/role"
 API_SNAPSHOT = "/api/sync/chap/config/snapshot"
 API_APPLIED = "/api/sync/chap/config/applied"
+API_PAIR = "/api/sync/chap/config/pair"
 
 DEFAULT_INTERVAL = 300
 IDLE_INTERVAL = 60
@@ -410,6 +411,49 @@ def load_binding(data_dir: Path = DATA_DIR) -> Optional[dict]:
 	return None
 
 
+def redeem_pairing(data_dir: Path = DATA_DIR, opener=urllib.request.urlopen) -> Optional[str]:
+	"""Swap a pairing code in /data/chap.json for this install's credential.
+
+	The portal (over the guest agent) or the owner (in the panel) leaves
+	``{"portal_url", "pairing_code"}``; the code is single use, so the file is
+	rewritten with the credential the moment it is redeemed. Returns what
+	happened, or None when there was no code to redeem.
+	"""
+	path = data_dir / BINDING_FILE
+	b = load_json(path)
+	code = b.get("pairing_code")
+	portal_url = (b.get("portal_url") or "").rstrip("/")
+	if not code or not portal_url:
+		return None
+	req = urllib.request.Request(
+		portal_url + API_PAIR, data=json.dumps({"code": code}).encode(),
+		headers={"Content-Type": "application/json"}, method="POST",
+	)
+	try:
+		with opener(req, timeout=30) as resp:
+			got = json.loads(resp.read().decode("utf-8"))
+	except urllib.error.HTTPError as exc:
+		if exc.code in (400, 401, 403, 404):
+			# Spent, expired or wrong: it will never work, so stop presenting
+			# it. A new code has to be issued.
+			save_json(path, {"portal_url": portal_url, "pairing_failed": f"HTTP {exc.code}"})
+			return f"pairing code refused (HTTP {exc.code}); ask for a new one"
+		return f"pairing failed (HTTP {exc.code}); will retry"
+	except (urllib.error.URLError, OSError, ValueError) as exc:
+		return f"pairing failed ({exc}); will retry"
+	if not (isinstance(got, dict) and got.get("server_id") and got.get("secret")):
+		return "pairing answer was malformed; will retry"
+	save_json(path, {"portal_url": portal_url, "server_id": got["server_id"],
+	                 "token": got["secret"]})
+	# A fresh pairing is a fresh install as far as sync goes: whatever this
+	# /data says it last applied came with the seed, from the other side.
+	try:
+		(data_dir / STATE_FILE).unlink()
+	except OSError:
+		pass
+	return f"paired as {got['server_id']}"
+
+
 class Portal:
 	def __init__(self, binding: dict, opener=urllib.request.urlopen):
 		self.base = binding["portal_url"].rstrip("/")
@@ -540,6 +584,9 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 def main() -> None:
 	logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 	while True:
+		paired = redeem_pairing()
+		if paired:
+			LOG.info("%s", paired)
 		binding = load_binding()
 		if not binding:
 			time.sleep(IDLE_INTERVAL)
