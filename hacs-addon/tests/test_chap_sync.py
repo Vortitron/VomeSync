@@ -693,3 +693,28 @@ class TestRelayPairing:
 		assert cs.collect_relay_pairing(data, cfg) is False
 		assert not (cfg / cs.RELAY_PAIRING_FILE).exists()
 		assert not (data / "chap.json").exists()
+
+
+class TestPollNow:
+	def test_a_nudge_cuts_the_wait_short_and_is_consumed(self, tmp_path):
+		slept = []
+		(tmp_path / cs.POLL_NOW_FILE).write_text("now")
+		assert cs.sleep_unless_nudged(300, tmp_path, slept.append) is True
+		assert slept == [] and not (tmp_path / cs.POLL_NOW_FILE).exists()
+
+	def test_a_nudge_arriving_mid_wait_is_noticed(self, tmp_path):
+		slept = []
+		def sleep(s):
+			slept.append(s)
+			if len(slept) == 3:
+				(tmp_path / cs.POLL_NOW_FILE).write_text("now")
+		assert cs.sleep_unless_nudged(300, tmp_path, sleep) is True
+		assert sum(slept) == 3 * cs.NUDGE_CHECK_SECONDS
+
+	def test_without_one_it_waits_the_full_time(self, tmp_path):
+		slept = []
+		assert cs.sleep_unless_nudged(10, tmp_path, slept.append) is False
+		assert sum(slept) == 10
+
+	def test_it_is_never_synced(self):
+		assert not cs.is_synced(cs.POLL_NOW_FILE)

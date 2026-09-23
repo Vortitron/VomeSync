@@ -92,6 +92,7 @@ EXCLUDED_TOP = frozenset({
 	".cache",
 	".vome_chap_staging", # our own staging area
 	".vome_chap_pairing.json",  # a pairing code the portal left; this install's only
+	".vome_chap_poll_now",      # the portal asking this install to poll at once
 	".ha_run.lock",       # the running Core's lock file
 	".HA_RESTART",
 })
@@ -831,6 +832,35 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	return f"not in a pair (role {role!r})", interval
 
 
+POLL_NOW_FILE = ".vome_chap_poll_now"
+NUDGE_CHECK_SECONDS = 3
+
+
+def sleep_unless_nudged(seconds: float, config_dir: Path = CONFIG_DIR,
+                        sleep: Callable[[float], None] = time.sleep) -> bool:
+	"""Wait up to ``seconds``, cut short if the portal asks for a poll now.
+
+	A home behind the relay can only be reached through its Vome component,
+	which serves file access to /config: the portal writes
+	``/config/.vome_chap_poll_now`` when it needs this install to hear
+	something promptly -- above all "stop" when a failover is declared,
+	since until then the standby cannot safely start. Returns True if nudged.
+	"""
+	marker = config_dir / POLL_NOW_FILE
+	waited = 0.0
+	while waited < seconds:
+		if marker.exists():
+			try:
+				marker.unlink()
+			except OSError:
+				pass
+			return True
+		step = min(NUDGE_CHECK_SECONDS, seconds - waited)
+		sleep(step)
+		waited += step
+	return False
+
+
 def main() -> None:
 	logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 	while True:
@@ -847,7 +877,8 @@ def main() -> None:
 			LOG.exception("CHAP sync pass failed")
 			outcome, wait = "pass failed", IDLE_INTERVAL
 		LOG.info("%s", outcome)
-		time.sleep(max(5, wait))
+		if sleep_unless_nudged(max(5, wait)):
+			LOG.info("asked by Vome to check in now")
 
 
 if __name__ == "__main__":
