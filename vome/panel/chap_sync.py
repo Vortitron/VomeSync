@@ -643,17 +643,19 @@ PROBE_TIMEOUT = 10
 def probe_primary(url: str, opener=urllib.request.urlopen) -> bool:
 	"""Can this house reach the hosted home, the way the house reaches it?
 
-	Any answer from Home Assistant counts (2xx-4xx, login pages included).
-	A 5xx does not: that is a proxy in front of it saying it is not there.
+	The portal points this at the home's ``/manifest.json``, which Home
+	Assistant serves without a login as JSON. Only that counts: the edge in
+	front of it answers too — a 403 "home network only" gate, a 502 for a
+	VM that is down, a fallback page — and none of those means the home is
+	there. So a 200 with a JSON body type, and nothing else.
 	"""
 	req = urllib.request.Request(url, method="GET")
 	try:
 		with opener(req, timeout=PROBE_TIMEOUT) as resp:
-			return 200 <= resp.status < 500
-	except urllib.error.HTTPError as err:
-		return 200 <= err.code < 500
+			ctype = (resp.headers.get("Content-Type") or "").lower()
+			return resp.status == 200 and "json" in ctype
 	except (urllib.error.URLError, OSError, ValueError):
-		return False
+		return False  # includes HTTPError: every non-2xx
 
 
 def watch_primary(state: dict, now: float, probe: Callable[[str], bool]) -> Optional[bool]:

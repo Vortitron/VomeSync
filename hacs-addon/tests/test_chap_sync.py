@@ -658,11 +658,13 @@ class TestLocalFallback:
 		st = cs.load_json(data / cs.STATE_FILE)
 		assert calls == [False] and "took_over_locally" not in st
 
-	def test_a_5xx_from_the_edge_is_not_the_home_answering(self):
-		def gw(req, timeout=None):
-			raise urllib.error.HTTPError(req.full_url, 502, "Bad Gateway", {}, io.BytesIO(b""))
-		assert cs.probe_primary("https://h/", gw) is False
-		def login(req, timeout=None):
-			raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b""))
-		assert cs.probe_primary("https://h/", login) is True
-		assert cs.probe_primary("https://h/", lambda req, timeout=None: FakeResponse(200)) is True
+	def test_only_home_assistants_own_manifest_counts(self):
+		"""Seen on staging: the edge's gate answers 403 with a page of its own."""
+		for code in (403, 502, 404):
+			def edge(req, timeout=None, code=code):
+				raise urllib.error.HTTPError(req.full_url, code, "no", {}, io.BytesIO(b""))
+			assert cs.probe_primary("https://h/manifest.json", edge) is False
+		html = FakeResponse(200, b"<html>", {"Content-Type": "text/html"})
+		assert cs.probe_primary("https://h/manifest.json", lambda r, timeout=None: html) is False
+		manifest = FakeResponse(200, b"{}", {"Content-Type": "application/manifest+json; charset=utf-8"})
+		assert cs.probe_primary("https://h/manifest.json", lambda r, timeout=None: manifest) is True
