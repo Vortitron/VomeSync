@@ -22,6 +22,7 @@ from .backup_client import (
 	VomeBackupClient,
 	VomeBackupError,
 	credentials_for_entry,
+	portal_url_for_entry,
 )
 from .const import DOMAIN
 
@@ -82,6 +83,7 @@ class VomeBackupAgent(BackupAgent):
 		self._client = VomeBackupClient(
 			async_get_clientsession(hass),
 			secret=secret or "",
+			portal_url=portal_url_for_entry(entry),
 		)
 		self.name = entry.title or "Vome"
 		# Stable across restarts and unique per linked account, so Home
