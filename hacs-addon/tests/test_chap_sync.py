@@ -510,3 +510,73 @@ class TestSetCoreRunning:
 		calls = []
 		assert cs.set_core_running(False, self._opener(calls, fail_options=True)) is False
 		assert [c[1] for c in calls] == ["/core/options"]
+
+
+class TestPanelPairing:
+	CODE = "vcp_rly-abc123.ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-abcd"
+
+	def test_a_pasted_code_is_checked_before_it_is_kept(self, tmp_path):
+		with pytest.raises(ValueError, match="vcp_"):
+			cs.stage_pairing("not a code", "https://vome.io", tmp_path)
+		with pytest.raises(ValueError, match="https"):
+			cs.stage_pairing(self.CODE, "http://vome.io", tmp_path)
+		cs.stage_pairing("  " + self.CODE + "\n", "https://vome.io/", tmp_path)
+		assert cs.load_json(tmp_path / "chap.json") == {"portal_url": "https://vome.io",
+		                                                "pairing_code": self.CODE}
+
+	def test_status_never_shows_the_credential(self, tmp_path):
+		cs.save_json(tmp_path / "chap.json", {"portal_url": "https://vome.io", "server_id": "x",
+		                                      "token": "vcs_x.secret"})
+		st = cs.panel_status(tmp_path)
+		assert st["paired"] is True and "vcs_x.secret" not in json.dumps(st)
+
+	def test_losing_a_race_does_not_undo_the_winners_pairing(self, tmp_path):
+		"""The panel and the worker can both try to redeem one code."""
+		cs.save_json(tmp_path / "chap.json", {"portal_url": "https://p", "pairing_code": self.CODE})
+
+		def refused_after_the_other_side_won(req, timeout=None):
+			cs.save_json(tmp_path / "chap.json", {"portal_url": "https://p", "server_id": "x",
+			                                      "token": "vcs_x.won"})
+			raise urllib.error.HTTPError(req.full_url, 403, "spent", {}, io.BytesIO(b"{}"))
+
+		cs.redeem_pairing(tmp_path, refused_after_the_other_side_won)
+		assert cs.load_binding(tmp_path)["token"] == "vcs_x.won"
+
+
+class TestPanelRoutes:
+	"""The panel answers /api/chap itself: pairing must work with Core stopped."""
+
+	@pytest.fixture
+	def panel(self, tmp_path, monkeypatch):
+		import functools
+		spec = importlib.util.spec_from_file_location("vome_panel_server_chap", ROOT / "vome" / "panel" / "server.py")
+		server = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(server)
+		sc = server.chap_sync
+		monkeypatch.setattr(sc, "panel_status", functools.partial(sc.panel_status, data_dir=tmp_path))
+		monkeypatch.setattr(sc, "stage_pairing", functools.partial(sc.stage_pairing, data_dir=tmp_path))
+		ok = lambda req, timeout=None: FakeResponse(200, json.dumps({"server_id": "rly-abc123", "secret": "vcs_rly-abc123.s"}).encode())
+		monkeypatch.setattr(sc, "redeem_pairing", functools.partial(sc.redeem_pairing, data_dir=tmp_path, opener=ok))
+		monkeypatch.setattr(server, "addon_portal_url", lambda: "https://staging.vome.io")
+
+		def call(method, path, body=None):
+			h = object.__new__(server.PanelHandler)
+			h.path = path
+			sent = {}
+			h._read_json = lambda: body or {}
+			h._send_json = lambda status, payload: sent.update(status=status, body=payload)
+			(h._route_post if method == "POST" else h._route_get)()
+			return sent
+		return call
+
+	def test_pair_then_status(self, panel):
+		out = panel("POST", "/api/chap/pair", {"code": TestPanelPairing.CODE})
+		assert out["status"] == 200 and out["body"]["paired"] is True
+		assert out["body"]["portal_url"] == "https://staging.vome.io"
+		assert "vcs_" not in json.dumps(out["body"])
+		got = panel("GET", "/api/chap")
+		assert got["body"]["server_id"] == "rly-abc123"
+
+	def test_a_bad_code_is_a_400_with_a_reason(self, panel):
+		out = panel("POST", "/api/chap/pair", {"code": "nope"})
+		assert out["status"] == 400 and "vcp_" in out["body"]["error"]

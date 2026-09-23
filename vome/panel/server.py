@@ -12,12 +12,17 @@ import json
 import logging
 import os
 import re
+import sys
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
+
+# chap_sync lives beside this file; importable however the panel is started.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import chap_sync  # noqa: E402
 
 DEFAULT_PORTAL_URL = "https://vome.io"
 RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
@@ -458,6 +463,9 @@ class PanelHandler(BaseHTTPRequestHandler):
 		if path == "/api/diag":
 			self._send_json(200, run_diagnostics())
 			return
+		if path == "/api/chap":
+			self._send_json(200, chap_sync.panel_status())
+			return
 		if path == "/api/health_score":
 			# Read-only: the last report, refreshed from Vome first.  A
 			# house that has never run one answers with an empty report
@@ -493,6 +501,22 @@ class PanelHandler(BaseHTTPRequestHandler):
 		parsed = urlparse(self.path)
 		path = (parsed.path or "/").rstrip("/") or "/"
 		body = self._read_json()
+		if path == "/api/chap/pair":
+			# Handled here rather than by the integration: pairing has to work
+			# with Core stopped, which is how a standby spends its life.
+			try:
+				chap_sync.stage_pairing(body.get("code"), addon_portal_url() or DEFAULT_PORTAL_URL)
+			except ValueError as err:
+				self._send_json(400, {"error": str(err)})
+				return
+			outcome = chap_sync.redeem_pairing() or "no code to redeem"
+			result = chap_sync.panel_status()
+			if not result["paired"]:
+				self._send_json(400 if result.get("pairing_failed") else 502,
+				                {"error": outcome, **result})
+				return
+			self._send_json(200, {"message": outcome, **result})
+			return
 		if path == "/api/link/start":
 			try:
 				body = prepare_link_start(body)

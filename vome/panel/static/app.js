@@ -13,6 +13,7 @@
 		link: "Vome account",
 		health: "Health score",
 		agent: "Coding agent",
+		standby: "Standby sync",
 		switches: "Switches",
 		about: "About",
 	};
@@ -265,6 +266,7 @@
 		if (name === "switches" && switchesData === null) loadSwitches();
 		if (name === "health" && healthData === null) loadHealth(true);
 		if (name === "agent" && agentData === null) loadAgentKey(true);
+		if (name === "standby") loadChap();
 		render();
 	}
 
@@ -1767,6 +1769,70 @@
 		if (ev.target && ev.target.id === "agent-copy") agentCopyJson();
 	});
 
+	// ── Standby sync (CHAP) ─────────────────────────────────────────────
+	// Pairing works with Home Assistant Core stopped — the add-on answers
+	// this itself — because a standby spends most of its life that way.
+	let chapData = null;
+	let chapBusy = false;
+
+	async function loadChap() {
+		try {
+			chapData = await api("/api/chap");
+		} catch (err) {
+			showBanner(err.message || "Could not read the standby sync state", true);
+		}
+		if (current === "standby") render();
+	}
+
+	function chapWhen(ts) {
+		return ts ? new Date(ts * 1000).toLocaleString() : "never";
+	}
+
+	function renderStandby() {
+		const d = chapData;
+		if (!d) {
+			viewEl.innerHTML = `<div class="card"><p class="muted">Loading…</p></div>`;
+			return;
+		}
+		const status = d.paired
+			? `<p>${pill(true, "Paired", "")} as <code>${escapeHtml(d.server_id)}</code> with <code>${escapeHtml(d.portal_url)}</code>.</p>
+			   <p class="muted">Last sent to the standby: ${escapeHtml(chapWhen(d.uploaded_at))}. Last taken from it: ${escapeHtml(chapWhen(d.applied_at))}.</p>
+			   ${d.core_stopped_by_vome ? `<p><strong>Home Assistant is stopped here</strong> because the hosted standby is the active install. It starts again when you hand back.</p>` : ""}`
+			: `<p>${pill(false, "", "Not paired")} ${d.pairing_failed ? `The last code was refused (${escapeHtml(d.pairing_failed)}) — it may have expired. Get a new one.` : ""}</p>`;
+		viewEl.innerHTML = `
+			<div class="card">
+				<h2>Keep a hosted standby in step</h2>
+				<p class="muted">With CHAP protection, Vome keeps a copy of this Home Assistant ready to take over if this machine fails. This add-on sends your configuration to it whenever it changes, and brings back anything changed there when you hand back.</p>
+				${status}
+			</div>
+			<div class="card">
+				<h2>${d.paired ? "Pair again" : "Pair this install"}</h2>
+				<p class="muted">On vome.io, open your server &rarr; CHAP protection &rarr; Standby sync, and create a pairing code. It works once, for 30 minutes.</p>
+				<div class="row">
+					<input type="text" id="chap-code" placeholder="vcp_…" autocomplete="off" spellcheck="false" style="flex:1; min-width:16rem">
+					<button type="button" class="primary" id="chap-pair"${chapBusy ? " disabled" : ""}>${chapBusy ? "Pairing…" : "Pair"}</button>
+				</div>
+			</div>`;
+		const btn = document.getElementById("chap-pair");
+		if (btn) btn.onclick = async () => {
+			const code = (document.getElementById("chap-code").value || "").trim();
+			if (!code) return;
+			chapBusy = true;
+			render();
+			showBanner("Pairing with Vome…", "info");
+			try {
+				chapData = await api("/api/chap/pair", { method: "POST", body: JSON.stringify({ code }) });
+				showBanner("Paired. This install now keeps its standby in step.", "info");
+			} catch (err) {
+				if (err.data && typeof err.data.paired === "boolean") chapData = err.data;
+				showBanner(err.message || "Pairing did not work", true);
+			} finally {
+				chapBusy = false;
+				render();
+			}
+		};
+	}
+
 	function render() {
 		if (current === "overview") renderOverview();
 		else if (current === "forward") renderForward();
@@ -1775,6 +1841,7 @@
 		else if (current === "link") renderLink();
 		else if (current === "health") renderHealth();
 		else if (current === "agent") renderAgent();
+		else if (current === "standby") renderStandby();
 		else if (current === "switches") renderSwitches();
 		else renderAbout();
 		if (lastDiag && current === "about") {

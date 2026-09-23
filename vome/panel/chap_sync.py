@@ -503,8 +503,12 @@ def redeem_pairing(data_dir: Path = DATA_DIR, opener=urllib.request.urlopen) -> 
 	except urllib.error.HTTPError as exc:
 		if exc.code in (400, 401, 403, 404):
 			# Spent, expired or wrong: it will never work, so stop presenting
-			# it. A new code has to be issued.
-			save_json(path, {"portal_url": portal_url, "pairing_failed": f"HTTP {exc.code}"})
+			# it. A new code has to be issued. Only if the file still holds
+			# *this* code, though: the panel and the worker can race to redeem
+			# the same one, and the loser must not overwrite the winner's
+			# fresh credential with a failure.
+			if load_json(path).get("pairing_code") == code:
+				save_json(path, {"portal_url": portal_url, "pairing_failed": f"HTTP {exc.code}"})
 			return f"pairing code refused (HTTP {exc.code}); ask for a new one"
 		return f"pairing failed (HTTP {exc.code}); will retry"
 	except (urllib.error.URLError, OSError, ValueError) as exc:
@@ -576,6 +580,42 @@ class Portal:
 				pass
 		except (urllib.error.URLError, OSError) as exc:
 			LOG.warning("Could not report the apply result: %s", exc)
+
+
+# ── Panel ─────────────────────────────────────────────────────────────────
+
+_CODE_RE = re.compile(r"^vcp_[A-Za-z0-9-]+\.[A-Za-z0-9_-]{20,}$")
+
+
+def stage_pairing(code: str, portal_url: str, data_dir: Path = DATA_DIR) -> None:
+	"""Leave a code the owner pasted for :func:`redeem_pairing` to spend.
+
+	Replaces any existing binding: pairing again is how an install is
+	re-bound after it has been restored or its credential withdrawn.
+	"""
+	code = (code or "").strip()
+	if not _CODE_RE.match(code):
+		raise ValueError("That does not look like a Vome pairing code (it starts vcp_).")
+	if not (portal_url or "").startswith("https://"):
+		raise ValueError("The Vome address in the add-on options must start https://")
+	save_json(data_dir / BINDING_FILE, {"portal_url": portal_url.rstrip("/"), "pairing_code": code})
+
+
+def panel_status(data_dir: Path = DATA_DIR) -> dict:
+	"""What the panel shows. Never the credential."""
+	b = load_json(data_dir / BINDING_FILE)
+	st = load_json(data_dir / STATE_FILE)
+	return {
+		"paired": bool(b.get("server_id") and b.get("token")),
+		"server_id": b.get("server_id"),
+		"portal_url": b.get("portal_url"),
+		"pairing_pending": bool(b.get("pairing_code")),
+		"pairing_failed": b.get("pairing_failed"),
+		"applied_id": st.get("applied_id"),
+		"applied_at": st.get("applied_at"),
+		"uploaded_at": st.get("uploaded_at"),
+		"core_stopped_by_vome": bool(st.get("core_stopped_by_vome")),
+	}
 
 
 # ── One pass ──────────────────────────────────────────────────────────────
