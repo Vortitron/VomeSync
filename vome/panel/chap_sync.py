@@ -65,6 +65,12 @@ API_APPLIED = "/api/sync/chap/config/applied"
 API_PAIR = "/api/sync/chap/config/pair"
 
 DEFAULT_INTERVAL = 300
+# Files Core rewrites on a timer whatever anyone does. They travel in every
+# snapshot but do not count as a change, or the active side would re-send the
+# whole config every pass (core.restore_state: every ~15 min, measured on the
+# staging pair — ~19 MB each time). REFRESH_SECONDS bounds how stale they get.
+VOLATILE = frozenset({".storage/core.restore_state"})
+REFRESH_SECONDS = 6 * 3600
 IDLE_INTERVAL = 60
 MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
 
@@ -211,9 +217,10 @@ def _read_for_snapshot(full: Path) -> bytes:
 def build_snapshot(config_dir: Path) -> tuple[bytes, dict]:
 	"""A gzip tar of the synced files plus its metadata.
 
-	``sha256`` is over (path, bytes) of every file, not over the tar, so an
-	unchanged config hashes the same however tar and gzip stamp their
-	headers — which is what lets the active side skip uploading nothing new.
+	``sha256`` is over (path, bytes) of every file except :data:`VOLATILE`,
+	not over the tar, so an unchanged config hashes the same however tar and
+	gzip stamp their headers — which is what lets the active side skip
+	uploading nothing new.
 	"""
 	files = synced_files(config_dir)
 	hasher = hashlib.sha256()
@@ -225,8 +232,9 @@ def build_snapshot(config_dir: Path) -> tuple[bytes, dict]:
 				data = _read_for_snapshot(full)
 			except OSError:
 				continue  # removed between the walk and the read
-			hasher.update(rel.encode("utf-8") + b"\0")
-			hasher.update(hashlib.sha256(data).digest())
+			if rel not in VOLATILE:
+				hasher.update(rel.encode("utf-8") + b"\0")
+				hasher.update(hashlib.sha256(data).digest())
 			info = tarfile.TarInfo(rel)
 			info.size = len(data)
 			info.mode = 0o644
@@ -254,7 +262,7 @@ def content_hash(blob: bytes) -> str:
 	entries = []
 	with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
 		for m in tar.getmembers():
-			if m.isfile():
+			if m.isfile() and m.name not in VOLATILE:
 				entries.append((m.name, hashlib.sha256(tar.extractfile(m).read()).digest()))
 	hasher = hashlib.sha256()
 	for name, digest in sorted(entries):
@@ -526,7 +534,8 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	if role == ROLE_ACTIVE:
 		blob, meta = build_snapshot(config_dir)
 		latest = info.get("latest") or {}
-		if meta["sha256"] == latest.get("sha256"):
+		age = time.time() - float(latest.get("created_at") or 0)
+		if meta["sha256"] == latest.get("sha256") and age < REFRESH_SECONDS:
 			return "active: unchanged since the last upload", interval
 		if len(blob) > MAX_SNAPSHOT_BYTES:
 			return f"active: snapshot too large to send ({len(blob)} bytes)", interval
@@ -547,7 +556,9 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 		latest = info.get("latest") or {}
 		if not latest.get("id"):
 			return "standby: nothing to apply yet", interval
-		if latest.get("sha256") and latest["sha256"] == state.get("applied_sha256"):
+		# By id, not hash: a refresh re-sends the same config hash with newer
+		# volatile files, and those should land too.
+		if latest["id"] == state.get("applied_id"):
 			return "standby: already in step", interval
 		if not core_stopped():
 			# Never write under a running Core. Not an error to report on

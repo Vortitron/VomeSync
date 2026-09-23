@@ -256,7 +256,9 @@ class TestRunOnce:
 	def test_active_uploads_only_what_changed(self, tmp_path):
 		active = make_config(tmp_path / "active")
 		_, meta = cs.build_snapshot(active)
-		same = FakePortal({"role": "active", "latest": {"sha256": meta["sha256"]}})
+		import time as _t
+		same = FakePortal({"role": "active", "latest": {"sha256": meta["sha256"],
+		                                                "created_at": _t.time()}})
 		cs.run_once(same, active, tmp_path)
 		assert same.uploads == []
 
@@ -368,3 +370,47 @@ class TestPairing:
 		out = cs.redeem_pairing(tmp_path, self._opener([], error=503))
 		assert "retry" in out
 		assert cs.load_json(tmp_path / "chap.json")["pairing_code"] == "vcp_sb.abc"
+
+
+class TestVolatileFiles:
+	"""core.restore_state is rewritten by Core every ~15 min regardless."""
+
+	def test_restore_state_travels_but_is_not_a_change(self, tmp_path):
+		root = make_config(tmp_path / "config")
+		(root / ".storage" / "core.restore_state").write_text('{"v": 1}')
+		blob_a, a = cs.build_snapshot(root)
+		(root / ".storage" / "core.restore_state").write_text('{"v": 2}')
+		blob_b, b = cs.build_snapshot(root)
+		assert a["sha256"] == b["sha256"]
+		with tarfile.open(fileobj=io.BytesIO(blob_b), mode="r:gz") as tar:
+			assert tar.extractfile(".storage/core.restore_state").read() == b'{"v": 2}'
+		assert cs.content_hash(blob_b) == b["sha256"]
+
+	def test_active_refreshes_an_unchanged_config_after_a_while(self, tmp_path):
+		import time as _t
+		active = make_config(tmp_path / "active")
+		_, meta = cs.build_snapshot(active)
+		fresh = FakePortal({"role": "active", "latest": {"sha256": meta["sha256"],
+		                                                 "created_at": _t.time() - 60}})
+		cs.run_once(fresh, active, tmp_path)
+		assert fresh.uploads == []
+		stale = FakePortal({"role": "active", "latest": {"sha256": meta["sha256"],
+		                                                 "created_at": _t.time() - cs.REFRESH_SECONDS - 1}})
+		cs.run_once(stale, active, tmp_path)
+		assert len(stale.uploads) == 1
+
+	def test_standby_applies_a_refresh_with_the_same_hash(self, tmp_path):
+		active = make_config(tmp_path / "active")
+		(active / ".storage" / "core.restore_state").write_text('{"v": 2}')
+		blob, meta = cs.build_snapshot(active)
+		standby = make_config(tmp_path / "standby")
+		data = tmp_path / "data"
+		data.mkdir()
+		cs.save_json(data / cs.STATE_FILE, {"applied_id": "snap-1", "applied_sha256": meta["sha256"]})
+		portal = FakePortal({"role": "standby", "latest": {"id": "snap-2", "sha256": meta["sha256"],
+		                                                   "ha_version": "2026.9.1"}},
+		                    blob, {"id": "snap-2"})
+		out, _ = cs.run_once(portal, standby, data, core_stopped=lambda: True,
+		                     local_version=lambda: "2026.9.1")
+		assert "applied snapshot snap-2" in out
+		assert (standby / ".storage" / "core.restore_state").read_text() == '{"v": 2}'
