@@ -243,6 +243,25 @@ def build_snapshot(config_dir: Path) -> tuple[bytes, dict]:
 	}
 
 
+def content_hash(blob: bytes) -> str:
+	"""The ``sha256`` :func:`build_snapshot` gives, recomputed from the tar.
+
+	Lets the standby check it received exactly what the active side hashed —
+	not a corrupted transfer, and not a newer snapshot that replaced the one
+	the portal named between the role check and the download.
+	"""
+	entries = []
+	with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+		for m in tar.getmembers():
+			if m.isfile():
+				entries.append((m.name, hashlib.sha256(tar.extractfile(m).read()).digest()))
+	hasher = hashlib.sha256()
+	for name, digest in sorted(entries):
+		hasher.update(name.encode("utf-8") + b"\0")
+		hasher.update(digest)
+	return hasher.hexdigest()
+
+
 # ── Apply (standby side) ──────────────────────────────────────────────────
 
 # Every Home Assistant config has these; a snapshot without them is not one.
@@ -329,7 +348,11 @@ def _supervisor_get(path: str, opener=urllib.request.urlopen) -> tuple[int, Any]
 			raw = resp.read()
 			status = resp.status
 	except urllib.error.HTTPError as err:
-		return err.code, None
+		status = err.code
+		try:
+			raw = err.read()
+		except OSError:
+			raw = b""
 	except (urllib.error.URLError, OSError):
 		return 0, None
 	try:
@@ -339,15 +362,18 @@ def _supervisor_get(path: str, opener=urllib.request.urlopen) -> tuple[int, Any]
 
 
 def core_is_stopped(opener=urllib.request.urlopen) -> bool:
-	"""True only when Core is positively not answering.
+	"""True only when the Supervisor positively says Core is not running.
 
-	The Supervisor proxies ``/core/api/`` to Core and answers 502 when Core
-	is down. Any other answer — Core's 200, or anything ambiguous, including
-	not reaching the Supervisor at all — counts as running, because writing
-	under a running Core is the one thing this worker must never do.
+	``/core/stats`` answers 400 with ``homeassistant_not_running_error``
+	while Core is stopped (seen on HAOS 2026.9 with Supervisor's own CLI).
+	Anything else — stats, another error, a refusal because the add-on's
+	``hassio_role`` does not reach ``/core/stats``, no Supervisor at all —
+	counts as running, because writing under a running Core is the one thing
+	this worker must never do.
 	"""
-	status, _ = _supervisor_get("/core/api/", opener)
-	return status == 502
+	status, body = _supervisor_get("/core/stats", opener)
+	return (status == 400 and isinstance(body, dict)
+	        and body.get("error_key") == "homeassistant_not_running_error")
 
 
 def core_version(opener=urllib.request.urlopen) -> str:
@@ -492,6 +518,8 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 			blob, meta = portal.download()
 			if meta.get("id") and meta["id"] != latest["id"]:
 				return "standby: a newer snapshot arrived; will apply it next pass", 5
+			if latest.get("sha256") and content_hash(blob) != latest["sha256"]:
+				return "standby: snapshot did not match its hash; fetching again", 30
 			result = apply_snapshot(config_dir, blob)
 		except ApplyRefused as exc:
 			portal.report_applied(latest["id"], False, str(exc))

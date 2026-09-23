@@ -194,14 +194,29 @@ class FakeResponse:
 		return False
 
 
-class TestCoreIsStopped:
-	def test_only_a_502_from_the_supervisor_counts_as_stopped(self):
-		def bad_gateway(req, timeout=None):
-			raise urllib.error.HTTPError(req.full_url, 502, "Bad Gateway", {}, None)
-		assert cs.core_is_stopped(bad_gateway) is True
+def http_error(status, body):
+	def opener(req, timeout=None):
+		raise urllib.error.HTTPError(req.full_url, status, "err", {}, io.BytesIO(body))
+	return opener
 
-	def test_core_answering_is_running(self):
-		assert cs.core_is_stopped(lambda req, timeout=None: FakeResponse(200, b"{}")) is False
+
+class TestCoreIsStopped:
+	NOT_RUNNING = json.dumps({"result": "error", "message": "Home Assistant is not running",
+	                          "error_key": "homeassistant_not_running_error"}).encode()
+
+	def test_the_supervisors_not_running_answer_is_stopped(self):
+		"""The exact body a stopped Core gave on the staging standby."""
+		assert cs.core_is_stopped(http_error(400, self.NOT_RUNNING)) is True
+
+	def test_core_stats_answering_is_running(self):
+		ok = json.dumps({"result": "ok", "data": {"cpu_percent": 1.0}}).encode()
+		assert cs.core_is_stopped(lambda req, timeout=None: FakeResponse(200, ok)) is False
+
+	def test_other_errors_count_as_running(self):
+		"""403 is what an add-on without hassio_role: homeassistant gets."""
+		assert cs.core_is_stopped(http_error(403, b'{"result":"error"}')) is False
+		assert cs.core_is_stopped(http_error(400, b'{"error_key":"something_else"}')) is False
+		assert cs.core_is_stopped(http_error(502, b"Bad Gateway")) is False
 
 	def test_supervisor_unreachable_is_treated_as_running(self):
 		def down(req, timeout=None):
@@ -281,6 +296,22 @@ class TestRunOnce:
 		outcome, _ = cs.run_once(portal, standby, data, **kw)
 		assert "already in step" in outcome
 		assert len(portal.reports) == 1
+
+	def test_content_hash_matches_what_the_active_side_computed(self, tmp_path):
+		active = make_config(tmp_path / "active")
+		blob, meta = cs.build_snapshot(active)
+		assert cs.content_hash(blob) == meta["sha256"]
+
+	def test_standby_does_not_apply_bytes_that_miss_their_hash(self, tmp_path):
+		portal, standby, data = self._standby_case(tmp_path)
+		other = make_config(tmp_path / "other")
+		(other / "automations.yaml").write_text("- id: not what was announced\n")
+		portal.blob, _ = cs.build_snapshot(other)
+		outcome, _ = cs.run_once(portal, standby, data,
+		                         core_stopped=lambda: True, local_version=lambda: "2026.9.1")
+		assert "did not match" in outcome
+		assert (standby / "automations.yaml").read_text() == "[]\n"
+		assert portal.reports == []
 
 	def test_standby_on_an_older_core_refuses_and_says_why(self, tmp_path):
 		portal, standby, data = self._standby_case(tmp_path, snapshot_version="2026.10.0")
