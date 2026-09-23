@@ -668,3 +668,28 @@ class TestLocalFallback:
 		assert cs.probe_primary("https://h/manifest.json", lambda r, timeout=None: html) is False
 		manifest = FakeResponse(200, b"{}", {"Content-Type": "application/manifest+json; charset=utf-8"})
 		assert cs.probe_primary("https://h/manifest.json", lambda r, timeout=None: manifest) is True
+
+
+class TestRelayPairing:
+	"""A home behind the relay gets its code from the portal via /config."""
+
+	def test_a_code_left_in_config_is_moved_to_data_and_removed(self, tmp_path):
+		cfg, data = tmp_path / "cfg", tmp_path / "data"
+		cfg.mkdir(); data.mkdir()
+		cs.save_json(cfg / cs.RELAY_PAIRING_FILE, {"portal_url": "https://staging.vome.io/",
+		                                           "pairing_code": "vcp_rly-1.abc"})
+		assert cs.collect_relay_pairing(data, cfg) is True
+		assert not (cfg / cs.RELAY_PAIRING_FILE).exists()
+		assert cs.load_json(data / "chap.json") == {"portal_url": "https://staging.vome.io",
+		                                            "pairing_code": "vcp_rly-1.abc"}
+
+	def test_it_is_never_synced(self):
+		assert not cs.is_synced(cs.RELAY_PAIRING_FILE)
+
+	def test_a_non_https_portal_is_refused_and_the_file_still_removed(self, tmp_path):
+		cfg, data = tmp_path / "cfg", tmp_path / "data"
+		cfg.mkdir(); data.mkdir()
+		cs.save_json(cfg / cs.RELAY_PAIRING_FILE, {"portal_url": "http://evil", "pairing_code": "vcp_x.y"})
+		assert cs.collect_relay_pairing(data, cfg) is False
+		assert not (cfg / cs.RELAY_PAIRING_FILE).exists()
+		assert not (data / "chap.json").exists()

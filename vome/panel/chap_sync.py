@@ -91,6 +91,7 @@ EXCLUDED_TOP = frozenset({
 	"deps",               # pip installs, rebuilt for the local machine
 	".cache",
 	".vome_chap_staging", # our own staging area
+	".vome_chap_pairing.json",  # a pairing code the portal left; this install's only
 	".ha_run.lock",       # the running Core's lock file
 	".HA_RESTART",
 })
@@ -479,6 +480,34 @@ def load_binding(data_dir: Path = DATA_DIR) -> Optional[dict]:
 	return None
 
 
+RELAY_PAIRING_FILE = ".vome_chap_pairing.json"
+
+
+def collect_relay_pairing(data_dir: Path = DATA_DIR, config_dir: Path = CONFIG_DIR) -> bool:
+	"""Take a pairing code the portal left in /config over the relay.
+
+	A home behind the relay cannot be reached over a guest agent, so the
+	portal writes ``{"portal_url", "pairing_code"}`` to
+	``/config/.vome_chap_pairing.json`` through the Vome component's file
+	access instead. It is moved into this add-on's own /data and deleted
+	from /config at once; it is never synced, so it cannot reach the other
+	install. The code is single use either way.
+	"""
+	src = config_dir / RELAY_PAIRING_FILE
+	if not src.is_file():
+		return False
+	left = load_json(src)
+	try:
+		src.unlink()
+	except OSError:
+		pass
+	code, portal_url = left.get("pairing_code"), (left.get("portal_url") or "").rstrip("/")
+	if not code or not portal_url.startswith("https://"):
+		return False
+	save_json(data_dir / BINDING_FILE, {"portal_url": portal_url, "pairing_code": code})
+	return True
+
+
 def redeem_pairing(data_dir: Path = DATA_DIR, opener=urllib.request.urlopen) -> Optional[str]:
 	"""Swap a pairing code in /data/chap.json for this install's credential.
 
@@ -488,6 +517,7 @@ def redeem_pairing(data_dir: Path = DATA_DIR, opener=urllib.request.urlopen) -> 
 	happened, or None when there was no code to redeem.
 	"""
 	path = data_dir / BINDING_FILE
+	collect_relay_pairing(data_dir)
 	b = load_json(path)
 	code = b.get("pairing_code")
 	portal_url = (b.get("portal_url") or "").rstrip("/")
