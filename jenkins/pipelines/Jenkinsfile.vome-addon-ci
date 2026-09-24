@@ -56,6 +56,7 @@ pipeline {
 
                     def addonChanged = changedFiles.any { path ->
                         path.startsWith('vome/') ||
+                        path.startsWith('vome_chap/') ||
                         path.startsWith('custom_components/vomesync/') ||
                         path == 'repository.yaml' ||
                         path == 'jenkins/pipelines/Jenkinsfile.vome-addon-ci' ||
@@ -93,6 +94,15 @@ pipeline {
                     # Vendored tree must match the HACS source of truth
                     diff -qr custom_components/vomesync vome/custom_components/vomesync
                     python3 -m py_compile vome/panel/server.py
+                    # The CHAP add-on: its own manifest, image and worker.
+                    test -f vome_chap/config.yaml
+                    test -f vome_chap/Dockerfile
+                    test -x vome_chap/rootfs/etc/services.d/chap-sync/run
+                    python3 -m py_compile vome_chap/chap_sync.py
+                    if grep -q 'apk add' vome_chap/Dockerfile; then
+                        echo "vome_chap/Dockerfile must not apk-add" >&2
+                        exit 1
+                    fi
                     python3 -m py_compile vome/custom_components/vomesync/lan_routes.py
                     python3 -m py_compile vome/package_release.py
                     # Store builds must not apk-add; python comes from base-python.

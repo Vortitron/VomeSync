@@ -1,0 +1,3 @@
+#!/command/with-contenv bashio
+# CHAP config sync: idle unless this install is paired into a CHAP pair.
+exec python3 /usr/share/vome_chap/chap_sync.py

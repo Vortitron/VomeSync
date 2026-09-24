@@ -1794,20 +1794,31 @@
 			viewEl.innerHTML = `<div class="card"><p class="muted">Loading…</p></div>`;
 			return;
 		}
+		if (!d.installed) {
+			viewEl.innerHTML = `
+				<div class="card">
+					<h2>Keep a hosted standby in step</h2>
+					<p class="muted">With CHAP protection, Vome keeps a copy of this Home Assistant ready to take over if this machine fails.</p>
+					<p>That part lives in a separate add-on, <strong>Vome CHAP</strong>, because it needs permission to stop and start Home Assistant and to make backups — which this add-on deliberately does not ask for.</p>
+					<p class="muted">Install it from the same add-on store (Settings &rarr; Add-ons &rarr; Add-on store &rarr; Vome CHAP), start it, then come back here.</p>
+				</div>`;
+			return;
+		}
 		const status = d.paired
 			? `<p>${pill(true, "Paired", "")} as <code>${escapeHtml(d.server_id)}</code> with <code>${escapeHtml(d.portal_url)}</code>.</p>
 			   <p class="muted">Last sent to the standby: ${escapeHtml(chapWhen(d.uploaded_at))}. Last taken from it: ${escapeHtml(chapWhen(d.applied_at))}.</p>
+			   <p class="muted">Latest: ${escapeHtml(d.last_outcome || "")}</p>
 			   ${d.core_stopped_by_vome ? `<p><strong>Home Assistant is stopped here</strong> because the hosted standby is the active install. It starts again when you hand back.</p>` : ""}`
 			: `<p>${pill(false, "", "Not paired")} ${d.pairing_failed ? `The last code was refused (${escapeHtml(d.pairing_failed)}) — it may have expired. Get a new one.` : ""}</p>`;
 		viewEl.innerHTML = `
 			<div class="card">
 				<h2>Keep a hosted standby in step</h2>
-				<p class="muted">With CHAP protection, Vome keeps a copy of this Home Assistant ready to take over if this machine fails. This add-on sends your configuration to it whenever it changes, and brings back anything changed there when you hand back.</p>
+				<p class="muted">With CHAP protection, Vome keeps a copy of this Home Assistant ready to take over if this machine fails. The Vome CHAP add-on sends your configuration to it whenever it changes, and brings back anything changed there when you hand back.</p>
 				${status}
 			</div>
 			<div class="card">
 				<h2>${d.paired ? "Pair again" : "Pair this install"}</h2>
-				<p class="muted">On vome.io, open your server &rarr; CHAP protection &rarr; Standby sync, and create a pairing code. It works once, for 30 minutes.</p>
+				<p class="muted">Usually Vome pairs this for you ("Pair both installs" on your server's Standby sync page). To do it by hand, create a pairing code there and paste it here. It works once, for 30 minutes.</p>
 				<div class="row">
 					<input type="text" id="chap-code" placeholder="vcp_…" autocomplete="off" spellcheck="false" style="flex:1; min-width:16rem">
 					<button type="button" class="primary" id="chap-pair"${chapBusy ? " disabled" : ""}>${chapBusy ? "Pairing…" : "Pair"}</button>
@@ -1819,12 +1830,15 @@
 			if (!code) return;
 			chapBusy = true;
 			render();
-			showBanner("Pairing with Vome…", "info");
+			showBanner("Handing the code to the Vome CHAP add-on…", "info");
 			try {
-				chapData = await api("/api/chap/pair", { method: "POST", body: JSON.stringify({ code }) });
-				showBanner("Paired. This install now keeps its standby in step.", "info");
+				await api("/api/chap/pair", { method: "POST", body: JSON.stringify({ code }) });
+				// The CHAP add-on redeems it within a few seconds; look again.
+				await new Promise((resolve) => setTimeout(resolve, 8000));
+				await loadChap();
+				showBanner(chapData && chapData.paired ? "Paired. This install now keeps its standby in step."
+					: "Handed over — it should show as paired in a moment. Press Refresh.", "info");
 			} catch (err) {
-				if (err.data && typeof err.data.paired === "boolean") chapData = err.data;
 				showBanner(err.message || "Pairing did not work", true);
 			} finally {
 				chapBusy = false;

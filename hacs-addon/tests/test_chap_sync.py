@@ -18,7 +18,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location(
-	"vome_chap_sync", ROOT / "vome" / "panel" / "chap_sync.py"
+	"vome_chap_sync", ROOT / "vome_chap" / "chap_sync.py"
 )
 cs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cs)
@@ -515,23 +515,8 @@ class TestSetCoreRunning:
 		assert [c[1] for c in calls] == ["/core/options"]
 
 
-class TestPanelPairing:
+class TestPairingRace:
 	CODE = "vcp_rly-abc123.ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-abcd"
-
-	def test_a_pasted_code_is_checked_before_it_is_kept(self, tmp_path):
-		with pytest.raises(ValueError, match="vcp_"):
-			cs.stage_pairing("not a code", "https://vome.io", tmp_path)
-		with pytest.raises(ValueError, match="https"):
-			cs.stage_pairing(self.CODE, "http://vome.io", tmp_path)
-		cs.stage_pairing("  " + self.CODE + "\n", "https://vome.io/", tmp_path)
-		assert cs.load_json(tmp_path / "chap.json") == {"portal_url": "https://vome.io",
-		                                                "pairing_code": self.CODE}
-
-	def test_status_never_shows_the_credential(self, tmp_path):
-		cs.save_json(tmp_path / "chap.json", {"portal_url": "https://vome.io", "server_id": "x",
-		                                      "token": "vcs_x.secret"})
-		st = cs.panel_status(tmp_path)
-		assert st["paired"] is True and "vcs_x.secret" not in json.dumps(st)
 
 	def test_losing_a_race_does_not_undo_the_winners_pairing(self, tmp_path):
 		"""The panel and the worker can both try to redeem one code."""
@@ -545,44 +530,6 @@ class TestPanelPairing:
 		cs.redeem_pairing(tmp_path, refused_after_the_other_side_won)
 		assert cs.load_binding(tmp_path)["token"] == "vcs_x.won"
 
-
-class TestPanelRoutes:
-	"""The panel answers /api/chap itself: pairing must work with Core stopped."""
-
-	@pytest.fixture
-	def panel(self, tmp_path, monkeypatch):
-		import functools
-		spec = importlib.util.spec_from_file_location("vome_panel_server_chap", ROOT / "vome" / "panel" / "server.py")
-		server = importlib.util.module_from_spec(spec)
-		spec.loader.exec_module(server)
-		sc = server.chap_sync
-		monkeypatch.setattr(sc, "panel_status", functools.partial(sc.panel_status, data_dir=tmp_path))
-		monkeypatch.setattr(sc, "stage_pairing", functools.partial(sc.stage_pairing, data_dir=tmp_path))
-		ok = lambda req, timeout=None: FakeResponse(200, json.dumps({"server_id": "rly-abc123", "secret": "vcs_rly-abc123.s"}).encode())
-		monkeypatch.setattr(sc, "redeem_pairing", functools.partial(sc.redeem_pairing, data_dir=tmp_path, opener=ok))
-		monkeypatch.setattr(server, "addon_portal_url", lambda: "https://staging.vome.io")
-
-		def call(method, path, body=None):
-			h = object.__new__(server.PanelHandler)
-			h.path = path
-			sent = {}
-			h._read_json = lambda: body or {}
-			h._send_json = lambda status, payload: sent.update(status=status, body=payload)
-			(h._route_post if method == "POST" else h._route_get)()
-			return sent
-		return call
-
-	def test_pair_then_status(self, panel):
-		out = panel("POST", "/api/chap/pair", {"code": TestPanelPairing.CODE})
-		assert out["status"] == 200 and out["body"]["paired"] is True
-		assert out["body"]["portal_url"] == "https://staging.vome.io"
-		assert "vcs_" not in json.dumps(out["body"])
-		got = panel("GET", "/api/chap")
-		assert got["body"]["server_id"] == "rly-abc123"
-
-	def test_a_bad_code_is_a_400_with_a_reason(self, panel):
-		out = panel("POST", "/api/chap/pair", {"code": "nope"})
-		assert out["status"] == 400 and "vcp_" in out["body"]["error"]
 
 
 class TestLocalFallback:
@@ -718,3 +665,117 @@ class TestPollNow:
 
 	def test_it_is_never_synced(self):
 		assert not cs.is_synced(cs.POLL_NOW_FILE)
+
+
+class TestVomePanelHandsOffToChap:
+	"""The Vome panel and the Vome CHAP add-on share only /config."""
+
+	CODE = "vcp_rly-abc123.ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-abcd"
+
+	@pytest.fixture
+	def panel(self):
+		spec = importlib.util.spec_from_file_location("vome_panel_server_chap", ROOT / "vome" / "panel" / "server.py")
+		server = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(server)
+		return server
+
+	def test_without_the_chap_add_on_it_says_to_install_it(self, panel, tmp_path):
+		assert panel.chap_status(str(tmp_path)) == {"installed": False}
+		with pytest.raises(LookupError, match="Vome CHAP"):
+			panel.chap_leave_pairing_code(self.CODE, "https://vome.io", str(tmp_path))
+
+	def test_a_pasted_code_is_left_for_the_chap_add_on_to_collect(self, panel, tmp_path):
+		cs.save_json(tmp_path / cs.STATUS_FILE_NAME, {"paired": False})
+		panel.chap_leave_pairing_code(" " + self.CODE, "https://staging.vome.io/", str(tmp_path))
+		data = tmp_path / "data"; data.mkdir()
+		assert cs.collect_relay_pairing(data, tmp_path) is True
+		assert cs.load_json(data / "chap.json")["pairing_code"] == self.CODE
+
+	def test_a_bad_code_or_portal_is_refused(self, panel, tmp_path):
+		cs.save_json(tmp_path / cs.STATUS_FILE_NAME, {})
+		with pytest.raises(ValueError, match="vcp_"):
+			panel.chap_leave_pairing_code("nope", "https://vome.io", str(tmp_path))
+		with pytest.raises(ValueError, match="https"):
+			panel.chap_leave_pairing_code(self.CODE, "http://vome.io", str(tmp_path))
+
+	def test_the_worker_publishes_status_without_the_credential(self, tmp_path):
+		data, cfg = tmp_path / "data", tmp_path / "cfg"
+		data.mkdir(); cfg.mkdir()
+		cs.save_json(data / "chap.json", {"portal_url": "https://p", "server_id": "x", "token": "vcs_x.secret"})
+		cs.publish_status("active: unchanged", data, cfg)
+		published = cs.load_json(cfg / cs.STATUS_FILE_NAME)
+		assert published["paired"] is True and published["last_outcome"] == "active: unchanged"
+		assert "vcs_x.secret" not in json.dumps(published)
+		assert not cs.is_synced(cs.STATUS_FILE_NAME)
+
+	def test_the_vome_add_on_asks_for_no_supervisor_role(self):
+		import yaml
+		vome = yaml.safe_load((ROOT / "vome" / "config.yaml").read_text())
+		chap = yaml.safe_load((ROOT / "vome_chap" / "config.yaml").read_text())
+		assert "hassio_role" not in vome
+		assert chap["hassio_role"] == "manager" and chap["slug"] == "vome_chap"
+
+
+class TestSeed:
+	"""A one-off full backup fills the standby; it never stays behind."""
+
+	def _fake(self, fail_at=None):
+		calls = []
+		def call(method, path, body=None, timeout=60):
+			calls.append((method, path, body))
+			if method == "POST" and path == "/backups/new/full":
+				if fail_at == "create":
+					return 500, None
+				return 200, {"result": "ok", "data": {"slug": "abc123"}}
+			return 200, {"result": "ok"}
+		def download(slug, dest):
+			if fail_at == "download":
+				raise OSError("disk full")
+			dest.write_bytes(b"tar")
+			return 3
+		return calls, call, download
+
+	class _Portal:
+		def __init__(self, fail=False):
+			self.got, self.fail = [], fail
+		def upload_seed(self, request_id, path, size, key):
+			if self.fail:
+				raise urllib.error.URLError("portal down")
+			self.got.append((request_id, path.read_bytes(), size, key))
+			return {"ok": True}
+
+	def test_the_seed_is_made_with_a_one_off_key_sent_and_removed(self, tmp_path):
+		calls, call, download = self._fake()
+		portal = self._Portal()
+		out = cs.send_seed(portal, "r1", tmp_path, call, download)
+		assert out.startswith("seed sent")
+		(req, data, size, key) = portal.got[0]
+		assert req == "r1" and data == b"tar" and len(key) > 30
+		assert calls[0][2]["password"] == key  # the backup is under that key
+		assert ("DELETE", "/backups/abc123", None) in calls
+		assert not (tmp_path / cs.SEED_FILE).exists()
+
+	def test_a_failed_upload_still_removes_the_backup_everywhere(self, tmp_path):
+		calls, call, download = self._fake()
+		with pytest.raises(urllib.error.URLError):
+			cs.send_seed(self._Portal(fail=True), "r1", tmp_path, call, download)
+		assert ("DELETE", "/backups/abc123", None) in calls
+		assert not (tmp_path / cs.SEED_FILE).exists()
+
+	def test_each_request_is_sent_once_and_a_failure_waits(self, tmp_path):
+		state_path = tmp_path / "state.json"
+		sent = []
+		ok = lambda portal, rid, data_dir: sent.append(rid) or "seed sent (3 bytes)"
+		info = {"seed": {"request": "r1"}}
+		state = {}
+		assert cs.maybe_send_seed(None, info, state, state_path, 1000, tmp_path, ok).startswith("seed sent")
+		assert cs.maybe_send_seed(None, info, state, state_path, 1001, tmp_path, ok) is None
+		assert sent == ["r1"]
+
+		def boom(portal, rid, data_dir):
+			raise cs.SeedFailed("no backup")
+		state = {}
+		assert "will retry" in cs.maybe_send_seed(None, {"seed": {"request": "r2"}}, state, state_path, 1000, tmp_path, boom)
+		assert cs.maybe_send_seed(None, {"seed": {"request": "r2"}}, state, state_path, 1100, tmp_path, boom) is None
+		assert "will retry" in cs.maybe_send_seed(None, {"seed": {"request": "r2"}}, state, state_path,
+		                                          1000 + cs.SEED_RETRY_SECONDS + 1, tmp_path, boom)

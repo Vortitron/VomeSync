@@ -22,8 +22,6 @@ COPY panel/ /usr/share/vome/panel/
 RUN chmod +x \
 	/etc/cont-init.d/*.sh \
 	/etc/services.d/vome/run \
-	/etc/services.d/chap-sync/run \
-	/usr/share/vome/panel/chap_sync.py \
 	/usr/share/vome/panel/server.py
 
 LABEL \

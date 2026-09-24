@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import re
-import sys
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,9 +19,6 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-# chap_sync lives beside this file; importable however the panel is started.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import chap_sync  # noqa: E402
 
 DEFAULT_PORTAL_URL = "https://vome.io"
 RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
@@ -259,6 +255,47 @@ def _config_root() -> str:
 	return ""
 
 
+# ── CHAP (the Vome CHAP add-on does the work; this panel only shows it) ──
+#
+# CHAP lives in its own add-on because it needs the Supervisor's manager role,
+# which this one does not ask for. The two share only /config: that add-on
+# publishes its status there, and a pasted pairing code is left there for it
+# to collect — the same file the portal writes over the relay.
+
+CHAP_STATUS_FILE = ".vome_chap_status.json"
+CHAP_PAIRING_FILE = ".vome_chap_pairing.json"
+_CHAP_CODE_RE = re.compile(r"^vcp_[A-Za-z0-9-]+\.[A-Za-z0-9_-]{20,}$")
+
+
+def chap_status(root: Optional[str] = None) -> dict:
+	"""What the Vome CHAP add-on last reported, or that it is not installed."""
+	root = root if root is not None else _config_root()
+	try:
+		with open(os.path.join(root, CHAP_STATUS_FILE), encoding="utf-8") as fh:
+			data = json.load(fh)
+	except (OSError, ValueError):
+		return {"installed": False}
+	return {"installed": True, **(data if isinstance(data, dict) else {})}
+
+
+def chap_leave_pairing_code(code: Any, portal_url: str, root: Optional[str] = None) -> None:
+	"""Hand a pasted pairing code to the Vome CHAP add-on. Raises ValueError."""
+	code = str(code or "").strip()
+	if not _CHAP_CODE_RE.match(code):
+		raise ValueError("That does not look like a Vome pairing code (it starts vcp_).")
+	if not (portal_url or "").startswith("https://"):
+		raise ValueError("The Vome address in the add-on options must start https://")
+	root = root if root is not None else _config_root()
+	if not chap_status(root).get("installed"):
+		raise LookupError("Install the Vome CHAP add-on first — it is the part that pairs.")
+	path = os.path.join(root, CHAP_PAIRING_FILE)
+	tmp = path + ".tmp"
+	with open(tmp, "w", encoding="utf-8") as fh:
+		json.dump({"portal_url": portal_url.rstrip("/"), "pairing_code": code}, fh)
+	os.chmod(tmp, 0o600)
+	os.replace(tmp, path)
+
+
 def installed_versions() -> dict:
 	"""Versions the panel can see on disk.
 
@@ -464,7 +501,7 @@ class PanelHandler(BaseHTTPRequestHandler):
 			self._send_json(200, run_diagnostics())
 			return
 		if path == "/api/chap":
-			self._send_json(200, chap_sync.panel_status())
+			self._send_json(200, chap_status())
 			return
 		if path == "/api/health_score":
 			# Read-only: the last report, refreshed from Vome first.  A
@@ -502,20 +539,16 @@ class PanelHandler(BaseHTTPRequestHandler):
 		path = (parsed.path or "/").rstrip("/") or "/"
 		body = self._read_json()
 		if path == "/api/chap/pair":
-			# Handled here rather than by the integration: pairing has to work
-			# with Core stopped, which is how a standby spends its life.
 			try:
-				chap_sync.stage_pairing(body.get("code"), addon_portal_url() or DEFAULT_PORTAL_URL)
+				chap_leave_pairing_code(body.get("code"), addon_portal_url() or DEFAULT_PORTAL_URL)
 			except ValueError as err:
 				self._send_json(400, {"error": str(err)})
 				return
-			outcome = chap_sync.redeem_pairing() or "no code to redeem"
-			result = chap_sync.panel_status()
-			if not result["paired"]:
-				self._send_json(400 if result.get("pairing_failed") else 502,
-				                {"error": outcome, **result})
+			except LookupError as err:
+				self._send_json(409, {"error": str(err), "installed": False})
 				return
-			self._send_json(200, {"message": outcome, **result})
+			self._send_json(200, {"message": "Handed to the Vome CHAP add-on; it pairs within a few seconds.",
+			                      **chap_status()})
 			return
 		if path == "/api/link/start":
 			try:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CHAP config sync — keep two Home Assistant installs in step.
+"""Vome CHAP add-on — keep two Home Assistant installs in step.
 
 A CHAP pair is two installs of the same home: the *active* one running, the
 *standby* one with its Core stopped (inert), ready to take over. They are
@@ -14,8 +14,11 @@ seeded once with a full restore; after that this worker keeps them in step
   reads the files until Core starts at takeover, so a half-written copy is
   never loaded and the running side's files are never touched.
 
-It runs in the add-on, not in the integration, because the integration lives
-inside Core — and on the side that receives, Core is off.
+It runs in an add-on, not in the integration, because the integration lives
+inside Core — and on the side that receives, Core is off. And in its own
+add-on (Vome CHAP), not the Vome one, because it needs the Supervisor's
+manager role to stop and start Core and to make backups, which someone who
+only wants switches or remote access should never have to grant.
 
 Which side this install is comes from the portal on every poll, never from
 anything in ``/config``: the seed restore clones ``/config`` (and this
@@ -36,6 +39,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import tarfile
@@ -63,6 +67,7 @@ API_ROLE = "/api/sync/chap/config/role"
 API_SNAPSHOT = "/api/sync/chap/config/snapshot"
 API_APPLIED = "/api/sync/chap/config/applied"
 API_PAIR = "/api/sync/chap/config/pair"
+API_SEED = "/api/sync/chap/config/seed"
 
 DEFAULT_INTERVAL = 300
 # Files Core rewrites on a timer whatever anyone does. They travel in every
@@ -93,6 +98,7 @@ EXCLUDED_TOP = frozenset({
 	".vome_chap_staging", # our own staging area
 	".vome_chap_pairing.json",  # a pairing code the portal left; this install's only
 	".vome_chap_poll_now",      # the portal asking this install to poll at once
+	".vome_chap_status.json",   # this install's own status, for the Vome panel
 	".ha_run.lock",       # the running Core's lock file
 	".HA_RESTART",
 })
@@ -454,6 +460,109 @@ def core_version(opener=urllib.request.urlopen) -> str:
 	return ""
 
 
+# ── The seed: a one-off full backup, only for filling the standby ─────────
+#
+# The first sync copies /config but not add-ons and their data. So when a
+# pair is set up, the active install makes one full Supervisor backup, under
+# a key generated for it alone, and sends backup and key to Vome only to be
+# restored onto the standby. It is not one of the owner's backups: it is
+# deleted here as soon as it is sent, and Vome deletes it and the key once
+# the restore is done.
+
+SEED_RETRY_SECONDS = 30 * 60
+SEED_FILE = "seed.tar"
+
+
+def _supervisor_call(method: str, path: str, body: Optional[dict] = None,
+                     timeout: int = 60, opener=urllib.request.urlopen) -> tuple[int, Any]:
+	req = urllib.request.Request(
+		SUPERVISOR.rstrip("/") + path, method=method,
+		data=json.dumps(body).encode() if body is not None else None,
+		headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"},
+	)
+	try:
+		with opener(req, timeout=timeout) as resp:
+			raw = resp.read()
+			return resp.status, (json.loads(raw.decode("utf-8")) if raw else None)
+	except urllib.error.HTTPError as err:
+		return err.code, None
+	except (urllib.error.URLError, OSError, ValueError):
+		return 0, None
+
+
+class SeedFailed(Exception):
+	pass
+
+
+def make_seed_backup(key: str, name: str, call=_supervisor_call) -> str:
+	"""Create the full, key-encrypted backup; return its Supervisor slug."""
+	status, body = call("POST", "/backups/new/full",
+	                    {"name": name, "password": key, "compressed": True}, timeout=3600)
+	slug = ((body or {}).get("data") or {}).get("slug") if isinstance(body, dict) else None
+	if status != 200 or not slug:
+		raise SeedFailed(f"the Supervisor did not make the backup (HTTP {status})")
+	return slug
+
+
+def download_backup(slug: str, dest: Path, opener=urllib.request.urlopen) -> int:
+	req = urllib.request.Request(
+		f"{SUPERVISOR.rstrip('/')}/backups/{slug}/download",
+		headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"},
+	)
+	size = 0
+	with opener(req, timeout=3600) as resp, open(dest, "wb") as out:
+		while True:
+			chunk = resp.read(1024 * 1024)
+			if not chunk:
+				break
+			out.write(chunk)
+			size += len(chunk)
+	return size
+
+
+def send_seed(portal: "Portal", request_id: str, data_dir: Path = DATA_DIR,
+              call=_supervisor_call, download=download_backup) -> str:
+	"""Make, send and clean up the seed. Returns what happened."""
+	key = secrets.token_urlsafe(32)
+	local = data_dir / SEED_FILE
+	slug = None
+	try:
+		slug = make_seed_backup(key, f"Vome CHAP seed {request_id}", call)
+		size = download(slug, local)
+		portal.upload_seed(request_id, local, size, key)
+		return f"seed sent ({size} bytes)"
+	finally:
+		# Whatever happened: this backup is not the owner's, and it must not
+		# stay behind on this install.
+		try:
+			local.unlink()
+		except OSError:
+			pass
+		if slug:
+			call("DELETE", f"/backups/{slug}", None, timeout=120)
+
+
+def maybe_send_seed(portal: "Portal", info: dict, state: dict, state_path: Path,
+                    now: float, data_dir: Path = DATA_DIR, sender=None) -> Optional[str]:
+	"""Send the seed the portal asked for, once per request; retry failures slowly."""
+	request_id = str(((info.get("seed") or {}).get("request")) or "")
+	if not request_id or state.get("seed_sent") == request_id:
+		return None
+	if state.get("seed_failed_request") == request_id and \
+			now - float(state.get("seed_failed_at") or 0) < SEED_RETRY_SECONDS:
+		return None
+	try:
+		outcome = (sender or send_seed)(portal, request_id, data_dir)
+	except (SeedFailed, urllib.error.URLError, OSError) as exc:
+		state.update({"seed_failed_request": request_id, "seed_failed_at": now})
+		save_json(state_path, state)
+		return f"seed failed ({exc}); will retry"
+	state["seed_sent"] = request_id
+	state.pop("seed_failed_request", None)
+	save_json(state_path, state)
+	return outcome
+
+
 # ── Portal ────────────────────────────────────────────────────────────────
 
 def load_json(path: Path) -> dict:
@@ -610,6 +719,17 @@ class Portal:
 			raise ApplyRefused("snapshot is larger than this side accepts")
 		return blob, meta
 
+	def upload_seed(self, request_id: str, path: Path, size: int, key: str) -> dict:
+		"""Stream the seed backup to Vome, with the one-off key it needs."""
+		with open(path, "rb") as fh:
+			with self._request("POST", API_SEED, body=fh, timeout=3600, headers={
+				"Content-Type": "application/x-tar",
+				"Content-Length": str(size),
+				"X-Seed-Request": request_id,
+				"X-Seed-Key": key,
+			}) as resp:
+				return json.loads(resp.read().decode("utf-8") or "{}")
+
 	def report_applied(self, snapshot_id: str, ok: bool, detail: str = "",
 	                   needs_core_version: str = "") -> None:
 		report = {"id": snapshot_id, "ok": ok, "detail": detail[:500]}
@@ -627,23 +747,6 @@ class Portal:
 
 
 # ── Panel ─────────────────────────────────────────────────────────────────
-
-_CODE_RE = re.compile(r"^vcp_[A-Za-z0-9-]+\.[A-Za-z0-9_-]{20,}$")
-
-
-def stage_pairing(code: str, portal_url: str, data_dir: Path = DATA_DIR) -> None:
-	"""Leave a code the owner pasted for :func:`redeem_pairing` to spend.
-
-	Replaces any existing binding: pairing again is how an install is
-	re-bound after it has been restored or its credential withdrawn.
-	"""
-	code = (code or "").strip()
-	if not _CODE_RE.match(code):
-		raise ValueError("That does not look like a Vome pairing code (it starts vcp_).")
-	if not (portal_url or "").startswith("https://"):
-		raise ValueError("The Vome address in the add-on options must start https://")
-	save_json(data_dir / BINDING_FILE, {"portal_url": portal_url.rstrip("/"), "pairing_code": code})
-
 
 def panel_status(data_dir: Path = DATA_DIR) -> dict:
 	"""What the panel shows. Never the credential."""
@@ -768,6 +871,9 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 		LOG.info("%s", core_note)
 
 	if role == ROLE_ACTIVE:
+		seed_note = maybe_send_seed(portal, info, state, state_path, now, data_dir)
+		if seed_note:
+			LOG.info("%s", seed_note)
 		blob, meta = build_snapshot(config_dir)
 		latest = info.get("latest") or {}
 		age = time.time() - float(latest.get("created_at") or 0)
@@ -847,6 +953,7 @@ def sleep_unless_nudged(seconds: float, config_dir: Path = CONFIG_DIR,
 	since until then the standby cannot safely start. Returns True if nudged.
 	"""
 	marker = config_dir / POLL_NOW_FILE
+	pairing = config_dir / RELAY_PAIRING_FILE
 	waited = 0.0
 	while waited < seconds:
 		if marker.exists():
@@ -855,10 +962,28 @@ def sleep_unless_nudged(seconds: float, config_dir: Path = CONFIG_DIR,
 			except OSError:
 				pass
 			return True
+		if pairing.exists():
+			return True  # a code to redeem: collected on the next pass
 		step = min(NUDGE_CHECK_SECONDS, seconds - waited)
 		sleep(step)
 		waited += step
 	return False
+
+
+STATUS_FILE_NAME = ".vome_chap_status.json"
+
+
+def publish_status(outcome: str, data_dir: Path = DATA_DIR, config_dir: Path = CONFIG_DIR) -> None:
+	"""Leave this install's status where the Vome add-on's panel can read it.
+
+	The two add-ons share only /config. Never the credential; never synced.
+	"""
+	status = panel_status(data_dir)
+	status.update({"last_outcome": outcome, "updated_at": int(time.time())})
+	try:
+		save_json(config_dir / STATUS_FILE_NAME, status)
+	except OSError:
+		LOG.warning("Could not write the status file for the Vome panel")
 
 
 def main() -> None:
@@ -869,7 +994,8 @@ def main() -> None:
 			LOG.info("%s", paired)
 		binding = load_binding()
 		if not binding:
-			time.sleep(IDLE_INTERVAL)
+			publish_status(paired or "not paired")
+			sleep_unless_nudged(IDLE_INTERVAL)
 			continue
 		try:
 			outcome, wait = run_once(Portal(binding))
@@ -877,6 +1003,7 @@ def main() -> None:
 			LOG.exception("CHAP sync pass failed")
 			outcome, wait = "pass failed", IDLE_INTERVAL
 		LOG.info("%s", outcome)
+		publish_status(outcome)
 		if sleep_unless_nudged(max(5, wait)):
 			LOG.info("asked by Vome to check in now")
 
