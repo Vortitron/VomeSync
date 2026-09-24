@@ -483,3 +483,102 @@ get_remote_address:
       required: false
       selector:
         text:
+
+agent_key_state:
+  name: Coding agent key (state)
+  description: >-
+    What the add-on panel needs to draw its coding-agent view: which
+    permissions are on offer, whether this Home Assistant already has a
+    key, and how long it has left.
+  fields:
+    entry_id:
+      name: Vome integration
+      description: Which Vome config entry to use (only needed if you have more than one).
+      required: false
+      selector:
+        text:
+
+agent_key_issue:
+  name: Issue a coding agent key
+  description: >-
+    Get an MCP key so Cursor, VS Code or Claude can work on this Home
+    Assistant. No account needed — it opens a temporary link and returns
+    a paste-ready mcp.json. The key reaches this instance only, through
+    Vome's broker, within the permissions chosen here. It stops working
+    after two days unless you sign in and connect, which keeps the same
+    key working.
+  fields:
+    entry_id:
+      name: Vome integration
+      description: Which Vome config entry to use (only needed if you have more than one).
+      required: false
+      selector:
+        text:
+    scopes:
+      name: Permissions
+      description: >-
+        What the key may do: ha:read, ha:write (call services), ha:config
+        (edit automations) and ha:files (read and write files under
+        /config, including secrets.yaml). Defaults to read, write and
+        config.
+      required: false
+      selector:
+        select:
+          multiple: true
+          options:
+            - ha:read
+            - ha:write
+            - ha:config
+            - ha:files
+
+agent_key_scopes:
+  name: Change what the agent key may do
+  description: >-
+    Re-grant the existing key. Its secret does not change, so nothing
+    has to be pasted again.
+  fields:
+    entry_id:
+      name: Vome integration
+      description: Which Vome config entry to use (only needed if you have more than one).
+      required: false
+      selector:
+        text:
+    scopes:
+      name: Permissions
+      description: The full set the key should hold from now on.
+      required: true
+      selector:
+        select:
+          multiple: true
+          options:
+            - ha:read
+            - ha:write
+            - ha:config
+            - ha:files
+
+agent_key_reissue:
+  name: Replace the agent key
+  description: >-
+    Issue a new key and stop the old one, for when the mcp.json has been
+    lost. The permissions and the expiry are inherited, so this cannot
+    extend a trial.
+  fields:
+    entry_id:
+      name: Vome integration
+      description: Which Vome config entry to use (only needed if you have more than one).
+      required: false
+      selector:
+        text:
+
+agent_key_revoke:
+  name: Revoke the agent key
+  description: >-
+    End it now: the key, the temporary link it opened, and the throwaway
+    account behind it.
+  fields:
+    entry_id:
+      name: Vome integration
+      description: Which Vome config entry to use (only needed if you have more than one).
+      required: false
+      selector:
+        text:

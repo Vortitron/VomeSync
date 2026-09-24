@@ -389,3 +389,36 @@ a.link {
 	color: var(--accent);
 	font-size: 0.88rem;
 }
+
+/* ── Coding agent ─────────────────────────────────────────────────────── */
+/* A permission is a sentence, not a word: the checkbox sits beside a name
+   and the plain-language consequence of ticking it, because this is the
+   one screen where somebody decides what a key reaching into their house
+   may do. */
+.scope-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.6rem;
+	padding: 0.55rem 0;
+	border-top: 1px solid var(--line);
+	line-height: 1.45;
+}
+.scope-row:first-of-type { border-top: 0; }
+.scope-row input[type="checkbox"] { margin-top: 0.25rem; flex: none; }
+.scope-row code { font-size: 0.85em; color: var(--muted); }
+
+/* The mcp.json is shown once and is wider than the panel; it must scroll
+   in its own box rather than pushing the page sideways. */
+.pre-scroll {
+	margin: 0.6rem 0 0;
+	padding: 0.75rem 0.85rem;
+	background: var(--bg);
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	overflow-x: auto;
+	white-space: pre;
+	font-size: 0.85rem;
+	line-height: 1.5;
+	-webkit-user-select: all;
+	user-select: all;
+}

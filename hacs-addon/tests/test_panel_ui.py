@@ -208,3 +208,92 @@ def test_overview_shows_which_vome_this_is():
 	assert "function vomeIdentityLine(" in PANEL_JS
 	assert "in Vome" in PANEL_JS
 	assert "state.forward_url" in PANEL_JS
+
+
+# ── The coding-agent key ────────────────────────────────────────────────
+# This is the one screen where somebody decides what a key reaching into
+# their house may do, and then handles the key itself. Both halves have a
+# way of going quietly wrong: a permission that is ticked by default when
+# it should not be, and a key that cannot be copied because the clipboard
+# is unavailable inside ingress.
+
+PANEL_HTML = (ROOT / "vome" / "panel" / "static" / "index.html").read_text(encoding="utf-8")
+
+
+def _agent_view() -> str:
+	start = PANEL_JS.index("\tfunction renderAgent(")
+	end = PANEL_JS.index("\tasync function agentAction(")
+	return PANEL_JS[start:end]
+
+
+def test_the_coding_agent_view_is_in_the_side_menu():
+	assert 'data-view="agent"' in PANEL_HTML
+	assert 'agent: "Coding agent"' in PANEL_JS
+	assert 'current === "agent"' in PANEL_JS
+
+
+def test_files_access_is_offered_but_never_ticked_by_default():
+	"""ha:files reads secrets.yaml, and nobody has signed anything."""
+	assert '"ha:files"' in PANEL_JS
+	default_line = [
+		line for line in PANEL_JS.splitlines()
+		if "default_scopes" in line and "ha:read" in line
+	]
+	assert default_line, "the issue view must state its defaults"
+	assert all("ha:files" not in line for line in default_line)
+
+
+def test_each_permission_says_what_it_actually_means():
+	assert "secrets.yaml" in PANEL_JS
+	assert "locks, alarms" in PANEL_JS
+	assert "Call services" in PANEL_JS
+
+
+def test_the_key_is_shown_once_and_says_so():
+	view = PANEL_JS[PANEL_JS.index("function agentKeyCard("):]
+	assert "Shown once" in view
+	assert "keeps only a hash" in view
+	assert "Replace key" in view
+
+
+def test_copying_falls_back_when_the_clipboard_is_refused():
+	"""Ingress can refuse clipboard access; without a fallback the button
+	silently does nothing and the key is unreachable."""
+	copy_fn = PANEL_JS[PANEL_JS.index("function agentCopyJson("):]
+	assert "navigator.clipboard" in copy_fn
+	assert "selectNodeContents" in copy_fn
+	assert "Ctrl/Cmd+C" in copy_fn
+
+
+def test_the_trial_is_never_presented_as_permanent():
+	view = _agent_view()
+	assert "two days" in PANEL_JS
+	assert "left" in view  # the clock is rendered, not just stored
+	assert "Revoke" in view
+
+
+def test_saving_permissions_promises_the_key_does_not_change():
+	view = _agent_view()
+	assert "mcp.json</code> keeps working" in view
+
+
+def test_a_linked_house_is_sent_to_its_account_not_offered_a_trial():
+	view = _agent_view()
+	assert "linked_account" in view
+	assert "/account/api-tokens" in view
+
+
+def test_the_json_box_scrolls_rather_than_widening_the_panel():
+	assert ".pre-scroll" in PANEL_CSS
+	assert "overflow-x: auto" in PANEL_CSS
+	assert ".scope-row" in PANEL_CSS
+
+
+def test_an_expired_key_is_not_offered_buttons_that_cannot_work():
+	"""The clock is Vome's. Once it runs out nothing in the panel can
+	revive the key, so Save permissions and Replace key must not be the
+	things on offer — clearing up and starting again are."""
+	view = _agent_view()
+	assert "data.active === false" in view
+	assert "This key has expired" in view
+	assert "Clear it and start again" in view

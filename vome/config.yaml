@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome
-version: "0.3.41"
+version: "0.3.42"
 slug: vome
 description: >
   Share virtual switches between Home Assistant homes, connect this instance
@@ -14,6 +14,9 @@ arch:
 init: false
 homeassistant_api: true
 hassio_api: true
+# No hassio_role: switches, remote access and the panel need nothing beyond
+# the default. CHAP, which stops and starts Core and makes backups, is the
+# separate Vome CHAP add-on, so only CHAP users grant that.
 # homeassistant_config = HA's /config (mounted at /homeassistant in here).
 # The legacy `config` mapping is deprecated and on newer Supervisors no
 # longer grants HA-config access — which silently breaks the integration

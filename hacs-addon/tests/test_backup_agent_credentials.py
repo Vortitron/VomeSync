@@ -101,3 +101,29 @@ def test_the_agent_module_selects_entries_with_this_helper():
 
 	assert 'credentials_for_entry' in source
 	assert 'if all(credentials_for_entry(entry))' in source
+
+
+class TestBackupsGoWhereTheHomeWasLinked:
+	"""Found on the first relay-home CHAP run: a home linked to staging sent its
+	backups to live vome.io, which refused the credential ("Missing server_id")."""
+
+	def test_the_linked_portal_is_used(self):
+		from custom_components.vomesync.backup_client import portal_url_for_entry
+		entry = SimpleNamespace(data={}, options={'portal_url': 'https://staging.vome.io/'})
+		assert portal_url_for_entry(entry) == 'https://staging.vome.io'
+
+	def test_no_recorded_portal_falls_back_to_the_default(self):
+		from custom_components.vomesync.backup_client import portal_url_for_entry
+		from custom_components.vomesync.const import DEFAULT_PORTAL_URL
+		assert portal_url_for_entry(SimpleNamespace(data={}, options={})) == DEFAULT_PORTAL_URL
+
+	def test_something_that_is_not_https_is_not_trusted(self):
+		from custom_components.vomesync.backup_client import portal_url_for_entry
+		from custom_components.vomesync.const import DEFAULT_PORTAL_URL
+		entry = SimpleNamespace(data={}, options={'portal_url': 'http://evil.example'})
+		assert portal_url_for_entry(entry) == DEFAULT_PORTAL_URL
+
+	def test_the_agent_passes_it_to_its_client(self):
+		import pathlib
+		src = (pathlib.Path(__file__).resolve().parents[2] / 'custom_components' / 'vomesync' / 'backup.py').read_text()
+		assert 'portal_url=portal_url_for_entry(entry)' in src

@@ -55,6 +55,23 @@ METADATA_TIMEOUT = aiohttp.ClientTimeout(total=60)
 DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=6 * 60 * 60, connect=30)
 
 
+def portal_url_for_entry(entry) -> str:
+	"""The Vome this entry was linked against, where its backups must go.
+
+	The link records it in the entry's options. The agent used to build its
+	client with no address, so every backup went to the default (live)
+	portal whatever the home was linked to -- and a home linked to any other
+	Vome (staging, found on the first relay-home CHAP run) had its credential
+	refused there: "Missing server_id".
+	"""
+	merged = {
+		**(getattr(entry, "data", None) or {}),
+		**(getattr(entry, "options", None) or {}),
+	}
+	raw = str(merged.get("portal_url") or "").strip().rstrip("/")
+	return raw if raw.startswith("https://") else DEFAULT_PORTAL_URL
+
+
 def credentials_for_entry(entry) -> tuple:
 	"""``(server_id, secret)`` an entry can back up with, or ``(None, None)``.
 

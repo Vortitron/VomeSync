@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+
 DEFAULT_PORTAL_URL = "https://vome.io"
 RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
 PORT = int(os.environ.get("VOME_PANEL_PORT", "8099"))
@@ -254,6 +255,47 @@ def _config_root() -> str:
 	return ""
 
 
+# ── CHAP (the Vome CHAP add-on does the work; this panel only shows it) ──
+#
+# CHAP lives in its own add-on because it needs the Supervisor's manager role,
+# which this one does not ask for. The two share only /config: that add-on
+# publishes its status there, and a pasted pairing code is left there for it
+# to collect — the same file the portal writes over the relay.
+
+CHAP_STATUS_FILE = ".vome_chap_status.json"
+CHAP_PAIRING_FILE = ".vome_chap_pairing.json"
+_CHAP_CODE_RE = re.compile(r"^vcp_[A-Za-z0-9-]+\.[A-Za-z0-9_-]{20,}$")
+
+
+def chap_status(root: Optional[str] = None) -> dict:
+	"""What the Vome CHAP add-on last reported, or that it is not installed."""
+	root = root if root is not None else _config_root()
+	try:
+		with open(os.path.join(root, CHAP_STATUS_FILE), encoding="utf-8") as fh:
+			data = json.load(fh)
+	except (OSError, ValueError):
+		return {"installed": False}
+	return {"installed": True, **(data if isinstance(data, dict) else {})}
+
+
+def chap_leave_pairing_code(code: Any, portal_url: str, root: Optional[str] = None) -> None:
+	"""Hand a pasted pairing code to the Vome CHAP add-on. Raises ValueError."""
+	code = str(code or "").strip()
+	if not _CHAP_CODE_RE.match(code):
+		raise ValueError("That does not look like a Vome pairing code (it starts vcp_).")
+	if not (portal_url or "").startswith("https://"):
+		raise ValueError("The Vome address in the add-on options must start https://")
+	root = root if root is not None else _config_root()
+	if not chap_status(root).get("installed"):
+		raise LookupError("Install the Vome CHAP add-on first — it is the part that pairs.")
+	path = os.path.join(root, CHAP_PAIRING_FILE)
+	tmp = path + ".tmp"
+	with open(tmp, "w", encoding="utf-8") as fh:
+		json.dump({"portal_url": portal_url.rstrip("/"), "pairing_code": code}, fh)
+	os.chmod(tmp, 0o600)
+	os.replace(tmp, path)
+
+
 def installed_versions() -> dict:
 	"""Versions the panel can see on disk.
 
@@ -458,12 +500,26 @@ class PanelHandler(BaseHTTPRequestHandler):
 		if path == "/api/diag":
 			self._send_json(200, run_diagnostics())
 			return
+		if path == "/api/chap":
+			self._send_json(200, chap_status())
+			return
 		if path == "/api/health_score":
 			# Read-only: the last report, refreshed from Vome first.  A
 			# house that has never run one answers with an empty report
 			# rather than an error — "not yet" is a state the panel
 			# renders, not a failure.
 			status, payload = call_service("health_score_get", {})
+			body = _unwrap(payload)
+			if isinstance(body, dict) and body.get("error") and status < 400:
+				status = 400
+			self._send_json(status, body)
+			return
+		if path == "/api/agent_key":
+			# Which of the four states this house is in, and — if it has
+			# a key — what Vome says that key grants and how long it has
+			# left.  Asked of Vome rather than remembered, so the panel
+			# cannot show a key as live after it stopped working.
+			status, payload = call_service("agent_key_state", {})
 			body = _unwrap(payload)
 			if isinstance(body, dict) and body.get("error") and status < 400:
 				status = 400
@@ -482,6 +538,18 @@ class PanelHandler(BaseHTTPRequestHandler):
 		parsed = urlparse(self.path)
 		path = (parsed.path or "/").rstrip("/") or "/"
 		body = self._read_json()
+		if path == "/api/chap/pair":
+			try:
+				chap_leave_pairing_code(body.get("code"), addon_portal_url() or DEFAULT_PORTAL_URL)
+			except ValueError as err:
+				self._send_json(400, {"error": str(err)})
+				return
+			except LookupError as err:
+				self._send_json(409, {"error": str(err), "installed": False})
+				return
+			self._send_json(200, {"message": "Handed to the Vome CHAP add-on; it pairs within a few seconds.",
+			                      **chap_status()})
+			return
 		if path == "/api/link/start":
 			try:
 				body = prepare_link_start(body)
@@ -515,6 +583,13 @@ class PanelHandler(BaseHTTPRequestHandler):
 			# hands back a URL to see it and decide.
 			"/api/health_score/run": ("health_score_run", body),
 			"/api/remote_address": ("get_remote_address", body),
+			# The other action that works before this home is linked to
+			# anything: tick the permissions, get a key and a paste-ready
+			# mcp.json, and never open a browser.
+			"/api/agent_key/issue": ("agent_key_issue", body),
+			"/api/agent_key/scopes": ("agent_key_scopes", body),
+			"/api/agent_key/reissue": ("agent_key_reissue", body),
+			"/api/agent_key/revoke": ("agent_key_revoke", body),
 		}
 		if path not in mapping:
 			self._send_json(404, {"error": "not found"})

@@ -1,0 +1,29 @@
+# https://developers.home-assistant.io/docs/add-ons/configuration
+name: Vome CHAP
+version: "0.1.7"
+slug: vome_chap
+description: >
+  Keeps a Vome CHAP standby of this Home Assistant ready to take over:
+  syncs your configuration to it, stops and starts Home Assistant here when
+  a failover says so, and makes the one-off backup the standby is first
+  filled from. Only needed if you use CHAP protection; install the Vome
+  add-on too.
+url: https://github.com/Vortitron/VomeSync
+arch:
+  - aarch64
+  - amd64
+init: false
+# Separate from the Vome add-on on purpose: CHAP needs to stop and start
+# Home Assistant Core and to make and remove backups, which is the
+# Supervisor's manager role. Someone who only wants switches or remote access
+# installs Vome alone and never grants it.
+hassio_api: true
+hassio_role: manager
+map:
+  - homeassistant_config:rw
+  # A standby puts its seed here for the Supervisor to restore.
+  - backup:rw
+startup: services
+boot: auto
+options: {}
+schema: {}

@@ -12,6 +12,8 @@
 		lan: "LAN tunnels",
 		link: "Vome account",
 		health: "Health score",
+		agent: "Coding agent",
+		standby: "Standby sync",
 		switches: "Switches",
 		about: "About",
 	};
@@ -263,6 +265,8 @@
 		});
 		if (name === "switches" && switchesData === null) loadSwitches();
 		if (name === "health" && healthData === null) loadHealth(true);
+		if (name === "agent" && agentData === null) loadAgentKey(true);
+		if (name === "standby") loadChap();
 		render();
 	}
 
@@ -1473,6 +1477,376 @@
 		window.setTimeout(tick, 15000);
 	}
 
+	// ── Coding agent ────────────────────────────────────────────────────
+	// The key is shown exactly once, here, and kept nowhere: Vome stores a
+	// hash and the integration stores nothing, so there is no second place
+	// to steal it from — and no way to re-show it, which is why Replace
+	// key exists.
+	let agentData = null;
+	let agentBusy = false;
+	let agentIssued = null;
+
+	const AGENT_SCOPES = [
+		{
+			id: "ha:read",
+			label: "See everything",
+			detail: "Entities, states, history, logs, automations and the config check. Every other permission needs this one.",
+		},
+		{
+			id: "ha:write",
+			label: "Control devices",
+			detail: "Call services — turn things on and off. Vome refuses locks, alarms, covers and other sensitive domains whatever the key says.",
+		},
+		{
+			id: "ha:config",
+			label: "Edit automations",
+			detail: "Create, change and delete automations, scripts, scenes and dashboards.",
+		},
+		{
+			id: "ha:files",
+			label: "Read and write config files",
+			detail: "Files under /config — including secrets.yaml, where this instance keeps its credentials. Off unless you turn it on.",
+		},
+	];
+
+	async function loadAgentKey(quiet) {
+		try {
+			agentData = await api("/api/agent_key");
+		} catch (err) {
+			if (!quiet) showBanner(err.message || "Could not read the agent key", true);
+			agentData = agentData || null;
+		}
+		if (current === "agent") render();
+	}
+
+	function agentCheckedScopes() {
+		return AGENT_SCOPES
+			.map((s) => s.id)
+			.filter((id) => {
+				const el = document.getElementById("scope-" + id.replace(":", "-"));
+				return el && el.checked;
+			});
+	}
+
+	function agentScopeList(selected) {
+		const chosen = new Set(selected || []);
+		return AGENT_SCOPES.map((scope) => {
+			const id = "scope-" + scope.id.replace(":", "-");
+			return `
+				<label class="inline scope-row">
+					<input type="checkbox" id="${id}" value="${scope.id}"${chosen.has(scope.id) ? " checked" : ""}>
+					<span><strong>${escapeHtml(scope.label)}</strong> <code>${escapeHtml(scope.id)}</code><br>
+					<span class="muted">${escapeHtml(scope.detail)}</span></span>
+				</label>`;
+		}).join("");
+	}
+
+	function agentClock(seconds) {
+		const left = Math.max(0, Number(seconds) || 0);
+		if (!left) return "expired";
+		const hours = Math.floor(left / 3600);
+		const mins = Math.floor((left % 3600) / 60);
+		if (hours >= 1) return `${hours}h ${mins}m left`;
+		return `${mins}m left`;
+	}
+
+	function agentKeyCard() {
+		if (!agentIssued) return "";
+		const json = agentIssued.mcp && agentIssued.mcp.json ? agentIssued.mcp.json : "";
+		if (!json) return "";
+		return `
+			<div class="card">
+				<h2>Your <code>mcp.json</code></h2>
+				<p class="muted">Paste this into <code>~/.cursor/mcp.json</code>, VS Code's <code>mcp.json</code>, or your agent's MCP config, and restart it. Nothing to install.</p>
+				<pre id="agent-json" class="pre-scroll">${escapeHtml(json)}</pre>
+				<div class="row">
+					<button type="button" class="primary" id="agent-copy">Copy</button>
+				</div>
+				<p class="muted"><strong>Shown once.</strong> Vome keeps only a hash of the key and this add-on keeps no copy at all. If you lose it, use Replace key — that keeps the same permissions and the same clock.</p>
+			</div>`;
+	}
+
+	function agentIntro() {
+		return `
+			<div class="card">
+				<h2>Work on this Home Assistant from your editor</h2>
+				<p class="muted">Cursor, VS Code, Claude and anything else that speaks MCP can read this instance and change it — entity ids, live state, logs and automations — instead of you pasting them back and forth.</p>
+				<p class="muted">The key below is <strong>not</strong> a Home Assistant token. It reaches this instance only, only through Vome, and only within the permissions you tick here, which Vome enforces at its end and writes to an audit log. Widening it means coming back to this page.</p>
+			</div>`;
+	}
+
+	function renderAgent() {
+		const data = agentData || {};
+		const offer = data.offer || "issue";
+
+		if (offer === "guest_link_first") {
+			viewEl.innerHTML = `
+				${agentIntro()}
+				<div class="card info-card">
+					<h2>Finish with the health score first</h2>
+					<p class="muted">This Home Assistant is on a temporary link opened by the health check. Keep it by signing in from the link in the score, or let it run out, and then come back here for a key.</p>
+					<div class="row"><button type="button" class="ghost" onclick="document.querySelector('[data-view=health]').click()">Go to the health score</button></div>
+				</div>`;
+			return;
+		}
+
+		if (offer === "linked_account") {
+			const portal = escapeHtml(data.portal_url || "https://vome.io");
+			viewEl.innerHTML = `
+				${agentIntro()}
+				<div class="card info-card">
+					<h2>This Home Assistant has a Vome account</h2>
+					<p class="muted">Keys for a linked home live on the account, so they survive, can be listed and can be revoked from anywhere. Mint one under Account → API tokens, ticking this instance.</p>
+					<div class="row"><a class="btn ghost" href="${portal}/account/api-tokens" target="_blank" rel="noopener">Open API tokens</a></div>
+				</div>`;
+			return;
+		}
+
+		if (offer === "manage" && (data.active === false || !(data.seconds_left > 0))) {
+			// The clock is Vome's, and it has run out. The key stopped
+			// working the moment it did — nothing here can revive it — so
+			// the only honest buttons are clearing up and starting again.
+			viewEl.innerHTML = `
+				${agentIntro()}
+				<div class="card info-card">
+					<h2>This key has expired <span class="pill off">two days up</span></h2>
+					<p class="muted">It stopped working at Vome's end. Clearing it releases the temporary link and the throwaway account behind it, and you can issue another — or connect a Vome account, where keys have no clock.</p>
+					<div class="row">
+						<button type="button" class="primary" id="agent-revoke"${agentBusy ? " disabled" : ""}>Clear it and start again</button>
+						<button type="button" class="ghost" id="agent-connect">Connect to Vome</button>
+					</div>
+				</div>`;
+
+			const connectExpired = document.getElementById("agent-connect");
+			if (connectExpired) connectExpired.onclick = () => document.querySelector("[data-view=link]").click();
+			const clear = document.getElementById("agent-revoke");
+			if (clear) clear.onclick = () => agentAction(
+				"/api/agent_key/revoke", {}, "Clearing up…",
+				() => {
+					agentIssued = null;
+					showBanner("Cleared. You can issue a new key.", "info");
+					return null;
+				},
+			);
+			return;
+		}
+
+		if (offer === "manage") {
+			const scopes = data.scopes || [];
+			const left = data.seconds_left || 0;
+			viewEl.innerHTML = `
+				${agentIntro()}
+				${agentKeyCard()}
+				<div class="card">
+					<h2>Key active <span class="pill ${left > 3600 ? "ok" : "warn"}">${escapeHtml(agentClock(left))}</span></h2>
+					<p class="muted">Connect a Vome account to keep it: the same key carries over and the clock comes off, so nothing has to be pasted again.</p>
+					<div class="row"><button type="button" class="primary" id="agent-connect">Connect to Vome</button></div>
+				</div>
+				<div class="card">
+					<h2>What it may do</h2>
+					${agentScopeList(scopes)}
+					<div class="row">
+						<button type="button" class="primary" id="agent-save"${agentBusy ? " disabled" : ""}>Save permissions</button>
+						<button type="button" class="ghost" id="agent-replace"${agentBusy ? " disabled" : ""}>Replace key</button>
+					</div>
+					<p class="muted">Saving does not change the key itself, so your <code>mcp.json</code> keeps working.</p>
+				</div>
+				<div class="card">
+					<h2>Revoke</h2>
+					<p class="muted">Ends the key, the temporary link it opened and the throwaway account behind it, now. This Home Assistant goes back to not being connected to anything.</p>
+					<div class="row"><button type="button" class="danger" id="agent-revoke"${agentBusy ? " disabled" : ""}>Revoke the key</button></div>
+				</div>`;
+
+			const connect = document.getElementById("agent-connect");
+			if (connect) connect.onclick = () => document.querySelector("[data-view=link]").click();
+
+			const save = document.getElementById("agent-save");
+			if (save) save.onclick = () => agentAction(
+				"/api/agent_key/scopes",
+				{ scopes: agentCheckedScopes() },
+				"Saving…",
+				(res) => { showBanner("Permissions saved. Your mcp.json is unchanged.", "info"); return res; },
+			);
+
+			const replace = document.getElementById("agent-replace");
+			if (replace) replace.onclick = () => agentAction(
+				"/api/agent_key/reissue", {}, "Issuing a new key…",
+				(res) => {
+					agentIssued = res;
+					showBanner("New key issued. The old one has stopped working.", "info");
+					return res;
+				},
+			);
+
+			const revoke = document.getElementById("agent-revoke");
+			if (revoke) revoke.onclick = () => agentAction(
+				"/api/agent_key/revoke", {}, "Revoking…",
+				() => {
+					agentIssued = null;
+					showBanner("Revoked. The key and the link are gone.", "info");
+					return null;
+				},
+			);
+			return;
+		}
+
+		viewEl.innerHTML = `
+			${agentIntro()}
+			${agentKeyCard()}
+			<div class="card">
+				<h2>What should it be allowed to do?</h2>
+				${agentScopeList(data.default_scopes || ["ha:read", "ha:write", "ha:config"])}
+				<div class="row">
+					<button type="button" class="primary" id="agent-issue"${agentBusy ? " disabled" : ""}>${agentBusy ? "Issuing…" : "Issue a key"}</button>
+				</div>
+				<p class="muted">No account needed. The key covers this Home Assistant only and stops working after two days unless you connect a Vome account, which keeps it. Revoke is the only other button.</p>
+			</div>`;
+
+		const issue = document.getElementById("agent-issue");
+		if (issue) issue.onclick = () => agentAction(
+			"/api/agent_key/issue",
+			{ scopes: agentCheckedScopes() },
+			"Asking Vome for a key…",
+			(res) => {
+				agentIssued = res;
+				showBanner("Key issued. Copy the JSON below — it is shown once.", "info");
+				return res;
+			},
+		);
+	}
+
+	async function agentAction(path, body, busyMessage, onDone) {
+		agentBusy = true;
+		render();
+		showBanner(busyMessage, "info");
+		try {
+			const res = await api(path, {
+				method: "POST",
+				body: JSON.stringify(withEntry(body)),
+			});
+			onDone(res);
+			await loadAgentKey(true);
+			try {
+				state = await api("/api/status");
+				syncChrome();
+			} catch (_err) { /* keep the last status if this races HA */ }
+		} catch (err) {
+			showBanner(err.message || "That did not work", true);
+		} finally {
+			agentBusy = false;
+			render();
+			const pre = document.getElementById("agent-json");
+			if (pre) pre.scrollIntoView({ block: "nearest" });
+		}
+	}
+
+	// Clipboard access can be refused inside Home Assistant's ingress frame,
+	// so falling back to selecting the text is not a nicety: without it the
+	// button silently does nothing and the key is unreachable.
+	function agentCopyJson() {
+		const pre = document.getElementById("agent-json");
+		if (!pre) return;
+		const text = pre.textContent || "";
+		const select = () => {
+			const range = document.createRange();
+			range.selectNodeContents(pre);
+			const sel = window.getSelection();
+			sel.removeAllRanges();
+			sel.addRange(range);
+			showBanner("Selected — press Ctrl/Cmd+C to copy.", "info");
+		};
+		if (!navigator.clipboard || !navigator.clipboard.writeText) {
+			select();
+			return;
+		}
+		navigator.clipboard.writeText(text).then(
+			() => showBanner("Copied. Paste it into your agent's MCP config.", "info"),
+			select,
+		);
+	}
+
+	document.addEventListener("click", (ev) => {
+		if (ev.target && ev.target.id === "agent-copy") agentCopyJson();
+	});
+
+	// ── Standby sync (CHAP) ─────────────────────────────────────────────
+	// Pairing works with Home Assistant Core stopped — the add-on answers
+	// this itself — because a standby spends most of its life that way.
+	let chapData = null;
+	let chapBusy = false;
+
+	async function loadChap() {
+		try {
+			chapData = await api("/api/chap");
+		} catch (err) {
+			showBanner(err.message || "Could not read the standby sync state", true);
+		}
+		if (current === "standby") render();
+	}
+
+	function chapWhen(ts) {
+		return ts ? new Date(ts * 1000).toLocaleString() : "never";
+	}
+
+	function renderStandby() {
+		const d = chapData;
+		if (!d) {
+			viewEl.innerHTML = `<div class="card"><p class="muted">Loading…</p></div>`;
+			return;
+		}
+		if (!d.installed) {
+			viewEl.innerHTML = `
+				<div class="card">
+					<h2>Keep a hosted standby in step</h2>
+					<p class="muted">With CHAP protection, Vome keeps a copy of this Home Assistant ready to take over if this machine fails.</p>
+					<p>That part lives in a separate add-on, <strong>Vome CHAP</strong>, because it needs permission to stop and start Home Assistant and to make backups — which this add-on deliberately does not ask for.</p>
+					<p class="muted">Install it from the same add-on store (Settings &rarr; Add-ons &rarr; Add-on store &rarr; Vome CHAP), start it, then come back here.</p>
+				</div>`;
+			return;
+		}
+		const status = d.paired
+			? `<p>${pill(true, "Paired", "")} as <code>${escapeHtml(d.server_id)}</code> with <code>${escapeHtml(d.portal_url)}</code>.</p>
+			   <p class="muted">Last sent to the standby: ${escapeHtml(chapWhen(d.uploaded_at))}. Last taken from it: ${escapeHtml(chapWhen(d.applied_at))}.</p>
+			   <p class="muted">Latest: ${escapeHtml(d.last_outcome || "")}</p>
+			   ${d.core_stopped_by_vome ? `<p><strong>Home Assistant is stopped here</strong> because the hosted standby is the active install. It starts again when you hand back.</p>` : ""}`
+			: `<p>${pill(false, "", "Not paired")} ${d.pairing_failed ? `The last code was refused (${escapeHtml(d.pairing_failed)}) — it may have expired. Get a new one.` : ""}</p>`;
+		viewEl.innerHTML = `
+			<div class="card">
+				<h2>Keep a hosted standby in step</h2>
+				<p class="muted">With CHAP protection, Vome keeps a copy of this Home Assistant ready to take over if this machine fails. The Vome CHAP add-on sends your configuration to it whenever it changes, and brings back anything changed there when you hand back.</p>
+				${status}
+			</div>
+			<div class="card">
+				<h2>${d.paired ? "Pair again" : "Pair this install"}</h2>
+				<p class="muted">Usually Vome pairs this for you ("Pair both installs" on your server's Standby sync page). To do it by hand, create a pairing code there and paste it here. It works once, for 30 minutes.</p>
+				<div class="row">
+					<input type="text" id="chap-code" placeholder="vcp_…" autocomplete="off" spellcheck="false" style="flex:1; min-width:16rem">
+					<button type="button" class="primary" id="chap-pair"${chapBusy ? " disabled" : ""}>${chapBusy ? "Pairing…" : "Pair"}</button>
+				</div>
+			</div>`;
+		const btn = document.getElementById("chap-pair");
+		if (btn) btn.onclick = async () => {
+			const code = (document.getElementById("chap-code").value || "").trim();
+			if (!code) return;
+			chapBusy = true;
+			render();
+			showBanner("Handing the code to the Vome CHAP add-on…", "info");
+			try {
+				await api("/api/chap/pair", { method: "POST", body: JSON.stringify({ code }) });
+				// The CHAP add-on redeems it within a few seconds; look again.
+				await new Promise((resolve) => setTimeout(resolve, 8000));
+				await loadChap();
+				showBanner(chapData && chapData.paired ? "Paired. This install now keeps its standby in step."
+					: "Handed over — it should show as paired in a moment. Press Refresh.", "info");
+			} catch (err) {
+				showBanner(err.message || "Pairing did not work", true);
+			} finally {
+				chapBusy = false;
+				render();
+			}
+		};
+	}
+
 	function render() {
 		if (current === "overview") renderOverview();
 		else if (current === "forward") renderForward();
@@ -1480,6 +1854,8 @@
 		else if (current === "webhooks") renderWebhooks();
 		else if (current === "link") renderLink();
 		else if (current === "health") renderHealth();
+		else if (current === "agent") renderAgent();
+		else if (current === "standby") renderStandby();
 		else if (current === "switches") renderSwitches();
 		else renderAbout();
 		if (lastDiag && current === "about") {
