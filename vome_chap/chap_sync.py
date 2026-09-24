@@ -498,10 +498,31 @@ class SeedFailed(Exception):
 	pass
 
 
+# What a seed carries besides add-ons. Not Home Assistant itself: the
+# standby never restores it (its configuration arrives by sync), and with
+# the recorder database it can be most of the backup -- 4 GB of a 4.2 GB
+# home -- to send over a house's upload for nothing.
+SEED_FOLDERS = ("share", "ssl", "media", "addons/local")
+
+
 def make_seed_backup(key: str, name: str, call=_supervisor_call) -> str:
-	"""Create the full, key-encrypted backup; return its Supervisor slug."""
-	status, body = call("POST", "/backups/new/full",
-	                    {"name": name, "password": key, "compressed": True}, timeout=3600)
+	"""Create the key-encrypted seed backup; return its Supervisor slug.
+
+	Add-ons and folders only. If the add-ons cannot be listed it falls back
+	to a full backup, which the standby restores the same way.
+	"""
+	_, listed = call("GET", "/addons", None, timeout=60)
+	addons = [a["slug"] for a in (((listed or {}).get("data") or {}).get("addons") or []
+	                               if isinstance(listed, dict) else [])
+	          if isinstance(a, dict) and a.get("slug") and not str(a["slug"]).endswith("_vome_chap")]
+	if isinstance(listed, dict) and ((listed.get("data") or {}).get("addons") is not None):
+		status, body = call("POST", "/backups/new/partial", {
+			"name": name, "password": key, "compressed": True, "homeassistant": False,
+			"addons": addons, "folders": list(SEED_FOLDERS),
+		}, timeout=3600)
+	else:
+		status, body = call("POST", "/backups/new/full",
+		                    {"name": name, "password": key, "compressed": True}, timeout=3600)
 	slug = ((body or {}).get("data") or {}).get("slug") if isinstance(body, dict) else None
 	if status != 200 or not slug:
 		raise SeedFailed(f"the Supervisor did not make the backup (HTTP {status})")

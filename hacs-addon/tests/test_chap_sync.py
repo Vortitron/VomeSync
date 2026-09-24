@@ -717,13 +717,18 @@ class TestVomePanelHandsOffToChap:
 
 
 class TestSeed:
-	"""A one-off full backup fills the standby; it never stays behind."""
+	"""A one-off backup of add-ons and folders fills the standby; it never stays behind."""
 
 	def _fake(self, fail_at=None):
 		calls = []
 		def call(method, path, body=None, timeout=60):
 			calls.append((method, path, body))
-			if method == "POST" and path == "/backups/new/full":
+			if method == "GET" and path == "/addons":
+				if fail_at == "list":
+					return 0, None
+				return 200, {"data": {"addons": [
+					{"slug": "core_mosquitto"}, {"slug": "b1bff62e_vome"}, {"slug": "b1bff62e_vome_chap"}]}}
+			if method == "POST" and path in ("/backups/new/full", "/backups/new/partial"):
 				if fail_at == "create":
 					return 500, None
 				return 200, {"result": "ok", "data": {"slug": "abc123"}}
@@ -751,9 +756,24 @@ class TestSeed:
 		assert out.startswith("seed sent")
 		(req, data, size, key) = portal.got[0]
 		assert req == "r1" and data == b"tar" and len(key) > 30
-		assert calls[0][2]["password"] == key  # the backup is under that key
+		made = next(body for m, path, body in calls if path.startswith("/backups/new/"))
+		assert made["password"] == key  # the backup is under that key
 		assert ("DELETE", "/backups/abc123", None) in calls
 		assert not (tmp_path / cs.SEED_FILE).exists()
+
+	def test_the_seed_leaves_out_what_the_standby_would_throw_away(self):
+		calls, call, _ = self._fake()
+		cs.make_seed_backup("k" * 43, "Vome CHAP seed r1", call)
+		(method, path, body), = [c for c in calls if c[1].startswith("/backups/new/")]
+		assert path == "/backups/new/partial"
+		assert body["homeassistant"] is False  # config comes by sync; the DB is not wanted
+		assert body["addons"] == ["core_mosquitto", "b1bff62e_vome"]  # never itself
+		assert "share" in body["folders"] and "media" in body["folders"]
+
+	def test_a_seed_is_still_made_when_add_ons_cannot_be_listed(self):
+		calls, call, _ = self._fake(fail_at="list")
+		assert cs.make_seed_backup("k" * 43, "Vome CHAP seed r1", call) == "abc123"
+		assert any(path == "/backups/new/full" for _, path, _ in calls)
 
 	def test_a_failed_upload_still_removes_the_backup_everywhere(self, tmp_path):
 		calls, call, download = self._fake()
