@@ -314,8 +314,34 @@ def _safe_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
 	return members
 
 
-def apply_snapshot(config_dir: Path, blob: bytes) -> dict:
+CONFIG_ENTRIES = ".storage/core.config_entries"
+
+
+def _keep_own_entries(staged: Path, current: Path, domains: tuple) -> None:
+	"""Put this install's own entries for ``domains`` into the staged file.
+
+	The incoming entries for those domains are dropped and ours kept (none,
+	if we have none). Used where an integration's entry is an identity rather
+	than configuration: in reverse mode each install's Vome link is its own
+	(chap_plan section 10, docs/gamlabio_chap_plan.md), and syncing it made
+	the house fallback answer the relay as the hosted home.
+	"""
+	incoming = json.loads(staged.read_text(encoding="utf-8"))
+	try:
+		ours = json.loads(current.read_text(encoding="utf-8"))
+		own = [e for e in (ours.get("data") or {}).get("entries") or [] if e.get("domain") in domains]
+	except (OSError, ValueError):
+		own = []
+	data = incoming.setdefault("data", {})
+	data["entries"] = [e for e in data.get("entries") or [] if e.get("domain") not in domains] + own
+	staged.write_text(json.dumps(incoming, indent=2), encoding="utf-8")
+
+
+def apply_snapshot(config_dir: Path, blob: bytes, keep_own: tuple = ()) -> dict:
 	"""Make config_dir's synced files exactly the snapshot's.
+
+	``keep_own``: integration domains whose config entries stay this
+	install's own rather than the snapshot's.
 
 	Each file is staged, then moved into place with one rename, so no file is
 	ever half-written. Synced files the snapshot does not contain are removed
@@ -338,6 +364,8 @@ def apply_snapshot(config_dir: Path, blob: bytes) -> dict:
 				with open(dest, "wb") as out:
 					shutil.copyfileobj(src, out)
 		incoming = {m.name for m in members}
+		if keep_own and CONFIG_ENTRIES in incoming:
+			_keep_own_entries(staging_root / CONFIG_ENTRIES, config_dir / CONFIG_ENTRIES, tuple(keep_own))
 
 		for rel in sorted(incoming):
 			target = config_dir / rel
@@ -1131,7 +1159,7 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 				return "standby: a newer snapshot arrived; will apply it next pass", 5
 			if latest.get("sha256") and content_hash(blob) != latest["sha256"]:
 				return "standby: snapshot did not match its hash; fetching again", 30
-			result = apply_snapshot(config_dir, blob)
+			result = apply_snapshot(config_dir, blob, keep_own=tuple(info.get("keep_own") or ()))
 		except ApplyRefused as exc:
 			portal.report_applied(latest["id"], False, str(exc))
 			return f"standby: refused ({exc})", interval

@@ -116,6 +116,47 @@ def tar_of(files: dict) -> bytes:
 	return buf.getvalue()
 
 
+class TestKeepOwnIdentity:
+	"""In reverse mode each install keeps its own Vome link: syncing the
+	entry made the house fallback answer the relay as the hosted home."""
+
+	@staticmethod
+	def _entries(domains_ids):
+		return json.dumps({"version": 1, "key": "core.config_entries", "data": {"entries": [
+			{"domain": d, "entry_id": i} for d, i in domains_ids]}})
+
+	def _pair(self, tmp_path):
+		active = make_config(tmp_path / "active")
+		(active / ".storage" / "core.config_entries").write_text(
+			self._entries([("vomesync", "hosted-link"), ("tuya", "t1")]))
+		standby = make_config(tmp_path / "standby")
+		(standby / ".storage" / "core.config_entries").write_text(
+			self._entries([("vomesync", "house-link"), ("tuya", "old")]))
+		blob, _ = cs.build_snapshot(active)
+		return standby, blob
+
+	def _ids(self, standby):
+		data = json.loads((standby / ".storage" / "core.config_entries").read_text())["data"]
+		return sorted((e["domain"], e["entry_id"]) for e in data["entries"])
+
+	def test_reverse_mode_keeps_this_installs_link(self, tmp_path):
+		standby, blob = self._pair(tmp_path)
+		cs.apply_snapshot(standby, blob, keep_own=("vomesync",))
+		assert self._ids(standby) == [("tuya", "t1"), ("vomesync", "house-link")]
+
+	def test_the_usual_direction_takes_the_homes_link(self, tmp_path):
+		"""A hosted standby that takes over should answer as the home."""
+		standby, blob = self._pair(tmp_path)
+		cs.apply_snapshot(standby, blob)
+		assert self._ids(standby) == [("tuya", "t1"), ("vomesync", "hosted-link")]
+
+	def test_an_install_with_no_link_of_its_own_takes_none(self, tmp_path):
+		standby, blob = self._pair(tmp_path)
+		(standby / ".storage" / "core.config_entries").write_text(self._entries([]))
+		cs.apply_snapshot(standby, blob, keep_own=("vomesync",))
+		assert self._ids(standby) == [("tuya", "t1")]
+
+
 class TestApply:
 	def test_standby_becomes_a_mirror_and_local_files_are_left_alone(self, tmp_path):
 		active = make_config(tmp_path / "active")
