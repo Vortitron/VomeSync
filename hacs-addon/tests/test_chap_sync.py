@@ -282,6 +282,21 @@ class TestRunOnce:
 		)
 		return portal, standby, data
 
+	def test_a_seeded_standby_stops_the_add_ons_in_the_same_pass(self, tmp_path, monkeypatch):
+		"""Live on the rig the seeded Matter Server ran ~10 minutes, until the
+		next check-in; the restore now ends with them stopped."""
+		portal, standby, data = self._standby_case(tmp_path)
+		portal._role["seed_restore"] = {"id": "r1"}
+		portal.report_seed = lambda *a, **k: None
+		monkeypatch.setattr(cs, "restore_seed", lambda p, sid: ("seed restored", ["core_matter_server"]))
+		calls = []
+		def sup(method, path, body=None, timeout=60):
+			calls.append((method, path))
+			return 200, {"data": {"state": "started"}}
+		monkeypatch.setattr(cs, "_supervisor_call", sup)
+		cs.run_once(portal, standby, data, core_stopped=lambda: True, local_version=lambda: "2026.9.1")
+		assert ("POST", "/addons/core_matter_server/stop") in calls
+
 	def test_standby_never_writes_under_a_running_core(self, tmp_path):
 		portal, standby, data = self._standby_case(tmp_path)
 		outcome, _ = cs.run_once(portal, standby, data,

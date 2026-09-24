@@ -1096,6 +1096,11 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 		seed_note = maybe_restore_seed(portal, info, state, state_path, now, core_stopped)
 		if seed_note:
 			LOG.info("%s", seed_note)
+			# The restore started the seeded add-ons; stop them now, not
+			# at the next check-in minutes later.
+			addons_note = enforce_addons(role, state, state_path)
+			if addons_note:
+				LOG.info("%s", addons_note)
 		latest = info.get("latest") or {}
 		if not latest.get("id"):
 			return "standby: nothing to apply yet", interval
