@@ -546,13 +546,20 @@ SEED_FOLDERS = ("share", "ssl", "media", "addons/local")
 
 
 def installed_addons(call=_supervisor_call) -> Optional[list]:
-	"""Slugs of the installed add-ons except this one; None if unknown."""
+	"""Slugs of the add-ons to seed, except this one; None if unknown.
+
+	Only those running now: the standby should run what the home runs, and
+	an add-on the owner keeps installed but stopped (a second Jellyfin, a
+	Z-Wave add-on with no stick) is not worth sending or starting in a
+	takeover. An entry without a state is counted as running.
+	"""
 	_, listed = call("GET", "/addons", None, timeout=60)
 	found = ((listed or {}).get("data") or {}).get("addons") if isinstance(listed, dict) else None
 	if found is None:
 		return None
 	return [a["slug"] for a in found
-	        if isinstance(a, dict) and a.get("slug") and not str(a["slug"]).endswith("_vome_chap")]
+	        if isinstance(a, dict) and a.get("slug") and not str(a["slug"]).endswith("_vome_chap")
+	        and a.get("state", "started") == "started"]
 
 
 def holdable(slugs) -> list:

@@ -742,7 +742,8 @@ class TestSeed:
 				if fail_at == "list":
 					return 0, None
 				return 200, {"data": {"addons": [
-					{"slug": "core_mosquitto"}, {"slug": "b1bff62e_vome"}, {"slug": "b1bff62e_vome_chap"}]}}
+					{"slug": "core_mosquitto", "state": "started"}, {"slug": "b1bff62e_vome"},
+					{"slug": "b1bff62e_vome_chap"}, {"slug": "jellyfin_spare", "state": "stopped"}]}}
 			if method == "POST" and path in ("/backups/new/full", "/backups/new/partial"):
 				if fail_at == "create":
 					return 500, None
@@ -783,7 +784,7 @@ class TestSeed:
 		(method, path, body), = [c for c in calls if c[1].startswith("/backups/new/")]
 		assert path == "/backups/new/partial"
 		assert body["homeassistant"] is False  # config comes by sync; the DB is not wanted
-		assert body["addons"] == ["core_mosquitto", "b1bff62e_vome"]  # never itself
+		assert body["addons"] == ["core_mosquitto", "b1bff62e_vome"]  # never itself, nor what is stopped
 		assert "share" in body["folders"] and "media" in body["folders"]
 
 	def test_a_seed_is_still_made_when_add_ons_cannot_be_listed(self):
