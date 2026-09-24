@@ -460,9 +460,13 @@ def enforce_core(directive, state: dict, state_path: Path,
 def set_addons_running(slugs: list, running: bool, call=None) -> list:
 	"""Start or stop add-ons and set their boot to match. Returns the failures."""
 	call = call or _supervisor_call
+	want = "started" if running else "stopped"
 	failed = []
 	for slug in slugs:
 		call("POST", f"/addons/{slug}/options", {"boot": "auto" if running else "manual"}, timeout=60)
+		_, info = call("GET", f"/addons/{slug}/info", None, timeout=60)
+		if isinstance(info, dict) and (info.get("data") or {}).get("state") == want:
+			continue  # already so; Supervisor refuses to start what is running
 		status, _ = call("POST", f"/addons/{slug}/{'start' if running else 'stop'}", None, timeout=300)
 		if status != 200:
 			failed.append(slug)
@@ -541,17 +545,31 @@ class SeedFailed(Exception):
 SEED_FOLDERS = ("share", "ssl", "media", "addons/local")
 
 
-def make_seed_backup(key: str, name: str, call=_supervisor_call) -> str:
+def installed_addons(call=_supervisor_call) -> Optional[list]:
+	"""Slugs of the installed add-ons except this one; None if unknown."""
+	_, listed = call("GET", "/addons", None, timeout=60)
+	found = ((listed or {}).get("data") or {}).get("addons") if isinstance(listed, dict) else None
+	if found is None:
+		return None
+	return [a["slug"] for a in found
+	        if isinstance(a, dict) and a.get("slug") and not str(a["slug"]).endswith("_vome_chap")]
+
+
+def holdable(slugs) -> list:
+	"""The home's own add-ons: not ours, which carry no identity of the home."""
+	return sorted(s for s in slugs or [] if not s.endswith(("_vome", "_vome_chap")))
+
+
+def make_seed_backup(key: str, name: str, call=_supervisor_call,
+                     addons: Optional[list] = None) -> str:
 	"""Create the key-encrypted seed backup; return its Supervisor slug.
 
 	Add-ons and folders only. If the add-ons cannot be listed it falls back
 	to a full backup, which the standby restores the same way.
 	"""
-	_, listed = call("GET", "/addons", None, timeout=60)
-	addons = [a["slug"] for a in (((listed or {}).get("data") or {}).get("addons") or []
-	                               if isinstance(listed, dict) else [])
-	          if isinstance(a, dict) and a.get("slug") and not str(a["slug"]).endswith("_vome_chap")]
-	if isinstance(listed, dict) and ((listed.get("data") or {}).get("addons") is not None):
+	if addons is None:
+		addons = installed_addons(call)
+	if addons is not None:
 		status, body = call("POST", "/backups/new/partial", {
 			"name": name, "password": key, "compressed": True, "homeassistant": False,
 			"addons": addons, "folders": list(SEED_FOLDERS),
@@ -582,16 +600,17 @@ def download_backup(slug: str, dest: Path, opener=urllib.request.urlopen) -> int
 
 
 def send_seed(portal: "Portal", request_id: str, data_dir: Path = DATA_DIR,
-              call=_supervisor_call, download=download_backup) -> str:
+              call=_supervisor_call, download=download_backup) -> tuple[str, list]:
 	"""Make, send and clean up the seed. Returns what happened."""
 	key = secrets.token_urlsafe(32)
 	local = data_dir / SEED_FILE
 	slug = None
 	try:
-		slug = make_seed_backup(key, seed_backup_name(request_id), call)
+		addons = installed_addons(call)
+		slug = make_seed_backup(key, seed_backup_name(request_id), call, addons)
 		size = download(slug, local)
 		portal.upload_seed(request_id, local, size, key)
-		return f"seed sent ({size} bytes)"
+		return f"seed sent ({size} bytes)", holdable(addons)
 	finally:
 		# Whatever happened: this backup is not the owner's, and it must not
 		# stay behind on this install.
@@ -618,8 +637,14 @@ def maybe_send_seed(portal: "Portal", info: dict, state: dict, state_path: Path,
 		state.update({"seed_failed_request": request_id, "seed_failed_at": now})
 		save_json(state_path, state)
 		return f"seed failed ({exc}); will retry"
+	outcome, seeded = outcome if isinstance(outcome, tuple) else (outcome, [])
 	state["seed_sent"] = request_id
 	state.pop("seed_failed_request", None)
+	# The same add-ons now exist on the standby. The rule for them is the
+	# same on both sides: they run only where the home is active, so a
+	# failover with this install still up does not leave two of each.
+	state["held_addons"] = sorted(set(state.get("held_addons") or []) | set(seeded))
+	state["held_addons_running"] = None
 	save_json(state_path, state)
 	return outcome
 
@@ -702,7 +727,7 @@ def maybe_restore_seed(portal: "Portal", info: dict, state: dict, state_path: Pa
 	state["seed_restored"] = seed_id
 	# The add-ons just restored are the home's services, and add-ons run
 	# whether Core does or not: held stopped until this side is active.
-	state["held_addons"] = sorted(set(state.get("held_addons") or []) | set(restored))
+	state["held_addons"] = sorted(set(state.get("held_addons") or []) | set(holdable(restored)))
 	state["held_addons_running"] = None  # unknown: enforce on the next pass
 	state.pop("seed_restore_failed_id", None)
 	save_json(state_path, state)

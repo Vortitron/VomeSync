@@ -752,8 +752,9 @@ class TestSeed:
 	def test_the_seed_is_made_with_a_one_off_key_sent_and_removed(self, tmp_path):
 		calls, call, download = self._fake()
 		portal = self._Portal()
-		out = cs.send_seed(portal, "r1", tmp_path, call, download)
+		out, held = cs.send_seed(portal, "r1", tmp_path, call, download)
 		assert out.startswith("seed sent")
+		assert held == ["core_mosquitto"]  # not our own add-ons
 		(req, data, size, key) = portal.got[0]
 		assert req == "r1" and data == b"tar" and len(key) > 30
 		made = next(body for m, path, body in calls if path.startswith("/backups/new/"))
@@ -897,6 +898,34 @@ class TestSeedRestore:
 		fails = lambda method, path, body=None, timeout=60: (500, None) if path.endswith("/stop") else (200, {})
 		assert "will retry" in cs.enforce_addons("standby", state, tmp_path / "s.json", fails)
 		assert state["held_addons_running"] is None
+
+	def test_the_sender_holds_the_same_add_ons(self, tmp_path):
+		"""Symmetric: after a seed the same add-ons exist on both sides, and
+		each side runs them only while it is the active one."""
+		state = {}
+		sent = lambda portal, rid, data_dir: ("seed sent (3 bytes)", ["core_matter_server"])
+		cs.maybe_send_seed(None, {"seed": {"request": "r1"}}, state, tmp_path / "s.json", 1000, tmp_path, sent)
+		assert state["held_addons"] == ["core_matter_server"] and state["held_addons_running"] is None
+		ok = lambda method, path, body=None, timeout=60: (200, {})
+		assert cs.enforce_addons("active", state, tmp_path / "s.json", ok).startswith("started")
+
+	def test_our_own_add_ons_are_never_held(self, tmp_path):
+		restored = lambda p, sid: ("seed restored", ["b1bff62e_vome", "core_mosquitto"])
+		state = {}
+		cs.maybe_restore_seed(self._Portal(), {"seed_restore": {"id": "r9"}}, state, tmp_path / "s.json",
+		                      1000, lambda: True, restored)
+		assert state["held_addons"] == ["core_mosquitto"]
+
+	def test_an_add_on_already_in_that_state_is_left_alone(self, tmp_path):
+		calls = []
+		def call(method, path, body=None, timeout=60):
+			calls.append((method, path))
+			if path.endswith("/info"):
+				return 200, {"data": {"state": "started"}}
+			return 400, None  # Supervisor: already running
+		state = {"held_addons": ["a"], "held_addons_running": None}
+		assert cs.enforce_addons("active", state, tmp_path / "s.json", call).startswith("started")
+		assert ("POST", "/addons/a/start") not in calls
 
 	def test_nothing_held_nothing_touched(self, tmp_path):
 		boom = lambda *a, **k: pytest.fail("no Supervisor call without held add-ons")
