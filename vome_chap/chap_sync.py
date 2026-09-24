@@ -457,6 +457,42 @@ def enforce_core(directive, state: dict, state_path: Path,
 	return None
 
 
+def set_addons_running(slugs: list, running: bool, call=None) -> list:
+	"""Start or stop add-ons and set their boot to match. Returns the failures."""
+	call = call or _supervisor_call
+	failed = []
+	for slug in slugs:
+		call("POST", f"/addons/{slug}/options", {"boot": "auto" if running else "manual"}, timeout=60)
+		status, _ = call("POST", f"/addons/{slug}/{'start' if running else 'stop'}", None, timeout=300)
+		if status != 200:
+			failed.append(slug)
+	return failed
+
+
+def enforce_addons(role: Optional[str], state: dict, state_path: Path,
+                   call=None) -> Optional[str]:
+	"""Run the home's add-ons only on the active side.
+
+	Only the add-ons this install was seeded with: they came from the other
+	install, carry its identity and data (a Matter controller, a torrent
+	client writing to the house NAS), and would otherwise run on both at
+	once -- the add-on form of two homes on one link. Started when this
+	side becomes active, stopped again when it goes back to standby.
+	"""
+	held = list(state.get("held_addons") or [])
+	if not held or role not in (ROLE_ACTIVE, ROLE_STANDBY):
+		return None
+	want = role == ROLE_ACTIVE
+	if state.get("held_addons_running") is want:
+		return None
+	failed = set_addons_running(held, want, call)
+	if failed:
+		return f"could not {'start' if want else 'stop'} {', '.join(failed)}; will retry"
+	state["held_addons_running"] = want
+	save_json(state_path, state)
+	return f"{'started' if want else 'stopped'} {len(held)} add-on(s): this install is the {role} one"
+
+
 def core_version(opener=urllib.request.urlopen) -> str:
 	status, body = _supervisor_get("/core/info", opener)
 	if status == 200 and isinstance(body, dict):
@@ -594,7 +630,7 @@ def seed_backup_name(seed_id: str) -> str:
 
 
 def restore_seed(portal: "Portal", seed_id: str, backup_dir: Path = BACKUP_DIR,
-                 call=_supervisor_call) -> str:
+                 call=_supervisor_call) -> tuple[str, list]:
 	"""Fetch the seed, restore its add-ons and folders, and remove it.
 
 	Never Home Assistant itself: /config arrives by sync, and restoring it
@@ -623,7 +659,7 @@ def restore_seed(portal: "Portal", seed_id: str, backup_dir: Path = BACKUP_DIR,
 		}, timeout=3600)
 		if status != 200 or not isinstance(body, dict) or body.get("result") != "ok":
 			raise SeedFailed(f"the Supervisor did not restore the seed (HTTP {status})")
-		return f"seed restored ({len(addons)} add-ons, {len(folders)} folders)"
+		return f"seed restored ({len(addons)} add-ons, {len(folders)} folders)", addons
 	finally:
 		# Whatever happened: this backup is not the owner's either.
 		if slug:
@@ -661,8 +697,13 @@ def maybe_restore_seed(portal: "Portal", info: dict, state: dict, state_path: Pa
 		state.update({"seed_restore_failed_id": seed_id, "seed_restore_failed_at": now})
 		save_json(state_path, state)
 		return f"seed restore failed ({exc}); will retry"
+	outcome, restored = outcome if isinstance(outcome, tuple) else (outcome, [])
 	portal.report_seed(seed_id, True, outcome)
 	state["seed_restored"] = seed_id
+	# The add-ons just restored are the home's services, and add-ons run
+	# whether Core does or not: held stopped until this side is active.
+	state["held_addons"] = sorted(set(state.get("held_addons") or []) | set(restored))
+	state["held_addons_running"] = None  # unknown: enforce on the next pass
 	state.pop("seed_restore_failed_id", None)
 	save_json(state_path, state)
 	return outcome
@@ -995,6 +1036,9 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	core_note = enforce_core(info.get("core"), state, state_path, core_stopped, set_running)
 	if core_note:
 		LOG.info("%s", core_note)
+	addons_note = enforce_addons(role, state, state_path)
+	if addons_note:
+		LOG.info("%s", addons_note)
 
 	if role == ROLE_ACTIVE:
 		seed_note = maybe_send_seed(portal, info, state, state_path, now, data_dir)

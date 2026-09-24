@@ -835,8 +835,8 @@ class TestSeedRestore:
 
 	def test_add_ons_and_folders_only_and_nothing_left_behind(self, tmp_path):
 		calls, call = self._supervisor()
-		out = cs.restore_seed(self._Portal(), "r1", tmp_path, call)
-		assert out.startswith("seed restored")
+		out, restored = cs.restore_seed(self._Portal(), "r1", tmp_path, call)
+		assert out.startswith("seed restored") and restored == ["core_mosquitto", "9ca546e0_vome"]
 		restore = next(body for m, path, body in calls if path == "/backups/seed1/restore/partial")
 		assert restore["homeassistant"] is False  # Core is never started as a copy of the home
 		assert restore["addons"] == ["core_mosquitto", "9ca546e0_vome"]  # not this add-on's own pairing
@@ -869,6 +869,38 @@ class TestSeedRestore:
 		assert cs.maybe_restore_seed(portal, info, state, state_path, 1000, lambda: True, ok).startswith("seed restored")
 		assert cs.maybe_restore_seed(portal, info, state, state_path, 1001, lambda: True, ok) is None
 		assert done == ["r1"] and portal.reports == [("r1", True)]
+
+	def test_what_the_seed_restored_is_held_stopped_until_this_side_is_active(self, tmp_path):
+		"""Add-ons run without Core: a seeded Matter Server or torrent client
+		would otherwise run beside the live home's own."""
+		state_path, portal = tmp_path / "state.json", self._Portal()
+		restored = lambda p, sid: ("seed restored (2 add-ons, 1 folders)", ["core_matter_server", "x_transmission"])
+		state = {}
+		cs.maybe_restore_seed(portal, {"seed_restore": {"id": "r1"}}, state, state_path, 1000, lambda: True, restored)
+		assert state["held_addons"] == ["core_matter_server", "x_transmission"]
+
+		calls = []
+		def call(method, path, body=None, timeout=60):
+			calls.append((method, path, body))
+			return 200, {"result": "ok"}
+		assert cs.enforce_addons("standby", state, state_path, call).startswith("stopped 2")
+		assert ("POST", "/addons/x_transmission/stop", None) in calls
+		assert ("POST", "/addons/x_transmission/options", {"boot": "manual"}) in calls
+		calls.clear()
+		assert cs.enforce_addons("standby", state, state_path, call) is None and calls == []  # once
+		assert cs.enforce_addons("active", state, state_path, call).startswith("started 2")
+		assert ("POST", "/addons/core_matter_server/start", None) in calls
+		assert cs.enforce_addons("standby", state, state_path, call).startswith("stopped")  # handed back
+
+	def test_a_failed_stop_is_retried(self, tmp_path):
+		state = {"held_addons": ["a"], "held_addons_running": None}
+		fails = lambda method, path, body=None, timeout=60: (500, None) if path.endswith("/stop") else (200, {})
+		assert "will retry" in cs.enforce_addons("standby", state, tmp_path / "s.json", fails)
+		assert state["held_addons_running"] is None
+
+	def test_nothing_held_nothing_touched(self, tmp_path):
+		boom = lambda *a, **k: pytest.fail("no Supervisor call without held add-ons")
+		assert cs.enforce_addons("standby", {}, tmp_path / "s.json", boom) is None
 
 	def test_a_network_failure_retries_and_a_refusal_is_reported(self, tmp_path):
 		state_path, portal = tmp_path / "state.json", self._Portal()
