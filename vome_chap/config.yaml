@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome CHAP
-version: "0.1.0"
+version: "0.1.1"
 slug: vome_chap
 description: >
   Keeps a Vome CHAP standby of this Home Assistant ready to take over:
@@ -21,6 +21,8 @@ hassio_api: true
 hassio_role: manager
 map:
   - homeassistant_config:rw
+  # A standby puts its seed here for the Supervisor to restore.
+  - backup:rw
 startup: services
 boot: auto
 options: {}

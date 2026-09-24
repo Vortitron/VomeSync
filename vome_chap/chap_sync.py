@@ -46,6 +46,7 @@ import tarfile
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -56,6 +57,9 @@ CONFIG_DIR = Path(os.environ.get("VOME_CHAP_CONFIG_DIR", "/homeassistant"))
 DATA_DIR = Path(os.environ.get("VOME_CHAP_DATA_DIR", "/data"))
 SUPERVISOR = os.environ.get("VOME_SUPERVISOR_URL", "http://supervisor")
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
+# The Supervisor's backup store, mapped in (config.yaml `backup:rw`): the
+# standby puts the seed there for the Supervisor to restore.
+BACKUP_DIR = Path(os.environ.get("VOME_CHAP_BACKUP_DIR", "/backup"))
 
 BINDING_FILE = "chap.json"
 STATE_FILE = "chap_state.json"
@@ -527,7 +531,7 @@ def send_seed(portal: "Portal", request_id: str, data_dir: Path = DATA_DIR,
 	local = data_dir / SEED_FILE
 	slug = None
 	try:
-		slug = make_seed_backup(key, f"Vome CHAP seed {request_id}", call)
+		slug = make_seed_backup(key, seed_backup_name(request_id), call)
 		size = download(slug, local)
 		portal.upload_seed(request_id, local, size, key)
 		return f"seed sent ({size} bytes)"
@@ -559,6 +563,86 @@ def maybe_send_seed(portal: "Portal", info: dict, state: dict, state_path: Path,
 		return f"seed failed ({exc}); will retry"
 	state["seed_sent"] = request_id
 	state.pop("seed_failed_request", None)
+	save_json(state_path, state)
+	return outcome
+
+
+def seed_backup_name(seed_id: str) -> str:
+	"""What the active side calls the seed, so the standby can find it."""
+	return f"Vome CHAP seed {seed_id}"
+
+
+def restore_seed(portal: "Portal", seed_id: str, backup_dir: Path = BACKUP_DIR,
+                 call=_supervisor_call) -> str:
+	"""Fetch the seed, restore its add-ons and folders, and remove it.
+
+	Never Home Assistant itself: /config arrives by sync, and restoring it
+	would start Core here -- a second copy of the home, on its relay link
+	(C34). Nor this add-on: its /data is this install's own pairing.
+	"""
+	safe = re.sub(r"[^A-Za-z0-9-]", "", seed_id)[:64] or "seed"
+	local = backup_dir / f"vome_chap_seed_{safe}.tar"
+	slug = None
+	try:
+		key = portal.download_seed(seed_id, local)
+		call("POST", "/backups/reload", None, timeout=300)
+		_, body = call("GET", "/backups", None, timeout=60)
+		backups = (((body or {}).get("data") or {}).get("backups") or []) if isinstance(body, dict) else []
+		slug = next((b.get("slug") for b in backups
+		             if isinstance(b, dict) and b.get("name") == seed_backup_name(seed_id)), None)
+		if not slug:
+			raise SeedFailed("the Supervisor did not pick up the seed backup")
+		_, body = call("GET", f"/backups/{slug}/info", None, timeout=60)
+		info = ((body or {}).get("data") or {}) if isinstance(body, dict) else {}
+		addons = [a["slug"] for a in info.get("addons") or []
+		          if isinstance(a, dict) and a.get("slug") and not a["slug"].endswith("_vome_chap")]
+		folders = [f for f in info.get("folders") or [] if isinstance(f, str) and f]
+		status, body = call("POST", f"/backups/{slug}/restore/partial", {
+			"homeassistant": False, "addons": addons, "folders": folders, "password": key,
+		}, timeout=3600)
+		if status != 200 or not isinstance(body, dict) or body.get("result") != "ok":
+			raise SeedFailed(f"the Supervisor did not restore the seed (HTTP {status})")
+		return f"seed restored ({len(addons)} add-ons, {len(folders)} folders)"
+	finally:
+		# Whatever happened: this backup is not the owner's either.
+		if slug:
+			call("DELETE", f"/backups/{slug}", None, timeout=120)
+		try:
+			local.unlink()
+		except OSError:
+			pass
+
+
+def maybe_restore_seed(portal: "Portal", info: dict, state: dict, state_path: Path,
+                       now: float, core_stopped: Callable[[], bool],
+                       restorer=None) -> Optional[str]:
+	"""Restore the seed waiting for this standby, once.
+
+	A network failure is retried slowly; a restore the Supervisor refused is
+	reported, and the portal then deletes the seed either way.
+	"""
+	seed_id = str(((info.get("seed_restore") or {}).get("id")) or "")
+	if not seed_id or state.get("seed_restored") == seed_id:
+		return None
+	if state.get("seed_restore_failed_id") == seed_id and \
+			now - float(state.get("seed_restore_failed_at") or 0) < SEED_RETRY_SECONDS:
+		return None
+	if not core_stopped():
+		return None  # a standby's Core runs only for a takeover; not now
+	try:
+		outcome = (restorer or restore_seed)(portal, seed_id)
+	except SeedFailed as exc:
+		portal.report_seed(seed_id, False, str(exc))
+		state["seed_restored"] = seed_id
+		save_json(state_path, state)
+		return f"seed not restored ({exc})"
+	except (urllib.error.URLError, OSError) as exc:
+		state.update({"seed_restore_failed_id": seed_id, "seed_restore_failed_at": now})
+		save_json(state_path, state)
+		return f"seed restore failed ({exc}); will retry"
+	portal.report_seed(seed_id, True, outcome)
+	state["seed_restored"] = seed_id
+	state.pop("seed_restore_failed_id", None)
 	save_json(state_path, state)
 	return outcome
 
@@ -730,6 +814,27 @@ class Portal:
 			}) as resp:
 				return json.loads(resp.read().decode("utf-8") or "{}")
 
+	def download_seed(self, seed_id: str, dest: Path) -> str:
+		"""Save the seed waiting for this install to ``dest``; return its key."""
+		path = f"{API_SEED}/{urllib.parse.quote(seed_id, safe='')}"
+		with self._request("GET", path, timeout=3600) as resp:
+			key = resp.headers.get("X-Seed-Key") or ""
+			with open(dest, "wb") as out:
+				shutil.copyfileobj(resp, out, 1024 * 1024)
+		if not key:
+			raise SeedFailed("the portal sent the seed without its key")
+		return key
+
+	def report_seed(self, seed_id: str, ok: bool, detail: str = "") -> None:
+		body = json.dumps({"ok": ok, "detail": detail[:300]}).encode()
+		path = f"{API_SEED}/{urllib.parse.quote(seed_id, safe='')}/restored"
+		try:
+			with self._request("POST", path, body=body, timeout=30,
+			                   headers={"Content-Type": "application/json"}):
+				pass
+		except (urllib.error.URLError, OSError) as exc:
+			LOG.warning("Could not report the seed restore: %s", exc)
+
 	def report_applied(self, snapshot_id: str, ok: bool, detail: str = "",
 	                   needs_core_version: str = "") -> None:
 		report = {"id": snapshot_id, "ok": ok, "detail": detail[:500]}
@@ -898,6 +1003,9 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 		return f"active: uploaded {meta['file_count']} files ({len(blob)} bytes)", interval
 
 	if role == ROLE_STANDBY:
+		seed_note = maybe_restore_seed(portal, info, state, state_path, now, core_stopped)
+		if seed_note:
+			LOG.info("%s", seed_note)
 		latest = info.get("latest") or {}
 		if not latest.get("id"):
 			return "standby: nothing to apply yet", interval

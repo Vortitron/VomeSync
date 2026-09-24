@@ -779,3 +779,88 @@ class TestSeed:
 		assert cs.maybe_send_seed(None, {"seed": {"request": "r2"}}, state, state_path, 1100, tmp_path, boom) is None
 		assert "will retry" in cs.maybe_send_seed(None, {"seed": {"request": "r2"}}, state, state_path,
 		                                          1000 + cs.SEED_RETRY_SECONDS + 1, tmp_path, boom)
+
+
+class TestSeedRestore:
+	"""The standby restores the seed's add-ons and folders -- never Core (C34)."""
+
+	class _Portal:
+		def __init__(self, key="k" * 43, fail=None):
+			self.key, self.fail, self.reports = key, fail, []
+		def download_seed(self, seed_id, dest):
+			if self.fail == "download":
+				raise urllib.error.URLError("portal down")
+			dest.write_bytes(b"tar")
+			return self.key
+		def report_seed(self, seed_id, ok, detail=""):
+			self.reports.append((seed_id, ok))
+
+	def _supervisor(self, refuse=False, listed=True):
+		calls = []
+		def call(method, path, body=None, timeout=60):
+			calls.append((method, path, body))
+			if path == "/backups":
+				return 200, {"data": {"backups": [
+					{"slug": "other", "name": "Automatic backup"},
+					*([{"slug": "seed1", "name": cs.seed_backup_name("r1")}] if listed else []),
+				]}}
+			if path == "/backups/seed1/info":
+				return 200, {"data": {"addons": [
+					{"slug": "core_mosquitto"}, {"slug": "9ca546e0_vome"}, {"slug": "9ca546e0_vome_chap"},
+				], "folders": ["share", "ssl"]}}
+			if path.endswith("/restore/partial"):
+				return (400, {"result": "error"}) if refuse else (200, {"result": "ok"})
+			return 200, {"result": "ok"}
+		return calls, call
+
+	def test_add_ons_and_folders_only_and_nothing_left_behind(self, tmp_path):
+		calls, call = self._supervisor()
+		out = cs.restore_seed(self._Portal(), "r1", tmp_path, call)
+		assert out.startswith("seed restored")
+		restore = next(body for m, path, body in calls if path == "/backups/seed1/restore/partial")
+		assert restore["homeassistant"] is False  # Core is never started as a copy of the home
+		assert restore["addons"] == ["core_mosquitto", "9ca546e0_vome"]  # not this add-on's own pairing
+		assert restore["folders"] == ["share", "ssl"]
+		assert restore["password"] == "k" * 43
+		assert ("DELETE", "/backups/seed1", None) in calls
+		assert list(tmp_path.iterdir()) == []
+
+	def test_a_refused_restore_still_removes_it(self, tmp_path):
+		calls, call = self._supervisor(refuse=True)
+		with pytest.raises(cs.SeedFailed):
+			cs.restore_seed(self._Portal(), "r1", tmp_path, call)
+		assert ("DELETE", "/backups/seed1", None) in calls
+		assert list(tmp_path.iterdir()) == []
+
+	def test_a_seed_the_supervisor_did_not_list_is_not_restored(self, tmp_path):
+		calls, call = self._supervisor(listed=False)
+		with pytest.raises(cs.SeedFailed):
+			cs.restore_seed(self._Portal(), "r1", tmp_path, call)
+		assert not any(path.endswith("/restore/partial") for _, path, _ in calls)
+		assert list(tmp_path.iterdir()) == []
+
+	def test_once_only_with_core_stopped_and_reported(self, tmp_path):
+		state_path, portal = tmp_path / "state.json", self._Portal()
+		info = {"seed_restore": {"id": "r1"}}
+		done = []
+		ok = lambda p, sid: done.append(sid) or "seed restored (2 add-ons, 2 folders)"
+		state = {}
+		assert cs.maybe_restore_seed(portal, info, state, state_path, 1000, lambda: False, ok) is None
+		assert cs.maybe_restore_seed(portal, info, state, state_path, 1000, lambda: True, ok).startswith("seed restored")
+		assert cs.maybe_restore_seed(portal, info, state, state_path, 1001, lambda: True, ok) is None
+		assert done == ["r1"] and portal.reports == [("r1", True)]
+
+	def test_a_network_failure_retries_and_a_refusal_is_reported(self, tmp_path):
+		state_path, portal = tmp_path / "state.json", self._Portal()
+		def offline(p, sid):
+			raise urllib.error.URLError("down")
+		state = {}
+		info = {"seed_restore": {"id": "r2"}}
+		assert "will retry" in cs.maybe_restore_seed(portal, info, state, state_path, 1000, lambda: True, offline)
+		assert cs.maybe_restore_seed(portal, info, state, state_path, 1100, lambda: True, offline) is None
+		assert portal.reports == []
+		def refused(p, sid):
+			raise cs.SeedFailed("bad key")
+		out = cs.maybe_restore_seed(portal, info, state, state_path,
+		                            1000 + cs.SEED_RETRY_SECONDS + 1, lambda: True, refused)
+		assert "not restored" in out and portal.reports == [("r2", False)]
