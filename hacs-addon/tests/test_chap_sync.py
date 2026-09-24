@@ -273,8 +273,9 @@ class FakePortal:
 		self.uploads = []
 		self.reports = []
 
-	def role(self, primary_reachable=None):
+	def role(self, primary_reachable=None, edge_reachable=None):
 		self.reported = primary_reachable
+		self.reported_edge = edge_reachable
 		return self._role
 
 	def upload(self, blob, meta):
@@ -607,7 +608,7 @@ class TestLocalFallback:
 			out, _ = cs.run_once(portal, cfg, data, core_stopped=lambda: True,
 			                     local_version=lambda: "2026.9.1",
 			                     set_running=lambda r: started.append(r) or True,
-			                     probe=lambda url: reachable)
+			                     probe=lambda url: reachable, edge_probe=lambda url: True)
 		return out, started, cs.load_json(data / cs.STATE_FILE)
 
 	def test_it_reports_what_it_sees_of_the_hosted_home(self, tmp_path):
@@ -615,6 +616,14 @@ class TestLocalFallback:
 		self._pass(tmp_path, portal, 1000, True, state={})  # learns the probe URL
 		self._pass(tmp_path, portal, 1060, False)
 		assert portal.reported is False
+
+	def test_it_also_reports_whether_the_link_is_up(self, tmp_path):
+		"""C38: after a stand-down the hosted Core is stopped on purpose, so the
+		home never answers; the edge answering is what says the link is back."""
+		portal = FakePortal({"role": "active", "fallback": self.FB, "latest": {}})
+		self._pass(tmp_path, portal, 1000, True, state={})
+		self._pass(tmp_path, portal, 1060, False)
+		assert portal.reported is False and portal.reported_edge is True
 
 	def test_with_both_unreachable_long_enough_it_takes_over(self, tmp_path):
 		state = {"fallback": self.FB, "portal_ok_at": 1000, "core_stopped_by_vome": True}
@@ -657,7 +666,7 @@ class TestLocalFallback:
 		with um.patch.object(cs.time, "time", return_value=2000):
 			cs.run_once(portal, tmp_path / "cfg", data, core_stopped=lambda: False,
 			            local_version=lambda: "2026.9.1",
-			            set_running=lambda r: calls.append(r) or True, probe=lambda u: True)
+			            set_running=lambda r: calls.append(r) or True, probe=lambda u: True, edge_probe=lambda u: True)
 		st = cs.load_json(data / cs.STATE_FILE)
 		assert calls == [False] and "took_over_locally" not in st
 
@@ -1002,3 +1011,28 @@ class TestSeedRestore:
 		out = cs.maybe_restore_seed(portal, info, state, state_path,
 		                            1000 + cs.SEED_RETRY_SECONDS + 1, lambda: True, refused)
 		assert "not restored" in out and portal.reports == [("r2", False)]
+
+
+class TestProbeEdge:
+	"""Any answer from Vome's edge is the link; only no answer is not."""
+
+	def test_a_502_or_a_gate_is_the_link_up(self):
+		for code in (502, 403, 404):
+			assert cs.probe_edge("https://h.home.vome.io/manifest.json", http_error(code, b"")) is True
+
+	def test_a_home_answering_is_the_link_up(self):
+		ok = lambda req, timeout=None: FakeResponse(200, b"{}")
+		assert cs.probe_edge("https://h/", ok) is True
+
+	def test_no_answer_is_the_link_down(self):
+		def down(req, timeout=None):
+			raise urllib.error.URLError("no route to host")
+		assert cs.probe_edge("https://h/", down) is False
+
+	def test_the_edge_is_only_asked_when_the_home_did_not_answer(self):
+		asked = []
+		state = {"fallback": {"probe_url": "https://h/"}}
+		cs.watch_primary(state, 1000, lambda u: True, lambda u: asked.append(u) or False)
+		assert state["edge_reachable"] is True and asked == []
+		cs.watch_primary(state, 1060, lambda u: False, lambda u: asked.append(u) or True)
+		assert state["edge_reachable"] is True and state["primary_reachable"] is False and asked == ["https://h/"]

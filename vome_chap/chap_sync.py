@@ -887,7 +887,8 @@ class Portal:
 		req = urllib.request.Request(self.base + path, data=body, headers=h, method=method)
 		return self.opener(req, timeout=timeout)
 
-	def role(self, primary_reachable: Optional[bool] = None) -> Optional[dict]:
+	def role(self, primary_reachable: Optional[bool] = None,
+	         edge_reachable: Optional[bool] = None) -> Optional[dict]:
 		"""The portal's view of this install, or None when it cannot be asked.
 
 		A local fallback for a hosted home also says, on each poll, whether
@@ -896,6 +897,8 @@ class Portal:
 		headers = {}
 		if primary_reachable is not None:
 			headers["X-Primary-Reachable"] = "1" if primary_reachable else "0"
+		if edge_reachable is not None:
+			headers["X-Edge-Reachable"] = "1" if edge_reachable else "0"
 		try:
 			with self._request("GET", API_ROLE, timeout=30, headers=headers) as resp:
 				data = json.loads(resp.read().decode("utf-8"))
@@ -1019,13 +1022,35 @@ def probe_primary(url: str, opener=urllib.request.urlopen) -> bool:
 		return False  # includes HTTPError: every non-2xx
 
 
-def watch_primary(state: dict, now: float, probe: Callable[[str], bool]) -> Optional[bool]:
+def probe_edge(url: str, opener=urllib.request.urlopen) -> bool:
+	"""Does anything answer at the hosted home's address? The link, not the home.
+
+	Any HTTP response counts, a 502 or a gate included: they come from Vome's
+	edge, so the house can reach it. Only no answer at all (no route, no DNS,
+	a timeout) is "the link is down". After a stand-down the hosted Core is
+	stopped on purpose, so this, not probe_primary, is what says the link is
+	back and a handback may start (C38).
+	"""
+	req = urllib.request.Request(url, method="GET")
+	try:
+		with opener(req, timeout=PROBE_TIMEOUT):
+			return True
+	except urllib.error.HTTPError:
+		return True
+	except (urllib.error.URLError, OSError, ValueError):
+		return False
+
+
+def watch_primary(state: dict, now: float, probe: Callable[[str], bool],
+                  edge_probe: Optional[Callable[[str], bool]] = None) -> Optional[bool]:
 	"""Probe the hosted home if this install is its fallback; record the run."""
 	fallback = state.get("fallback") or {}
 	url = fallback.get("probe_url")
 	if not url:
 		return None
 	reachable = probe(url)
+	# The home answering means the link is up too; ask the edge only if not.
+	state["edge_reachable"] = True if reachable else (edge_probe or probe_edge)(url)
 	state["primary_reachable"] = reachable
 	if reachable:
 		state.pop("primary_unreachable_since", None)
@@ -1066,14 +1091,15 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
              core_stopped: Callable[[], bool] = core_is_stopped,
              local_version: Callable[[], str] = core_version,
              set_running: Callable[[bool], bool] = set_core_running,
-             probe: Callable[[str], bool] = probe_primary) -> tuple[str, int]:
+             probe: Callable[[str], bool] = probe_primary,
+             edge_probe: Callable[[str], bool] = probe_edge) -> tuple[str, int]:
 	"""Do whatever this side's role calls for. Returns (what happened, next wait)."""
 	state_path = data_dir / STATE_FILE
 	state = load_json(state_path)
 	now = time.time()
-	reachable = watch_primary(state, now, probe)
+	reachable = watch_primary(state, now, probe, edge_probe)
 
-	info = portal.role(reachable)
+	info = portal.role(reachable, state.get("edge_reachable") if reachable is not None else None)
 	if info is None:
 		note = maybe_take_over_locally(state, now, set_running)
 		save_json(state_path, state)
@@ -1087,7 +1113,7 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	state["fallback"] = info.get("fallback") or None
 	state.pop("took_over_locally", None)
 	if not state["fallback"]:
-		for key in ("primary_reachable", "primary_unreachable_since"):
+		for key in ("primary_reachable", "primary_unreachable_since", "edge_reachable"):
 			state.pop(key, None)
 	save_json(state_path, state)
 	role = info.get("role")
