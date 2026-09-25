@@ -485,24 +485,42 @@ def enforce_core(directive, state: dict, state_path: Path,
 	return None
 
 
-def set_addons_running(slugs: list, running: bool, call=None) -> list:
-	"""Start or stop add-ons and set their boot to match. Returns the failures."""
+# How long to wait on Supervisor for one add-on to start or stop, and for a
+# whole pass of them. Supervisor goes on starting an add-on after we stop
+# waiting -- the wait is only for it to report "started" -- so a short ask
+# loses nothing, and the next pass sees where it got to. Waiting in full
+# (up to 5 min each) kept the GamlaBio fallback from polling Vome for over a
+# quarter of an hour after it took over (25 Sept 2026): 11 add-ons, one of
+# them stuck in "startup", and a home that could not hear "stop".
+ADDON_ASK_SECONDS = 20
+ADDON_PASS_SECONDS = 45
+
+
+def set_addons_running(slugs: list, running: bool, call=None,
+                       clock: Callable[[], float] = time.monotonic) -> list:
+	"""Start or stop add-ons and set their boot to match. Returns the ones
+	not there yet: refused, still on their way, or left for the next pass."""
 	call = call or _supervisor_call
 	want = "started" if running else "stopped"
 	failed = []
+	deadline = clock() + ADDON_PASS_SECONDS
 	for slug in slugs:
+		if clock() > deadline:
+			failed.append(slug)  # the next pass carries on from here
+			continue
 		call("POST", f"/addons/{slug}/options", {"boot": "auto" if running else "manual"}, timeout=60)
 		_, info = call("GET", f"/addons/{slug}/info", None, timeout=60)
 		if isinstance(info, dict) and (info.get("data") or {}).get("state") == want:
 			continue  # already so; Supervisor refuses to start what is running
-		status, _ = call("POST", f"/addons/{slug}/{'start' if running else 'stop'}", None, timeout=300)
+		status, _ = call("POST", f"/addons/{slug}/{'start' if running else 'stop'}", None,
+		                 timeout=ADDON_ASK_SECONDS)
 		if status != 200:
 			failed.append(slug)
 	return failed
 
 
 def enforce_addons(role: Optional[str], state: dict, state_path: Path,
-                   call=None) -> Optional[str]:
+                   call=None, clock: Callable[[], float] = time.monotonic) -> Optional[str]:
 	"""Run the home's add-ons only on the active side.
 
 	Only the add-ons this install was seeded with: they came from the other
@@ -517,9 +535,9 @@ def enforce_addons(role: Optional[str], state: dict, state_path: Path,
 	want = role == ROLE_ACTIVE
 	if state.get("held_addons_running") is want:
 		return None
-	failed = set_addons_running(held, want, call)
+	failed = set_addons_running(held, want, call, clock)
 	if failed:
-		return f"could not {'start' if want else 'stop'} {', '.join(failed)}; will retry"
+		return f"not yet {'started' if want else 'stopped'}: {', '.join(failed)}; will retry"
 	state["held_addons_running"] = want
 	save_json(state_path, state)
 	return f"{'started' if want else 'stopped'} {len(held)} add-on(s): this install is the {role} one"

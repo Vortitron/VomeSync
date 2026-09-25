@@ -965,6 +965,28 @@ class TestSeedRestore:
 		assert "will retry" in cs.enforce_addons("standby", state, tmp_path / "s.json", fails)
 		assert state["held_addons_running"] is None
 
+	def test_starting_add_ons_never_holds_up_the_poll(self, tmp_path):
+		"""The GamlaBio fallback took over, then spent over a quarter of an
+		hour starting 11 add-ons at up to 5 min each (one stuck in
+		"startup") without polling Vome once, so it could not have heard
+		"stop". Each start is asked briefly and a pass has a budget; the
+		rest is carried on next pass."""
+		now = [0.0]
+		asked = []
+		def call(method, path, body=None, timeout=60):
+			if path.endswith("/start"):
+				asked.append((path, timeout))
+				now[0] += timeout  # Supervisor never answers in time
+				return 0, None
+			return 200, {"data": {"state": "stopped"}}
+		held = [f"a{i}" for i in range(11)]
+		state = {"held_addons": held, "held_addons_running": None}
+		note = cs.enforce_addons("active", state, tmp_path / "s.json", call, clock=lambda: now[0])
+		assert "will retry" in note and state["held_addons_running"] is None
+		assert all(t == cs.ADDON_ASK_SECONDS for _p, t in asked)
+		assert now[0] <= cs.ADDON_PASS_SECONDS + cs.ADDON_ASK_SECONDS
+		assert len(asked) < len(held)
+
 	def test_the_sender_holds_the_same_add_ons(self, tmp_path):
 		"""Symmetric: after a seed the same add-ons exist on both sides, and
 		each side runs them only while it is the active one."""

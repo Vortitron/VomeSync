@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome CHAP
-version: "0.1.9"
+version: "0.1.10"
 slug: vome_chap
 description: >
   Keeps a Vome CHAP standby of this Home Assistant ready to take over:
