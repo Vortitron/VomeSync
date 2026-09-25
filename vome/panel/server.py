@@ -259,6 +259,18 @@ def fetch_device_code(portal_url: str, name: str = "Home Assistant") -> dict:
 	return started
 
 
+def ha_display_name() -> str:
+	"""The name this Home Assistant goes by (Settings -> System -> General).
+
+	What the new server is called in the owner's Vome account. The panel
+	used to send nothing, so every install linked from here was called
+	"Home Assistant" whatever its owner had named it.
+	"""
+	status, cfg = _ha_request("GET", "/config")
+	name = cfg.get("location_name") if status == 200 and isinstance(cfg, dict) else ""
+	return name.strip() if isinstance(name, str) and name.strip() else "Home Assistant"
+
+
 def prepare_link_start(body: Optional[dict] = None) -> dict:
 	"""Force Connect onto the add-on Configuration URL, and fetch the code here.
 
@@ -270,7 +282,7 @@ def prepare_link_start(body: Optional[dict] = None) -> dict:
 	data = dict(body or {})
 	portal = normalise_portal_url(addon_portal_url() or data.get("portal_url"))
 	data["portal_url"] = portal
-	started = fetch_device_code(portal, str(data.get("name") or "Home Assistant"))
+	started = fetch_device_code(portal, str(data.get("name") or ha_display_name()))
 	data["device_code"] = started.get("device_code")
 	data["user_code"] = started.get("user_code") or ""
 	data["verification_uri"] = (

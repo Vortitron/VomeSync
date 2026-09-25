@@ -290,3 +290,11 @@ class TestSettingTheIntegrationUp:
 		ha["calls"].clear()
 		server.call_service_ready("get_remote_status", {})
 		assert not any(p == "/config/config_entries/flow" for _m, p, _b in ha["calls"])
+
+
+def test_a_link_is_named_after_the_home_assistant_not_home_assistant(monkeypatch):
+	"""Every install linked from the panel arrived as "Home Assistant"."""
+	monkeypatch.setattr(server, "_ha_request", lambda m, p, b=None: (200, {"location_name": "GamlaBio house"}))
+	assert server.ha_display_name() == "GamlaBio house"
+	monkeypatch.setattr(server, "_ha_request", lambda m, p, b=None: (502, {"error": "down"}))
+	assert server.ha_display_name() == "Home Assistant"

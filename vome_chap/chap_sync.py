@@ -669,12 +669,16 @@ def maybe_send_seed(portal: "Portal", info: dict, state: dict, state_path: Path,
 	try:
 		outcome = (sender or send_seed)(portal, request_id, data_dir)
 	except (SeedFailed, urllib.error.URLError, OSError) as exc:
-		state.update({"seed_failed_request": request_id, "seed_failed_at": now})
+		# Kept, and shown in the panel: on GamlaBio the first seed failed and
+		# nothing anywhere said why (it was nginx's 413).
+		state.update({"seed_failed_request": request_id, "seed_failed_at": now,
+		              "seed_error": str(exc)[:300]})
 		save_json(state_path, state)
 		return f"seed failed ({exc}); will retry"
 	outcome, seeded = outcome if isinstance(outcome, tuple) else (outcome, [])
 	state["seed_sent"] = request_id
 	state.pop("seed_failed_request", None)
+	state.pop("seed_error", None)
 	# The same add-ons now exist on the standby. The rule for them is the
 	# same on both sides: they run only where the home is active, so a
 	# failover with this install still up does not leave two of each.
@@ -992,6 +996,7 @@ def panel_status(data_dir: Path = DATA_DIR) -> dict:
 		"applied_at": st.get("applied_at"),
 		"uploaded_at": st.get("uploaded_at"),
 		"core_stopped_by_vome": bool(st.get("core_stopped_by_vome")),
+		"seed_error": st.get("seed_error"),
 	}
 
 
