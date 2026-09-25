@@ -667,7 +667,7 @@ def holdable(slugs) -> list:
 
 
 def make_seed_backup(key: str, name: str, call=_supervisor_call,
-                     addons: Optional[list] = None) -> str:
+                     addons: Optional[list] = None, folders: bool = True) -> str:
 	"""Create the key-encrypted seed backup; return its Supervisor slug.
 
 	Add-ons and folders only. If the add-ons cannot be listed it falls back
@@ -678,7 +678,7 @@ def make_seed_backup(key: str, name: str, call=_supervisor_call,
 	if addons is not None:
 		status, body = call("POST", "/backups/new/partial", {
 			"name": name, "password": key, "compressed": True, "homeassistant": False,
-			"addons": addons, "folders": list(SEED_FOLDERS),
+			"addons": addons, "folders": list(SEED_FOLDERS) if folders else [],
 		}, timeout=3600)
 	else:
 		status, body = call("POST", "/backups/new/full",
@@ -705,22 +705,31 @@ def download_backup(slug: str, dest: Path, opener=urllib.request.urlopen) -> int
 	return size
 
 
+SEED_REFRESH = "refresh"
+
+
 def send_seed(portal: "Portal", request_id: str, data_dir: Path = DATA_DIR,
               call=_supervisor_call, download=download_backup,
-              allowed: Optional[list] = None) -> tuple[str, list]:
+              allowed: Optional[list] = None, kind: str = "fill") -> tuple[str, list]:
 	"""Make, send and clean up the seed. Returns what happened.
 
 	Only the add-ons the standby will run (``allowed``, None for all), and
-	ours: an add-on it never starts is not worth sending.
+	ours: an add-on it never starts is not worth sending. A *refresh* --
+	sent whenever the home moves, so a Matter device paired on one install
+	is on the other afterwards -- is the add-ons' data alone: no folders,
+	and not ours, whose data is each install's own.
 	"""
 	key = secrets.token_urlsafe(32)
 	local = data_dir / SEED_FILE
 	slug = None
+	refresh = kind == SEED_REFRESH
 	try:
 		addons = installed_addons(call)
 		if addons is not None:
-			addons = [a for a in addons if a.endswith("_vome") or addon_allowed(a, allowed)]
-		slug = make_seed_backup(key, seed_backup_name(request_id), call, addons)
+			addons = [a for a in addons
+			          if (not refresh and a.endswith("_vome")) or
+			          (not a.endswith("_vome") and addon_allowed(a, allowed))]
+		slug = make_seed_backup(key, seed_backup_name(request_id), call, addons, folders=not refresh)
 		size = download(slug, local)
 		portal.upload_seed(request_id, local, size, key)
 		return f"seed sent ({size} bytes)", holdable(addons)
@@ -745,11 +754,12 @@ def maybe_send_seed(portal: "Portal", info: dict, state: dict, state_path: Path,
 			now - float(state.get("seed_failed_at") or 0) < SEED_RETRY_SECONDS:
 		return None
 	allowed = (info.get("seed") or {}).get("addons")
+	kind = str((info.get("seed") or {}).get("kind") or "fill")
 	try:
 		if sender:
 			outcome = sender(portal, request_id, data_dir)
 		else:
-			outcome = send_seed(portal, request_id, data_dir, allowed=allowed)
+			outcome = send_seed(portal, request_id, data_dir, allowed=allowed, kind=kind)
 	except (SeedFailed, urllib.error.URLError, OSError) as exc:
 		# Kept, and shown in the panel: on GamlaBio the first seed failed and
 		# nothing anywhere said why (it was nginx's 413).

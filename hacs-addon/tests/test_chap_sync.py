@@ -1029,6 +1029,27 @@ class TestSeedRestore:
 		assert made["addons"] == ["b1bff62e_vome", "5c53de3b_esphome"]
 		assert held == ["5c53de3b_esphome"]
 
+	def test_a_refresh_carries_the_add_ons_data_only(self, tmp_path):
+		"""Sent whenever the home moves, so a Matter device paired on one
+		install is on the other: no folders, and not ours."""
+		made = {}
+		def call(method, path, body=None, timeout=60):
+			if path == "/addons":
+				return 200, {"data": {"addons": [
+					{"slug": "b1bff62e_vome", "state": "started"},
+					{"slug": "core_matter_server", "state": "started"},
+					{"slug": "x_jellyfin", "state": "started"}]}}
+			if path == "/backups/new/partial":
+				made.update(body)
+				return 200, {"data": {"slug": "bk1"}}
+			return 200, {}
+		class P:
+			def upload_seed(self, *a):
+				pass
+		download = lambda slug, dest: dest.write_bytes(b"x") or 1
+		cs.send_seed(P(), "r2", tmp_path, call, download, allowed=None, kind="refresh")
+		assert made["addons"] == ["core_matter_server", "x_jellyfin"] and made["folders"] == []
+
 	def test_the_add_on_list_is_reported_when_it_changes(self, tmp_path):
 		sent = []
 		class P:
