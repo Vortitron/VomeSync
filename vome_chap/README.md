@@ -3,7 +3,7 @@
 Companion to the **Vome** add-on for homes protected by Vome CHAP: a copy of
 your Home Assistant that Vome keeps ready to take over if this machine fails.
 
-It does three things, only once this install has been paired from the Vome
+It does four things, only once this install has been paired from the Vome
 portal (Standby sync):
 
 - **Keeps the standby in step.** Your configuration is sent whenever it
