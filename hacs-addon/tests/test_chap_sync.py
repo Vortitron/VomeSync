@@ -955,7 +955,7 @@ class TestSeedRestore:
 		assert ("POST", "/addons/x_transmission/options", {"boot": "manual"}) in calls
 		calls.clear()
 		assert cs.enforce_addons("standby", state, state_path, call) is None and calls == []  # once
-		assert cs.enforce_addons("active", state, state_path, call).startswith("started 2")
+		assert cs.enforce_addons("active", state, state_path, call).startswith("running 2 of 2")
 		assert ("POST", "/addons/core_matter_server/start", None) in calls
 		assert cs.enforce_addons("standby", state, state_path, call).startswith("stopped")  # handed back
 
@@ -963,7 +963,86 @@ class TestSeedRestore:
 		state = {"held_addons": ["a"], "held_addons_running": None}
 		fails = lambda method, path, body=None, timeout=60: (500, None) if path.endswith("/stop") else (200, {})
 		assert "will retry" in cs.enforce_addons("standby", state, tmp_path / "s.json", fails)
-		assert state["held_addons_running"] is None
+		assert "held_addons_target" not in state
+
+	def test_starting_add_ons_never_holds_up_the_poll(self, tmp_path):
+		"""The GamlaBio fallback took over, then spent over a quarter of an
+		hour starting 11 add-ons at up to 5 min each (one stuck in
+		"startup") without polling Vome once, so it could not have heard
+		"stop". Each start is asked briefly and a pass has a budget; the
+		rest is carried on next pass."""
+		now = [0.0]
+		asked = []
+		def call(method, path, body=None, timeout=60):
+			if path.endswith("/start"):
+				asked.append((path, timeout))
+				now[0] += timeout  # Supervisor never answers in time
+				return 0, None
+			return 200, {"data": {"state": "stopped"}}
+		held = [f"a{i}" for i in range(11)]
+		state = {"held_addons": held, "held_addons_running": None}
+		note = cs.enforce_addons("active", state, tmp_path / "s.json", call, clock=lambda: now[0])
+		assert "will retry" in note and state["held_addons_running"] is None
+		assert all(t == cs.ADDON_ASK_SECONDS for _p, t in asked)
+		assert now[0] <= cs.ADDON_PASS_SECONDS + cs.ADDON_ASK_SECONDS
+		assert len(asked) < len(held)
+
+	def test_a_standby_runs_only_the_add_ons_the_owner_chose(self, tmp_path):
+		"""GamlaBio's 2 GB fallback started all eleven of the home's add-ons
+		and the OOM killer took Home Assistant. A held add-on outside the
+		owner's list stays stopped even while this install runs the home."""
+		calls = []
+		def call(method, path, body=None, timeout=60):
+			calls.append((method, path))
+			return 200, {"data": {"state": "unknown"}}
+		state = {"held_addons": ["5c53de3b_esphome", "a0d7b954_nodered", "x_jellyfin"]}
+		note = cs.enforce_addons("active", state, tmp_path / "s.json", call, allowed=["*_esphome"])
+		assert note.startswith("running 1 of 3")
+		assert ("POST", "/addons/5c53de3b_esphome/start") in calls
+		assert ("POST", "/addons/x_jellyfin/stop") in calls and ("POST", "/addons/x_jellyfin/start") not in calls
+		calls.clear()
+		assert cs.enforce_addons("active", state, tmp_path / "s.json", call, allowed=["*_esphome"]) is None
+		assert calls == []
+		# The owner adds Node-RED: it is started, the rest left alone.
+		assert cs.enforce_addons("active", state, tmp_path / "s.json", call,
+		                         allowed=["*_esphome", "a0d7b954_nodered"]).startswith("running 2 of 3")
+		assert ("POST", "/addons/a0d7b954_nodered/start") in calls
+
+	def test_the_seed_carries_only_what_the_standby_will_run(self, tmp_path):
+		made = {}
+		def call(method, path, body=None, timeout=60):
+			if path == "/addons":
+				return 200, {"data": {"addons": [
+					{"slug": "b1bff62e_vome", "state": "started"},
+					{"slug": "b1bff62e_vome_chap", "state": "started"},
+					{"slug": "5c53de3b_esphome", "state": "started"},
+					{"slug": "x_jellyfin", "state": "started"}]}}
+			if path == "/backups/new/partial":
+				made.update(body)
+				return 200, {"data": {"slug": "bk1"}}
+			return 200, {}
+		class P:
+			def upload_seed(self, *a):
+				pass
+		download = lambda slug, dest: dest.write_bytes(b"x") or 1
+		note, held = cs.send_seed(P(), "r1", tmp_path, call, download, allowed=["*_esphome"])
+		assert made["addons"] == ["b1bff62e_vome", "5c53de3b_esphome"]
+		assert held == ["5c53de3b_esphome"]
+
+	def test_the_add_on_list_is_reported_when_it_changes(self, tmp_path):
+		sent = []
+		class P:
+			def report_addons(self, addons):
+				sent.append(addons)
+				return True
+		listing = {"data": {"addons": [{"slug": "a", "name": "A", "state": "started"}]}}
+		call = lambda method, path, body=None, timeout=60: (200, listing)
+		state = {}
+		assert cs.maybe_report_addons(P(), state, tmp_path / "s.json", 1000, call).startswith("listed 1")
+		assert cs.maybe_report_addons(P(), state, tmp_path / "s.json", 1060, call) is None
+		listing["data"]["addons"].append({"slug": "b", "name": "B", "state": "stopped"})
+		assert cs.maybe_report_addons(P(), state, tmp_path / "s.json", 1120, call).startswith("listed 2")
+		assert len(sent) == 2
 
 	def test_the_sender_holds_the_same_add_ons(self, tmp_path):
 		"""Symmetric: after a seed the same add-ons exist on both sides, and
@@ -971,9 +1050,9 @@ class TestSeedRestore:
 		state = {}
 		sent = lambda portal, rid, data_dir: ("seed sent (3 bytes)", ["core_matter_server"])
 		cs.maybe_send_seed(None, {"seed": {"request": "r1"}}, state, tmp_path / "s.json", 1000, tmp_path, sent)
-		assert state["held_addons"] == ["core_matter_server"] and state["held_addons_running"] is None
+		assert state["held_addons"] == ["core_matter_server"] and "held_addons_target" not in state
 		ok = lambda method, path, body=None, timeout=60: (200, {})
-		assert cs.enforce_addons("active", state, tmp_path / "s.json", ok).startswith("started")
+		assert cs.enforce_addons("active", state, tmp_path / "s.json", ok).startswith("running")
 
 	def test_our_own_add_ons_are_never_held(self, tmp_path):
 		restored = lambda p, sid: ("seed restored", ["b1bff62e_vome", "core_mosquitto"])
@@ -990,7 +1069,7 @@ class TestSeedRestore:
 				return 200, {"data": {"state": "started"}}
 			return 400, None  # Supervisor: already running
 		state = {"held_addons": ["a"], "held_addons_running": None}
-		assert cs.enforce_addons("active", state, tmp_path / "s.json", call).startswith("started")
+		assert cs.enforce_addons("active", state, tmp_path / "s.json", call).startswith("running")
 		assert ("POST", "/addons/a/start") not in calls
 
 	def test_nothing_held_nothing_touched(self, tmp_path):
