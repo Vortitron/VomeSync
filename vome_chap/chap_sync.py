@@ -564,6 +564,47 @@ def enforce_addons(role: Optional[str], state: dict, state_path: Path,
 	return f"stopped {len(held)} add-on(s): this install is the standby one"
 
 
+ANNOUNCE_ID = "vome_chap_running_here"
+
+
+def maybe_announce(info: dict, state: dict, state_path: Path, now: float,
+                   call=None) -> Optional[str]:
+	"""Say in Home Assistant which install is running the home, when it moves.
+
+	Once, on the install that has just become the active one after standing
+	by, as soon as its Core answers. The owner on GamlaBio's first run could
+	not tell from the app which of the two they were looking at, and a
+	local fallback behaves differently (?external_auth links, add-ons it
+	does not run). A notification persists until dismissed and reaches the
+	companion app.
+	"""
+	role = info.get("role")
+	previous = state.get("last_role")
+	if role in (ROLE_ACTIVE, ROLE_STANDBY) and role != previous:
+		state["last_role"] = role
+		if role == ROLE_ACTIVE and previous == ROLE_STANDBY:
+			state["announce_pending"] = now
+		else:
+			state.pop("announce_pending", None)
+		save_json(state_path, state)
+	if role != ROLE_ACTIVE or not state.get("announce_pending"):
+		return None
+	names = info.get("names") or {}
+	this, other = names.get("this") or "this Home Assistant", names.get("other")
+	when = time.strftime("%H:%M", time.localtime(float(state["announce_pending"])))
+	message = (f"**{this}** is running your home now. Vome CHAP moved it here at {when}"
+	           + (f"; {other} is standing by with its Home Assistant stopped." if other else ".")
+	           + "\n\nSee both on Vome, under your server's CHAP panel.")
+	status, _ = (call or _supervisor_call)("POST", "/core/api/services/persistent_notification/create", {
+		"notification_id": ANNOUNCE_ID, "title": f"You are on {this}", "message": message,
+	}, timeout=15)
+	if status != 200:
+		return None  # Core not up yet; next pass
+	state.pop("announce_pending", None)
+	save_json(state_path, state)
+	return f"told Home Assistant it is {this}, running the home"
+
+
 def core_version(opener=urllib.request.urlopen) -> str:
 	status, body = _supervisor_get("/core/info", opener)
 	if status == 200 and isinstance(body, dict):
@@ -1252,6 +1293,9 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	addons_note = enforce_addons(role, state, state_path, allowed=info.get("standby_addons"))
 	if addons_note:
 		LOG.info("%s", addons_note)
+	announce_note = maybe_announce(info, state, state_path, now)
+	if announce_note:
+		LOG.info("%s", announce_note)
 	report_note = maybe_report_addons(portal, state, state_path, now)
 	if report_note:
 		LOG.info("%s", report_note)

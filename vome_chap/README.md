@@ -3,7 +3,7 @@
 Companion to the **Vome** add-on for homes protected by Vome CHAP: a copy of
 your Home Assistant that Vome keeps ready to take over if this machine fails.
 
-It does three things, only once this install has been paired from the Vome
+It does four things, only once this install has been paired from the Vome
 portal (Standby sync):
 
 - **Keeps the standby in step.** Your configuration is sent whenever it
@@ -11,7 +11,12 @@ portal (Standby sync):
   stopped.
 - **Follows a failover.** While the standby runs your home, Home Assistant
   here is stopped, so the two never act at once; it starts again when you
-  hand back, after taking any changes made while it was away.
+  hand back, after taking any changes made while it was away. The install
+  that takes over says so in a Home Assistant notification ("You are on
+  …"), so you can tell which one you are looking at.
+- **Keeps the standby's add-ons in step.** The add-ons you choose for the
+  standby (ESPHome, say) are sent across whenever your home moves and once a
+  day, so a Matter device paired on one install is on the other too.
 - **Fills the standby the first time**, with a one-off backup of your add-ons
   and folders, made under a throwaway key. The standby's own Vome CHAP fetches it and restores your
   add-ons and folders from it, but not Home Assistant itself, so the standby
