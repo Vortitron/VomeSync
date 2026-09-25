@@ -643,18 +643,38 @@ def addon_list(call=_supervisor_call) -> Optional[list]:
 	              key=lambda a: a["slug"])
 
 
+def network_addresses(call=_supervisor_call) -> list:
+	"""This install's IPv4 addresses, as ``[{interface, address}]``.
+
+	For the owner's picture of the pair on Vome: which address each install
+	has on the house network, and whether a hosted one reaches into it.
+	"""
+	_, info = call("GET", "/network/info", None, timeout=30)
+	found = ((info or {}).get("data") or {}).get("interfaces") if isinstance(info, dict) else None
+	out = []
+	for iface in found or []:
+		if not isinstance(iface, dict) or iface.get("connected") is False:
+			continue
+		for addr in ((iface.get("ipv4") or {}).get("address") or []):
+			if isinstance(addr, str) and addr:
+				out.append({"interface": str(iface.get("interface") or ""), "address": addr})
+	return out
+
+
 def maybe_report_addons(portal: "Portal", state: dict, state_path: Path, now: float,
                         call=_supervisor_call) -> Optional[str]:
 	"""Tell Vome which add-ons this install has, so the owner can choose
-	which the standby runs. Only when the list changed, or now and then."""
+	which the standby runs, and its addresses. Only when something changed,
+	or now and then."""
 	listed = addon_list(call)
 	if listed is None:
 		return None
-	digest = hashlib.sha256(json.dumps(listed, sort_keys=True).encode()).hexdigest()
+	network = network_addresses(call)
+	digest = hashlib.sha256(json.dumps([listed, network], sort_keys=True).encode()).hexdigest()
 	if state.get("addons_reported") == digest and \
 			now - float(state.get("addons_reported_at") or 0) < ADDON_REPORT_SECONDS:
 		return None
-	if not portal.report_addons(listed):
+	if not portal.report_addons(listed, network):
 		return None  # tried again next pass
 	state.update({"addons_reported": digest, "addons_reported_at": now})
 	save_json(state_path, state)
@@ -1003,8 +1023,8 @@ class Portal:
 			LOG.info("Portal not reachable for role: %s", exc)
 			return None
 
-	def report_addons(self, addons: list) -> bool:
-		body = json.dumps({"addons": addons}).encode()
+	def report_addons(self, addons: list, network: Optional[list] = None) -> bool:
+		body = json.dumps({"addons": addons, "network": network or []}).encode()
 		try:
 			with self._request("POST", API_ADDONS, body=body, timeout=30,
 			                   headers={"Content-Type": "application/json"}):

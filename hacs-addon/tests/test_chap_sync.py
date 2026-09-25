@@ -1053,17 +1053,23 @@ class TestSeedRestore:
 	def test_the_add_on_list_is_reported_when_it_changes(self, tmp_path):
 		sent = []
 		class P:
-			def report_addons(self, addons):
-				sent.append(addons)
+			def report_addons(self, addons, network=None):
+				sent.append((addons, network))
 				return True
 		listing = {"data": {"addons": [{"slug": "a", "name": "A", "state": "started"}]}}
-		call = lambda method, path, body=None, timeout=60: (200, listing)
+		net = {"data": {"interfaces": [
+			{"interface": "enp1s0", "connected": True, "ipv4": {"address": ["10.100.29.248/28"]}},
+			{"interface": "enp2s0", "connected": True, "ipv4": {"address": ["192.168.1.66/24"]}},
+			{"interface": "wlan0", "connected": False, "ipv4": {"address": ["10.0.0.9/24"]}}]}}
+		call = lambda method, path, body=None, timeout=60: (200, net if path == "/network/info" else listing)
 		state = {}
 		assert cs.maybe_report_addons(P(), state, tmp_path / "s.json", 1000, call).startswith("listed 1")
 		assert cs.maybe_report_addons(P(), state, tmp_path / "s.json", 1060, call) is None
 		listing["data"]["addons"].append({"slug": "b", "name": "B", "state": "stopped"})
 		assert cs.maybe_report_addons(P(), state, tmp_path / "s.json", 1120, call).startswith("listed 2")
 		assert len(sent) == 2
+		assert sent[0][1] == [{"interface": "enp1s0", "address": "10.100.29.248/28"},
+		                      {"interface": "enp2s0", "address": "192.168.1.66/24"}]
 
 	def test_the_sender_holds_the_same_add_ons(self, tmp_path):
 		"""Symmetric: after a seed the same add-ons exist on both sides, and
