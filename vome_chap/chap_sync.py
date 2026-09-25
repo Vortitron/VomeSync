@@ -72,6 +72,7 @@ API_SNAPSHOT = "/api/sync/chap/config/snapshot"
 API_APPLIED = "/api/sync/chap/config/applied"
 API_PAIR = "/api/sync/chap/config/pair"
 API_SEED = "/api/sync/chap/config/seed"
+API_ADDONS = "/api/sync/chap/config/addons"
 
 DEFAULT_INTERVAL = 300
 # Files Core rewrites on a timer whatever anyone does. They travel in every
@@ -519,28 +520,48 @@ def set_addons_running(slugs: list, running: bool, call=None,
 	return failed
 
 
+def addon_allowed(slug: str, allowed: Optional[list]) -> bool:
+	"""Is this add-on one the portal lets this install run? None: all.
+	An entry ``*suffix`` matches any slug ending in it (``*_esphome``)."""
+	if allowed is None:
+		return True
+	return any(slug.endswith(a[1:]) if a.startswith("*") else slug == a
+	           for a in allowed if isinstance(a, str) and a)
+
+
 def enforce_addons(role: Optional[str], state: dict, state_path: Path,
-                   call=None, clock: Callable[[], float] = time.monotonic) -> Optional[str]:
-	"""Run the home's add-ons only on the active side.
+                   call=None, clock: Callable[[], float] = time.monotonic,
+                   allowed: Optional[list] = None) -> Optional[str]:
+	"""Run the home's add-ons only on the active side, and only those allowed.
 
 	Only the add-ons this install was seeded with: they came from the other
 	install, carry its identity and data (a Matter controller, a torrent
 	client writing to the house NAS), and would otherwise run on both at
 	once -- the add-on form of two homes on one link. Started when this
 	side becomes active, stopped again when it goes back to standby.
+
+	``allowed`` is the owner's choice for a standby (the portal sends it):
+	a held add-on outside it stays stopped even here, so a small fallback is
+	not starved by services it does not need (GamlaBio, 25 Sept 2026: a 2 GB
+	fallback started all eleven and the OOM killer took Home Assistant).
 	"""
 	held = list(state.get("held_addons") or [])
 	if not held or role not in (ROLE_ACTIVE, ROLE_STANDBY):
 		return None
-	want = role == ROLE_ACTIVE
-	if state.get("held_addons_running") is want:
+	run = sorted(s for s in held if role == ROLE_ACTIVE and addon_allowed(s, allowed))
+	if state.get("held_addons_target") == run:
 		return None
-	failed = set_addons_running(held, want, call, clock)
+	stop = [s for s in held if s not in run]
+	# Stop first: it frees what the ones to start will need.
+	failed = set_addons_running(stop, False, call, clock) + set_addons_running(run, True, call, clock)
 	if failed:
-		return f"not yet {'started' if want else 'stopped'}: {', '.join(failed)}; will retry"
-	state["held_addons_running"] = want
+		return f"not yet as they should be: {', '.join(failed)}; will retry"
+	state["held_addons_target"] = run
+	state.pop("held_addons_running", None)
 	save_json(state_path, state)
-	return f"{'started' if want else 'stopped'} {len(held)} add-on(s): this install is the {role} one"
+	if role == ROLE_ACTIVE:
+		return f"running {len(run)} of {len(held)} held add-on(s): this install is the active one"
+	return f"stopped {len(held)} add-on(s): this install is the standby one"
 
 
 def core_version(opener=urllib.request.urlopen) -> str:
@@ -608,6 +629,38 @@ def installed_addons(call=_supervisor_call) -> Optional[list]:
 	        and a.get("state", "started") == "started"]
 
 
+ADDON_REPORT_SECONDS = 6 * 3600
+
+
+def addon_list(call=_supervisor_call) -> Optional[list]:
+	"""This install's add-ons as ``[{slug, name, state}]``; None if unknown."""
+	_, listed = call("GET", "/addons", None, timeout=60)
+	found = ((listed or {}).get("data") or {}).get("addons") if isinstance(listed, dict) else None
+	if found is None:
+		return None
+	return sorted(({"slug": a["slug"], "name": a.get("name") or a["slug"], "state": a.get("state") or ""}
+	               for a in found if isinstance(a, dict) and a.get("slug")),
+	              key=lambda a: a["slug"])
+
+
+def maybe_report_addons(portal: "Portal", state: dict, state_path: Path, now: float,
+                        call=_supervisor_call) -> Optional[str]:
+	"""Tell Vome which add-ons this install has, so the owner can choose
+	which the standby runs. Only when the list changed, or now and then."""
+	listed = addon_list(call)
+	if listed is None:
+		return None
+	digest = hashlib.sha256(json.dumps(listed, sort_keys=True).encode()).hexdigest()
+	if state.get("addons_reported") == digest and \
+			now - float(state.get("addons_reported_at") or 0) < ADDON_REPORT_SECONDS:
+		return None
+	if not portal.report_addons(listed):
+		return None  # tried again next pass
+	state.update({"addons_reported": digest, "addons_reported_at": now})
+	save_json(state_path, state)
+	return f"listed {len(listed)} add-on(s) for Vome"
+
+
 def holdable(slugs) -> list:
 	"""The home's own add-ons: not ours, which carry no identity of the home."""
 	return sorted(s for s in slugs or [] if not s.endswith(("_vome", "_vome_chap")))
@@ -653,13 +706,20 @@ def download_backup(slug: str, dest: Path, opener=urllib.request.urlopen) -> int
 
 
 def send_seed(portal: "Portal", request_id: str, data_dir: Path = DATA_DIR,
-              call=_supervisor_call, download=download_backup) -> tuple[str, list]:
-	"""Make, send and clean up the seed. Returns what happened."""
+              call=_supervisor_call, download=download_backup,
+              allowed: Optional[list] = None) -> tuple[str, list]:
+	"""Make, send and clean up the seed. Returns what happened.
+
+	Only the add-ons the standby will run (``allowed``, None for all), and
+	ours: an add-on it never starts is not worth sending.
+	"""
 	key = secrets.token_urlsafe(32)
 	local = data_dir / SEED_FILE
 	slug = None
 	try:
 		addons = installed_addons(call)
+		if addons is not None:
+			addons = [a for a in addons if a.endswith("_vome") or addon_allowed(a, allowed)]
 		slug = make_seed_backup(key, seed_backup_name(request_id), call, addons)
 		size = download(slug, local)
 		portal.upload_seed(request_id, local, size, key)
@@ -684,8 +744,12 @@ def maybe_send_seed(portal: "Portal", info: dict, state: dict, state_path: Path,
 	if state.get("seed_failed_request") == request_id and \
 			now - float(state.get("seed_failed_at") or 0) < SEED_RETRY_SECONDS:
 		return None
+	allowed = (info.get("seed") or {}).get("addons")
 	try:
-		outcome = (sender or send_seed)(portal, request_id, data_dir)
+		if sender:
+			outcome = sender(portal, request_id, data_dir)
+		else:
+			outcome = send_seed(portal, request_id, data_dir, allowed=allowed)
 	except (SeedFailed, urllib.error.URLError, OSError) as exc:
 		# Kept, and shown in the panel: on GamlaBio the first seed failed and
 		# nothing anywhere said why (it was nginx's 413).
@@ -701,7 +765,7 @@ def maybe_send_seed(portal: "Portal", info: dict, state: dict, state_path: Path,
 	# same on both sides: they run only where the home is active, so a
 	# failover with this install still up does not leave two of each.
 	state["held_addons"] = sorted(set(state.get("held_addons") or []) | set(seeded))
-	state["held_addons_running"] = None
+	state.pop("held_addons_target", None)  # unknown: enforce on the next pass
 	save_json(state_path, state)
 	return outcome
 
@@ -785,7 +849,7 @@ def maybe_restore_seed(portal: "Portal", info: dict, state: dict, state_path: Pa
 	# The add-ons just restored are the home's services, and add-ons run
 	# whether Core does or not: held stopped until this side is active.
 	state["held_addons"] = sorted(set(state.get("held_addons") or []) | set(holdable(restored)))
-	state["held_addons_running"] = None  # unknown: enforce on the next pass
+	state.pop("held_addons_target", None)  # unknown: enforce on the next pass
 	state.pop("seed_restore_failed_id", None)
 	save_json(state_path, state)
 	return outcome
@@ -928,6 +992,16 @@ class Portal:
 		except (urllib.error.URLError, OSError, ValueError) as exc:
 			LOG.info("Portal not reachable for role: %s", exc)
 			return None
+
+	def report_addons(self, addons: list) -> bool:
+		body = json.dumps({"addons": addons}).encode()
+		try:
+			with self._request("POST", API_ADDONS, body=body, timeout=30,
+			                   headers={"Content-Type": "application/json"}):
+				return True
+		except (urllib.error.URLError, OSError) as exc:
+			LOG.info("Could not list add-ons for Vome: %s", exc)
+			return False
 
 	def upload(self, blob: bytes, meta: dict) -> dict:
 		with self._request("POST", API_SNAPSHOT, body=blob, timeout=300, headers={
@@ -1145,9 +1219,12 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	core_note = enforce_core(info.get("core"), state, state_path, core_stopped, set_running)
 	if core_note:
 		LOG.info("%s", core_note)
-	addons_note = enforce_addons(role, state, state_path)
+	addons_note = enforce_addons(role, state, state_path, allowed=info.get("standby_addons"))
 	if addons_note:
 		LOG.info("%s", addons_note)
+	report_note = maybe_report_addons(portal, state, state_path, now)
+	if report_note:
+		LOG.info("%s", report_note)
 
 	if role == ROLE_ACTIVE:
 		seed_note = maybe_send_seed(portal, info, state, state_path, now, data_dir)
@@ -1182,7 +1259,7 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 			LOG.info("%s", seed_note)
 			# The restore started the seeded add-ons; stop them now, not
 			# at the next check-in minutes later.
-			addons_note = enforce_addons(role, state, state_path)
+			addons_note = enforce_addons(role, state, state_path, allowed=info.get("standby_addons"))
 			if addons_note:
 				LOG.info("%s", addons_note)
 		latest = info.get("latest") or {}
