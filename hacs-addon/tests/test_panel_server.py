@@ -234,3 +234,59 @@ def test_finalise_link_start_rewrites_extra_keys_and_host_mismatch():
 	)
 	assert status == 200
 	assert body["portal_url"] == "https://staging.vome.io"
+
+
+class TestSettingTheIntegrationUp:
+	"""A fresh install had the integration copied in but never added, so
+	every vomesync.* call failed, the panel said "restart Home Assistant",
+	and no restart helped (a new standby install, 25 Sept 2026)."""
+
+	@pytest.fixture
+	def ha(self, monkeypatch):
+		state = {"entries": [], "calls": [], "flow_result": "create_entry", "service_ok": False}
+
+		def fake(method, path, body=None):
+			state["calls"].append((method, path, body))
+			if path.startswith("/config/config_entries/entry"):
+				return 200, [{"domain": "vomesync"}] * len(state["entries"])
+			if path == "/config/config_entries/flow":
+				return 200, {"type": "form", "flow_id": "f1", "step_id": "user"}
+			if path == "/config/config_entries/flow/f1":
+				if state["flow_result"] == "create_entry":
+					state["entries"].append("e1")
+					state["service_ok"] = True
+				return 200, {"type": state["flow_result"], "reason": "nope"}
+			if path.startswith("/services/vomesync/"):
+				if state["service_ok"]:
+					return 200, {"service_response": {"linked": False}}
+				return 400, {"raw": "400: Bad Request"}
+			return 404, {}
+
+		monkeypatch.setattr(server, "_ha_request", fake)
+		server._last_setup_attempt["at"] = 0.0
+		return state
+
+	def test_it_adds_the_integration_with_its_defaults_and_retries(self, ha):
+		status, payload = server.call_service_ready("get_remote_status", {})
+		assert status == 200 and server._unwrap(payload) == {"linked": False}
+		answers = [b for m, p, b in ha["calls"] if p == "/config/config_entries/flow/f1"]
+		assert answers == [server.VOME_FLOW_ANSWERS]
+		assert server.VOME_FLOW_ANSWERS["generate_new_key"] is True
+
+	def test_when_it_cannot_the_panel_says_what_to_do_not_restart(self, ha):
+		ha["flow_result"] = "abort"
+		status, body = server.call_service_ready("link_start", {})
+		assert status == 409 and body["setup_needed"] is True
+		assert "Add integration" in body["error"] and "estart" not in body["error"]
+
+	def test_an_integration_already_set_up_is_left_alone(self, ha):
+		ha["entries"] = ["e0"]
+		server.call_service_ready("get_remote_status", {})
+		assert not any(p == "/config/config_entries/flow" for _m, p, _b in ha["calls"])
+
+	def test_it_tries_at_most_once_a_minute(self, ha):
+		ha["flow_result"] = "abort"
+		server.call_service_ready("get_remote_status", {})
+		ha["calls"].clear()
+		server.call_service_ready("get_remote_status", {})
+		assert not any(p == "/config/config_entries/flow" for _m, p, _b in ha["calls"])

@@ -1163,7 +1163,10 @@
 			<div class="card">
 				<h2>Approve this Home Assistant</h2>
 				<ol class="steps">
-					<li>Open <a href="${escapeHtml(linkUrl)}" target="_blank" rel="noreferrer">${escapeHtml(host)}</a> and sign in to Vome — it links this code automatically.</li>
+					<li>Open <a href="${escapeHtml(linkUrl)}" target="_blank" rel="noreferrer">${escapeHtml(host)}</a> and sign in to Vome — it links this code automatically.
+						<div class="muted small">Nothing opened? (The Home Assistant app often will not open a new tab.) Copy this address into any browser:</div>
+						<div class="cmd-row"><input class="mono cmd" id="link-url" readonly value="${escapeHtml(linkUrl)}" onclick="this.select()"><button type="button" id="copy-url">Copy</button></div>
+					</li>
 					<li>On a different device? Enter this code by hand instead:
 						<div class="cmd-row"><input class="mono cmd" id="link-code" readonly value="${escapeHtml(linkFlow.userCode)}" onclick="this.select()"><button type="button" id="copy-code">Copy</button></div>
 					</li>
@@ -1182,6 +1185,17 @@
 				i.select();
 				try {
 					if (document.execCommand("copy")) showBanner("Code copied to clipboard.");
+				} catch (_err) { /* selection is enough */ }
+			};
+		}
+const cu = document.getElementById("copy-url");
+		if (cu) {
+			cu.onclick = () => {
+				const i = document.getElementById("link-url");
+				i.focus();
+				i.select();
+				try {
+					if (document.execCommand("copy")) showBanner("Address copied to clipboard.");
 				} catch (_err) { /* selection is enough */ }
 			};
 		}

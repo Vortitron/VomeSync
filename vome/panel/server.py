@@ -69,6 +69,82 @@ def call_service(service: str, data: Optional[dict] = None) -> tuple[int, Any]:
 	return _ha_request("POST", path, data or {})
 
 
+# ── Setting the integration up, so nobody has to ──────────────────────────
+#
+# The add-on copies the Vome integration into Home Assistant, but Home
+# Assistant only loads an integration someone has added (a config entry).
+# On a fresh install nobody had, so every vomesync.* call failed, the panel
+# read that as "restart Home Assistant", and no restart ever helped -- found
+# on a new standby install, 25 Sept 2026. Now the panel adds it itself,
+# answering the integration's own setup form with its defaults: a new signing
+# key, Vome's default servers, no switch to follow.
+
+VOME_FLOW_ANSWERS = {"generate_new_key": True, "use_default_urls": True, "uid": ""}
+SETUP_RETRY_SECONDS = 60
+_last_setup_attempt = {"at": 0.0}
+MANUAL_SETUP = (
+	"Home Assistant has not set up the Vome integration yet. Add it: Settings \u2192 "
+	"Devices & services \u2192 Add integration \u2192 Vome, then come back here."
+)
+
+
+def vome_entry_count() -> Optional[int]:
+	"""How many Vome config entries Home Assistant has; None if it would not say."""
+	status, body = _ha_request("GET", "/config/config_entries/entry?domain=vomesync")
+	if status != 200 or not isinstance(body, list):
+		return None
+	return sum(1 for e in body if isinstance(e, dict) and e.get("domain") == "vomesync")
+
+
+def ensure_vome_entry(now: Optional[float] = None) -> tuple[bool, str]:
+	"""Add the Vome integration if Home Assistant has none. ``(added, why_not)``."""
+	import time as _time
+	now = now if now is not None else _time.time()
+	if now - _last_setup_attempt["at"] < SETUP_RETRY_SECONDS:
+		return False, "tried a moment ago"
+	_last_setup_attempt["at"] = now
+	count = vome_entry_count()
+	if count is None:
+		return False, "Home Assistant would not list its integrations"
+	if count:
+		return False, "already set up"
+	status, flow = _ha_request("POST", "/config/config_entries/flow",
+	                           {"handler": "vomesync", "show_advanced_options": False})
+	if status != 200 or not isinstance(flow, dict):
+		return False, f"could not start the setup (HTTP {status})"
+	if flow.get("type") == "form" and flow.get("flow_id"):
+		status, flow = _ha_request("POST", f"/config/config_entries/flow/{flow['flow_id']}",
+		                           VOME_FLOW_ANSWERS)
+	if isinstance(flow, dict) and flow.get("type") == "create_entry":
+		LOG.info("Added the Vome integration to Home Assistant")
+		return True, ""
+	reason = (flow.get("reason") or flow.get("type")) if isinstance(flow, dict) else status
+	return False, f"the setup did not finish ({reason})"
+
+
+def _service_missing(status: int, body: Any) -> bool:
+	"""A vomesync call that failed because the integration is not loaded."""
+	if status not in (400, 404):
+		return False
+	text = json.dumps(body) if not isinstance(body, str) else body
+	return "not found" in text.lower() or "bad request" in text.lower() or status == 404 \
+		or "no vome" in text.lower() or "entry" in text.lower()
+
+
+def call_service_ready(service: str, data: Optional[dict] = None) -> tuple[int, Any]:
+	"""call_service, setting the integration up first if that is what is missing."""
+	status, payload = call_service(service, data)
+	if not _service_missing(status, _unwrap(payload)):
+		return status, payload
+	added, why = ensure_vome_entry()
+	if added:
+		return call_service(service, data)
+	if why in ("already set up", "tried a moment ago"):
+		return status, payload
+	LOG.warning("Could not add the Vome integration: %s", why)
+	return 409, {"error": MANUAL_SETUP, "setup_needed": True, "detail": why}
+
+
 def _manifest_version(path: str) -> str:
 	"""Read a vomesync manifest.json version, '' if unreadable."""
 	try:
@@ -486,7 +562,7 @@ class PanelHandler(BaseHTTPRequestHandler):
 			self._serve_static(name, ctype)
 			return
 		if path == "/api/status":
-			status, payload = call_service("get_remote_status", {})
+			status, payload = call_service_ready("get_remote_status", {})
 			body = _unwrap(payload)
 			if isinstance(body, dict):
 				body = {**body, **installed_versions()}
@@ -595,7 +671,7 @@ class PanelHandler(BaseHTTPRequestHandler):
 			self._send_json(404, {"error": "not found"})
 			return
 		service, data = mapping[path]
-		status, payload = call_service(service, data)
+		status, payload = call_service_ready(service, data)
 		body = _unwrap(payload)
 		if path == "/api/link/start":
 			status, body = finalise_link_start(status, body, data)
