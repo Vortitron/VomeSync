@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome CHAP
-version: "0.1.12"
+version: "0.1.13"
 slug: vome_chap
 description: >
   Keeps a Vome CHAP standby of this Home Assistant ready to take over:
@@ -19,6 +19,9 @@ init: false
 # installs Vome alone and never grants it.
 hassio_api: true
 hassio_role: manager
+# To tell you, in Home Assistant, which install is running your home after
+# CHAP moves it ("You are on GamlaBio.local").
+homeassistant_api: true
 map:
   - homeassistant_config:rw
   # A standby puts its seed here for the Supervisor to restore.

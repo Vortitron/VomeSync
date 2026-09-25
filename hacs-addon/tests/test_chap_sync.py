@@ -1142,3 +1142,42 @@ class TestProbeEdge:
 		assert state["edge_reachable"] is True and asked == []
 		cs.watch_primary(state, 1060, lambda u: False, lambda u: asked.append(u) or True)
 		assert state["edge_reachable"] is True and state["primary_reachable"] is False and asked == ["https://h/"]
+
+
+class TestAnnounce:
+	"""The owner could not tell from the app which install they were on after
+	a takeover. The one that has just become active says so, once."""
+
+	def _call(self, answers):
+		posted = []
+		def call(method, path, body=None, timeout=60):
+			posted.append((path, body))
+			return (answers.pop(0) if answers else 200), None
+		return call, posted
+
+	def test_a_standby_taking_over_says_which_it_is(self, tmp_path):
+		state, path = {}, tmp_path / "s.json"
+		info = {"role": "standby", "names": {"this": "GamlaBio.local", "other": "GamlaBio Hosted"}}
+		call, posted = self._call([502, 200])
+		assert cs.maybe_announce(info, state, path, 1000, call) is None and posted == []
+		info["role"] = "active"
+		assert cs.maybe_announce(info, state, path, 1060, call) is None  # Core not up yet
+		note = cs.maybe_announce(info, state, path, 1090, call)
+		assert note and "GamlaBio.local" in note
+		path_, body = posted[-1]
+		assert path_ == "/core/api/services/persistent_notification/create"
+		assert body["title"] == "You are on GamlaBio.local" and "GamlaBio Hosted is standing by" in body["message"]
+		assert cs.maybe_announce(info, state, path, 1120, call) is None and len(posted) == 2  # once
+
+	def test_an_install_that_was_always_active_says_nothing(self, tmp_path):
+		call, posted = self._call([])
+		state = {}
+		assert cs.maybe_announce({"role": "active"}, state, tmp_path / "s.json", 1000, call) is None
+		assert posted == []
+
+	def test_going_back_to_standby_forgets_an_unsent_one(self, tmp_path):
+		call, posted = self._call([502])
+		state = {"last_role": "standby"}
+		cs.maybe_announce({"role": "active"}, state, tmp_path / "s.json", 1000, call)
+		cs.maybe_announce({"role": "standby"}, state, tmp_path / "s.json", 1030, call)
+		assert "announce_pending" not in state
