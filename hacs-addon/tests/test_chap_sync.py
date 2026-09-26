@@ -1065,6 +1065,9 @@ class TestSeedRestore:
 		state = {}
 		assert cs.maybe_report_addons(P(), state, tmp_path / "s.json", 1000, call).startswith("listed 1")
 		assert cs.maybe_report_addons(P(), state, tmp_path / "s.json", 1060, call) is None
+		# Vome asks when its copy is missing or stale: sent even unchanged.
+		assert cs.maybe_report_addons(P(), state, tmp_path / "s.json", 1070, call, asked=True).startswith("listed 1")
+		sent.pop()
 		listing["data"]["addons"].append({"slug": "b", "name": "B", "state": "stopped"})
 		assert cs.maybe_report_addons(P(), state, tmp_path / "s.json", 1120, call).startswith("listed 2")
 		assert len(sent) == 2
