@@ -34,6 +34,7 @@ Stdlib only: the add-on image is built without network access.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import io
 import json
 import logging
@@ -603,6 +604,135 @@ def maybe_announce(info: dict, state: dict, state_path: Path, now: float,
 	state.pop("announce_pending", None)
 	save_json(state_path, state)
 	return f"told Home Assistant it is {this}, running the home"
+
+
+# ── The home's address on the house network ───────────────────────────────
+#
+# Owner, 26 Sept 2026: "We need a way of internally addressing so that in the
+# case of the internet going down, when the local one takes over it needs to
+# connect via local ... something that is consistent so the app just works and
+# connects to whichever is the running one." The owner names an address (on
+# GamlaBio, 192.168.1.15, which the house has always used); whichever install
+# runs the home holds it as an extra address, the other lets it go. Vome says
+# which on every check-in; an install that takes over on its own because
+# Vome cannot be reached takes it from what it last heard.
+
+
+def _interface_for(address: str, interfaces: list) -> Optional[dict]:
+	"""The connected interface already on the address's network, if any."""
+	try:
+		network = ipaddress.ip_interface(address).network
+	except ValueError:
+		return None
+	for iface in interfaces or []:
+		if not isinstance(iface, dict) or iface.get("connected") is False:
+			continue
+		for addr in ((iface.get("ipv4") or {}).get("address") or []):
+			try:
+				if ipaddress.ip_interface(addr).network == network:
+					return iface
+			except ValueError:
+				continue
+	return None
+
+
+def enforce_home_address(info: Optional[dict], state: dict, state_path: Path,
+                         call=None, hold: Optional[bool] = None) -> Optional[str]:
+	"""Hold the home's address while this install runs the home; else let it go.
+
+	Only on an interface with a fixed address (changing a DHCP one to fixed
+	is the owner's decision, not ours), and never the interface's only
+	address. ``info`` None means Vome cannot be reached: the last word it
+	gave is used, and ``hold`` says what to do (a local takeover holds it).
+	"""
+	call = call or _supervisor_call
+	if info is not None:
+		state["home_address"] = info.get("home_address") or None
+	home = state.get("home_address") or {}
+	address = home.get("address")
+	if not address:
+		return None
+	want = bool(home.get("hold")) if hold is None else hold
+	_, body = call("GET", "/network/info", None, timeout=30)
+	interfaces = ((body or {}).get("data") or {}).get("interfaces") if isinstance(body, dict) else None
+	iface = _interface_for(address, interfaces)
+	if not iface:
+		return _note_once(state, state_path, f"home address {address}: no interface on its network here")
+	ipv4 = iface.get("ipv4") or {}
+	current = [a for a in (ipv4.get("address") or []) if isinstance(a, str)]
+	target = ipaddress.ip_interface(address).ip
+	has = any(ipaddress.ip_interface(a).ip == target for a in current)
+	if has == want:
+		state.pop("home_address_note", None)
+		return None
+	if ipv4.get("method") != "static":
+		return _note_once(state, state_path, f"home address {address}: {iface.get('interface')} has no fixed "
+		                                     "address, so the home's address cannot be added to it")
+	new = current + [address] if want else [a for a in current if ipaddress.ip_interface(a).ip != target]
+	if not new:
+		return _note_once(state, state_path, f"home address {address}: it is this interface's only address; "
+		                                     "not removing it")
+	update = {"method": "static", "address": new, "nameservers": ipv4.get("nameservers") or []}
+	if ipv4.get("gateway"):
+		update["gateway"] = ipv4["gateway"]
+	status, _ = call("POST", f"/network/interface/{iface.get('interface')}/update", {"ipv4": update}, timeout=90)
+	if status != 200:
+		return f"could not {'take' if want else 'release'} the home's address {target} (HTTP {status}); will retry"
+	state.pop("home_address_note", None)
+	save_json(state_path, state)
+	return f"{'took' if want else 'released'} the home's address {target} on {iface.get('interface')}"
+
+
+def _note_once(state: dict, state_path: Path, note: str) -> Optional[str]:
+	if state.get("home_address_note") == note:
+		return None
+	state["home_address_note"] = note
+	save_json(state_path, state)
+	return note
+
+
+# ── Full-UI forwarding, when the owner turns it on from Vome ──────────────
+#
+# A hosted home's address reaches its VM directly, so its Vome integration
+# never needed "full-UI forwarding" -- until a local fallback took over and
+# the address went over the relay to an install that refused it (GamlaBio,
+# 26 Sept 2026). The owner turns it on from the CHAP page; the running
+# install sets its Vome integration's option, and the setting travels to the
+# other install with the configuration.
+
+
+def ensure_forward_ui(info: dict, state: dict, state_path: Path, call=None) -> Optional[str]:
+	call = call or _supervisor_call
+	if not info.get("forward_ui") or info.get("role") != ROLE_ACTIVE or state.get("forward_ui_set"):
+		return None
+	_, entries = call("GET", "/core/api/config/config_entries/entry?domain=vomesync", None, timeout=30)
+	entry = next((e for e in (entries or []) if isinstance(e, dict) and e.get("domain") == "vomesync"), None) \
+		if isinstance(entries, list) else None
+	if not entry:
+		return None  # Core not up yet, or no Vome entry: next pass
+	status, flow = call("POST", "/core/api/config/config_entries/options/flow",
+	                    {"handler": entry["entry_id"]}, timeout=30)
+	flow_id = (flow or {}).get("flow_id") if isinstance(flow, dict) else None
+	if status != 200 or not flow_id:
+		return None
+	status, form = call("POST", f"/core/api/config/config_entries/options/flow/{flow_id}",
+	                    {"next_step_id": "remote_access"}, timeout=30)
+	fields = {f.get("name"): f for f in ((form or {}).get("data_schema") or [])} if isinstance(form, dict) else {}
+	if status != 200 or "forward_ui" not in fields:
+		call("DELETE", f"/core/api/config/config_entries/options/flow/{flow_id}", None, timeout=30)
+		return "could not open the Vome integration's remote access settings; will retry"
+	if fields["forward_ui"].get("default") is True:
+		call("DELETE", f"/core/api/config/config_entries/options/flow/{flow_id}", None, timeout=30)
+	else:
+		answer = {"forward_ui": True}
+		if "manage_lan" in fields:
+			answer["manage_lan"] = bool(fields["manage_lan"].get("default"))
+		status, _ = call("POST", f"/core/api/config/config_entries/options/flow/{flow_id}", answer, timeout=60)
+		if status != 200:
+			return f"could not turn on full-UI forwarding (HTTP {status}); will retry"
+	state["forward_ui_set"] = True
+	save_json(state_path, state)
+	return "full-UI forwarding is on: the home's address reaches whichever install runs it"
 
 
 def core_version(opener=urllib.request.urlopen) -> str:
@@ -1274,6 +1404,11 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	if info is None:
 		note = maybe_take_over_locally(state, now, set_running)
 		save_json(state_path, state)
+		if state.get("took_over_locally"):
+			# Running the home with nobody to ask: answer on its address too.
+			address_note = enforce_home_address(None, state, state_path, hold=True)
+			if address_note:
+				LOG.warning("%s", address_note)
 		if note:
 			LOG.warning("%s", note)
 			return note, IDLE_INTERVAL
@@ -1299,6 +1434,12 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	announce_note = maybe_announce(info, state, state_path, now)
 	if announce_note:
 		LOG.info("%s", announce_note)
+	address_note = enforce_home_address(info, state, state_path)
+	if address_note:
+		LOG.info("%s", address_note)
+	forward_note = ensure_forward_ui(info, state, state_path)
+	if forward_note:
+		LOG.info("%s", forward_note)
 	report_note = maybe_report_addons(portal, state, state_path, now, asked=bool(info.get("report_addons")))
 	if report_note:
 		LOG.info("%s", report_note)
