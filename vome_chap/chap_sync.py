@@ -696,9 +696,12 @@ def network_addresses(call=_supervisor_call) -> list:
 	for iface in found or []:
 		if not isinstance(iface, dict) or iface.get("connected") is False:
 			continue
-		for addr in ((iface.get("ipv4") or {}).get("address") or []):
+		ipv4 = iface.get("ipv4") or {}
+		for addr in (ipv4.get("address") or []):
 			if isinstance(addr, str) and addr:
-				out.append({"interface": str(iface.get("interface") or ""), "address": addr})
+				out.append({"interface": str(iface.get("interface") or ""), "address": addr,
+				            # The router, for the picture: the house's way out.
+				            "gateway": ipv4.get("gateway") or None})
 	return out
 
 

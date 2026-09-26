@@ -1059,7 +1059,7 @@ class TestSeedRestore:
 		listing = {"data": {"addons": [{"slug": "a", "name": "A", "state": "started"}]}}
 		net = {"data": {"interfaces": [
 			{"interface": "enp1s0", "connected": True, "ipv4": {"address": ["10.100.29.248/28"]}},
-			{"interface": "enp2s0", "connected": True, "ipv4": {"address": ["192.168.1.66/24"]}},
+			{"interface": "enp2s0", "connected": True, "ipv4": {"address": ["192.168.1.66/24"], "gateway": "192.168.1.1"}},
 			{"interface": "wlan0", "connected": False, "ipv4": {"address": ["10.0.0.9/24"]}}]}}
 		call = lambda method, path, body=None, timeout=60: (200, net if path == "/network/info" else listing)
 		state = {}
@@ -1068,8 +1068,8 @@ class TestSeedRestore:
 		listing["data"]["addons"].append({"slug": "b", "name": "B", "state": "stopped"})
 		assert cs.maybe_report_addons(P(), state, tmp_path / "s.json", 1120, call).startswith("listed 2")
 		assert len(sent) == 2
-		assert sent[0][1] == [{"interface": "enp1s0", "address": "10.100.29.248/28"},
-		                      {"interface": "enp2s0", "address": "192.168.1.66/24"}]
+		assert sent[0][1] == [{"interface": "enp1s0", "address": "10.100.29.248/28", "gateway": None},
+		                      {"interface": "enp2s0", "address": "192.168.1.66/24", "gateway": "192.168.1.1"}]
 
 	def test_the_sender_holds_the_same_add_ons(self, tmp_path):
 		"""Symmetric: after a seed the same add-ons exist on both sides, and
