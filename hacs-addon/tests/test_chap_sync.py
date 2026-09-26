@@ -1184,3 +1184,100 @@ class TestAnnounce:
 		cs.maybe_announce({"role": "active"}, state, tmp_path / "s.json", 1000, call)
 		cs.maybe_announce({"role": "standby"}, state, tmp_path / "s.json", 1030, call)
 		assert "announce_pending" not in state
+
+
+class TestHomeAddress:
+	"""The home's house-network address follows whichever install runs it
+	(owner, 26 Sept 2026: the app must reach the running one at home, and
+	keep doing so when the internet is down and the local one took over)."""
+
+	def _supervisor(self, addresses, method="static"):
+		calls = []
+		net = {"data": {"interfaces": [
+			{"interface": "enp2s1", "connected": True,
+			 "ipv4": {"method": method, "address": list(addresses), "gateway": "192.168.1.1",
+			          "nameservers": ["192.168.1.1"]}}]}}
+		def call(m, path, body=None, timeout=60):
+			calls.append((m, path, body))
+			if path == "/network/info":
+				return 200, net
+			if path.endswith("/update"):
+				net["data"]["interfaces"][0]["ipv4"]["address"] = body["ipv4"]["address"]
+				return 200, {"result": "ok"}
+			return 404, None
+		return call, calls, net
+
+	def test_the_running_install_takes_it_and_the_other_lets_it_go(self, tmp_path):
+		call, calls, net = self._supervisor(["192.168.1.18/24"])
+		state, path = {}, tmp_path / "s.json"
+		info = {"home_address": {"address": "192.168.1.15/24", "hold": True}}
+		assert "took the home's address 192.168.1.15" in cs.enforce_home_address(info, state, path, call)
+		update = [c for c in calls if c[1].endswith("/update")][-1][2]["ipv4"]
+		assert update["address"] == ["192.168.1.18/24", "192.168.1.15/24"] and update["gateway"] == "192.168.1.1"
+		assert cs.enforce_home_address(info, state, path, call) is None  # already held
+		info["home_address"]["hold"] = False
+		assert "released" in cs.enforce_home_address(info, state, path, call)
+		assert net["data"]["interfaces"][0]["ipv4"]["address"] == ["192.168.1.18/24"]
+
+	def test_nothing_without_a_home_address(self, tmp_path):
+		boom = lambda *a, **k: pytest.fail("no Supervisor call without a home address")
+		assert cs.enforce_home_address({}, {}, tmp_path / "s.json", boom) is None
+
+	def test_never_the_only_address_and_never_a_dhcp_interface(self, tmp_path):
+		call, calls, _ = self._supervisor(["192.168.1.15/24"])
+		info = {"home_address": {"address": "192.168.1.15/24", "hold": False}}
+		assert "only address" in cs.enforce_home_address(info, {}, tmp_path / "s.json", call)
+		assert not [c for c in calls if c[1].endswith("/update")]
+		call, calls, _ = self._supervisor(["192.168.1.18/24"], method="auto")
+		info = {"home_address": {"address": "192.168.1.15/24", "hold": True}}
+		assert "no fixed" in cs.enforce_home_address(info, {}, tmp_path / "s.json", call)
+		assert not [c for c in calls if c[1].endswith("/update")]
+
+	def test_a_local_takeover_holds_it_from_what_vome_last_said(self, tmp_path):
+		call, _, net = self._supervisor(["192.168.1.18/24"])
+		state = {"home_address": {"address": "192.168.1.15/24", "hold": False}}
+		assert "took" in cs.enforce_home_address(None, state, tmp_path / "s.json", call, hold=True)
+		assert "192.168.1.15/24" in net["data"]["interfaces"][0]["ipv4"]["address"]
+
+
+class TestForwardUi:
+	"""The owner turns full-UI forwarding on from the CHAP page; the running
+	install sets its Vome integration's option (GamlaBio's address reached a
+	local install that refused it, 26 Sept 2026)."""
+
+	def _core(self, forward_default=False):
+		calls = []
+		def call(m, path, body=None, timeout=60):
+			calls.append((m, path, body))
+			if path.startswith("/core/api/config/config_entries/entry"):
+				return 200, [{"entry_id": "e1", "domain": "vomesync"}]
+			if path == "/core/api/config/config_entries/options/flow":
+				return 200, {"flow_id": "f1", "type": "menu"}
+			if path == "/core/api/config/config_entries/options/flow/f1" and body == {"next_step_id": "remote_access"}:
+				return 200, {"type": "form", "data_schema": [
+					{"name": "forward_ui", "default": forward_default}, {"name": "manage_lan", "default": True}]}
+			if path == "/core/api/config/config_entries/options/flow/f1":
+				return 200, {"type": "create_entry"}
+			return 200, None
+		return call, calls
+
+	def test_the_running_install_turns_it_on_once(self, tmp_path):
+		call, calls = self._core()
+		state = {}
+		info = {"forward_ui": True, "role": "active"}
+		assert "full-UI forwarding is on" in cs.ensure_forward_ui(info, state, tmp_path / "s.json", call)
+		assert ("POST", "/core/api/config/config_entries/options/flow/f1", {"forward_ui": True, "manage_lan": True}) in calls
+		n = len(calls)
+		assert cs.ensure_forward_ui(info, state, tmp_path / "s.json", call) is None and len(calls) == n
+
+	def test_only_when_asked_and_only_on_the_running_install(self, tmp_path):
+		boom = lambda *a, **k: pytest.fail("nothing to do")
+		assert cs.ensure_forward_ui({"role": "active"}, {}, tmp_path / "s.json", boom) is None
+		assert cs.ensure_forward_ui({"forward_ui": True, "role": "standby"}, {}, tmp_path / "s.json", boom) is None
+
+	def test_already_on_is_left_alone(self, tmp_path):
+		call, calls = self._core(forward_default=True)
+		state = {}
+		cs.ensure_forward_ui({"forward_ui": True, "role": "active"}, state, tmp_path / "s.json", call)
+		assert not [c for c in calls if c[2] and "forward_ui" in (c[2] or {})]
+		assert state["forward_ui_set"] is True
