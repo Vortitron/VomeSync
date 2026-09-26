@@ -670,7 +670,7 @@ def installed_addons(call=_supervisor_call) -> Optional[list]:
 	        and a.get("state", "started") == "started"]
 
 
-ADDON_REPORT_SECONDS = 6 * 3600
+ADDON_REPORT_SECONDS = 3600
 
 
 def addon_list(call=_supervisor_call) -> Optional[list]:
@@ -706,16 +706,16 @@ def network_addresses(call=_supervisor_call) -> list:
 
 
 def maybe_report_addons(portal: "Portal", state: dict, state_path: Path, now: float,
-                        call=_supervisor_call) -> Optional[str]:
+                        call=_supervisor_call, asked: bool = False) -> Optional[str]:
 	"""Tell Vome which add-ons this install has, so the owner can choose
-	which the standby runs, and its addresses. Only when something changed,
-	or now and then."""
+	which the standby runs, and its addresses. When something changed, when
+	Vome asks (``asked``: its copy is missing or stale), or hourly."""
 	listed = addon_list(call)
 	if listed is None:
 		return None
 	network = network_addresses(call)
 	digest = hashlib.sha256(json.dumps([listed, network], sort_keys=True).encode()).hexdigest()
-	if state.get("addons_reported") == digest and \
+	if not asked and state.get("addons_reported") == digest and \
 			now - float(state.get("addons_reported_at") or 0) < ADDON_REPORT_SECONDS:
 		return None
 	if not portal.report_addons(listed, network):
@@ -1299,7 +1299,7 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	announce_note = maybe_announce(info, state, state_path, now)
 	if announce_note:
 		LOG.info("%s", announce_note)
-	report_note = maybe_report_addons(portal, state, state_path, now)
+	report_note = maybe_report_addons(portal, state, state_path, now, asked=bool(info.get("report_addons")))
 	if report_note:
 		LOG.info("%s", report_note)
 
