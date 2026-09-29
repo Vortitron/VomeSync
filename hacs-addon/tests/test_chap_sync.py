@@ -1053,7 +1053,7 @@ class TestSeedRestore:
 	def test_the_add_on_list_is_reported_when_it_changes(self, tmp_path):
 		sent = []
 		class P:
-			def report_addons(self, addons, network=None):
+			def report_addons(self, addons, network=None, ha_port=None):
 				sent.append((addons, network))
 				return True
 		listing = {"data": {"addons": [{"slug": "a", "name": "A", "state": "started"}]}}
@@ -1073,6 +1073,27 @@ class TestSeedRestore:
 		assert len(sent) == 2
 		assert sent[0][1] == [{"interface": "enp1s0", "address": "10.100.29.248/28", "gateway": None},
 		                      {"interface": "enp2s0", "address": "192.168.1.66/24", "gateway": "192.168.1.1"}]
+
+	def test_it_reports_the_port_its_home_assistant_listens_on(self, tmp_path):
+		"""chap-test2, 29 Sept 2026: a fresh HA OS listened on 80, not 8123;
+		the other install of a house pair probes it there."""
+		sent = []
+
+		def call(method, path, body=None, timeout=60):
+			if path == "/core/info":
+				return 200, {"data": {"port": 80}}
+			if path == "/network/info":
+				return 200, {"data": {"interfaces": []}}
+			return 200, {"data": {"addons": [{"slug": "a", "name": "A", "state": "started"}]}}
+
+		class P:
+			def report_addons(self, addons, network=None, ha_port=None):
+				sent.append(ha_port)
+				return True
+
+		cs.maybe_report_addons(P(), {}, tmp_path / "s.json", 1000, call)
+		assert sent == [80]
+		assert cs.core_port(lambda *a, **k: (200, {"data": {"port": "x"}})) is None
 
 	def test_the_sender_holds_the_same_add_ons(self, tmp_path):
 		"""Symmetric: after a seed the same add-ons exist on both sides, and

@@ -835,6 +835,15 @@ def network_addresses(call=_supervisor_call) -> list:
 	return out
 
 
+def core_port(call=_supervisor_call) -> Optional[int]:
+	"""The port this install's Home Assistant listens on, as the Supervisor has
+	it -- not always 8123 (a fresh HA OS on chap-test2 used 80, 29 Sept 2026),
+	and the other install of a house pair probes it there."""
+	_, info = call("GET", "/core/info", None, timeout=30)
+	port = ((info or {}).get("data") or {}).get("port") if isinstance(info, dict) else None
+	return port if isinstance(port, int) and 0 < port < 65536 else None
+
+
 def maybe_report_addons(portal: "Portal", state: dict, state_path: Path, now: float,
                         call=_supervisor_call, asked: bool = False) -> Optional[str]:
 	"""Tell Vome which add-ons this install has, so the owner can choose
@@ -844,11 +853,12 @@ def maybe_report_addons(portal: "Portal", state: dict, state_path: Path, now: fl
 	if listed is None:
 		return None
 	network = network_addresses(call)
-	digest = hashlib.sha256(json.dumps([listed, network], sort_keys=True).encode()).hexdigest()
+	port = core_port(call)
+	digest = hashlib.sha256(json.dumps([listed, network, port], sort_keys=True).encode()).hexdigest()
 	if not asked and state.get("addons_reported") == digest and \
 			now - float(state.get("addons_reported_at") or 0) < ADDON_REPORT_SECONDS:
 		return None
-	if not portal.report_addons(listed, network):
+	if not portal.report_addons(listed, network, port):
 		return None  # tried again next pass
 	state.update({"addons_reported": digest, "addons_reported_at": now})
 	save_json(state_path, state)
@@ -1197,8 +1207,11 @@ class Portal:
 			LOG.info("Portal not reachable for role: %s", exc)
 			return None
 
-	def report_addons(self, addons: list, network: Optional[list] = None) -> bool:
-		body = json.dumps({"addons": addons, "network": network or []}).encode()
+	def report_addons(self, addons: list, network: Optional[list] = None, ha_port: Optional[int] = None) -> bool:
+		report = {"addons": addons, "network": network or []}
+		if ha_port:
+			report["ha_port"] = ha_port
+		body = json.dumps(report).encode()
 		try:
 			with self._request("POST", API_ADDONS, body=body, timeout=30,
 			                   headers={"Content-Type": "application/json"}):
