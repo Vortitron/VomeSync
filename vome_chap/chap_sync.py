@@ -735,6 +735,77 @@ def ensure_forward_ui(info: dict, state: dict, state_path: Path, call=None) -> O
 	return "full-UI forwarding is on: the home's address reaches whichever install runs it"
 
 
+# ── Keeping a standby updatable while it is stopped ──────────────────────
+#
+# chap-test, 29 Sept 2026: paired as the standby of an install on Home
+# Assistant 2026.9.4 while itself on 2026.9.3, it refused every snapshot
+# ("update Core first") -- rightly, an older Core handed newer .storage can
+# lose data -- and nothing could update it: its Home Assistant was stopped,
+# so the relay could not reach it and its owner could not open it, and its
+# own Vome CHAP (0.1.16) could not update itself either. The Supervisor can
+# do both with Home Assistant stopped, and this add-on can ask it.
+
+CORE_UPDATE_RETRY_SECONDS = 3600
+
+
+def follow_core(target: str, local: str, state: dict, state_path: Path, now: float,
+                call=None, core_stopped: Callable[[], bool] = None,
+                set_running: Callable[[bool], bool] = None) -> Optional[str]:
+	"""Update this standby's Core to the snapshot's version, then keep it stopped.
+
+	Only upwards, only to the version the running install is on, and at most
+	once an hour per version, so a failing update is not retried every pass.
+	Returns what happened, or None when there is nothing to do.
+	"""
+	call = call or _supervisor_call
+	core_stopped = core_stopped or core_is_stopped
+	set_running = set_running or set_core_running
+	want, have = parse_version(target), parse_version(local)
+	if not want or not have or want <= have:
+		return None
+	tried = state.get("core_update") or {}
+	if tried.get("version") == target and now - float(tried.get("at") or 0) < CORE_UPDATE_RETRY_SECONDS:
+		return (f"updating Home Assistant to {target} did not finish; "
+		        "trying again within the hour")
+	state["core_update"] = {"version": target, "at": now}
+	save_json(state_path, state)
+	LOG.info("Updating Home Assistant from %s to %s so this standby can take the running install's configuration",
+	         local, target)
+	status, _ = call("POST", "/core/update", {"version": target}, timeout=1800)
+	# An update may start Core; a standby stays stopped.
+	if not core_stopped():
+		set_running(False)
+	if status != 200:
+		return f"could not update Home Assistant to {target} (the Supervisor answered {status}); trying again within the hour"
+	return f"updated Home Assistant to {target}; taking the configuration next"
+
+
+def ensure_auto_update(state: dict, state_path: Path, call=None) -> Optional[str]:
+	"""Turn on the Supervisor's automatic updates for this add-on, once.
+
+	A standby's Home Assistant is stopped, so nobody can open it to update
+	its add-ons; without this, a fix to this add-on never reaches the one
+	install that needs it most.
+	"""
+	if state.get("auto_update_on"):
+		return None
+	call = call or _supervisor_call
+	status, body = call("GET", "/addons/self/info", None, timeout=30)
+	data = (body or {}).get("data") if isinstance(body, dict) else None
+	if status != 200 or not isinstance(data, dict):
+		return None
+	if data.get("auto_update") is not True:
+		status, _ = call("POST", "/addons/self/options", {"auto_update": True}, timeout=30)
+		if status != 200:
+			return None
+		note = "turned on automatic updates for Vome CHAP, so a stopped standby still gets them"
+	else:
+		note = None
+	state["auto_update_on"] = True
+	save_json(state_path, state)
+	return note
+
+
 def core_version(opener=urllib.request.urlopen) -> str:
 	status, body = _supervisor_get("/core/info", opener)
 	if status == 200 and isinstance(body, dict):
@@ -835,6 +906,15 @@ def network_addresses(call=_supervisor_call) -> list:
 	return out
 
 
+def core_port(call=_supervisor_call) -> Optional[int]:
+	"""The port this install's Home Assistant listens on, as the Supervisor has
+	it -- not always 8123 (a fresh HA OS on chap-test2 used 80, 29 Sept 2026),
+	and the other install of a house pair probes it there."""
+	_, info = call("GET", "/core/info", None, timeout=30)
+	port = ((info or {}).get("data") or {}).get("port") if isinstance(info, dict) else None
+	return port if isinstance(port, int) and 0 < port < 65536 else None
+
+
 def maybe_report_addons(portal: "Portal", state: dict, state_path: Path, now: float,
                         call=_supervisor_call, asked: bool = False) -> Optional[str]:
 	"""Tell Vome which add-ons this install has, so the owner can choose
@@ -844,11 +924,12 @@ def maybe_report_addons(portal: "Portal", state: dict, state_path: Path, now: fl
 	if listed is None:
 		return None
 	network = network_addresses(call)
-	digest = hashlib.sha256(json.dumps([listed, network], sort_keys=True).encode()).hexdigest()
+	port = core_port(call)
+	digest = hashlib.sha256(json.dumps([listed, network, port], sort_keys=True).encode()).hexdigest()
 	if not asked and state.get("addons_reported") == digest and \
 			now - float(state.get("addons_reported_at") or 0) < ADDON_REPORT_SECONDS:
 		return None
-	if not portal.report_addons(listed, network):
+	if not portal.report_addons(listed, network, port):
 		return None  # tried again next pass
 	state.update({"addons_reported": digest, "addons_reported_at": now})
 	save_json(state_path, state)
@@ -1197,8 +1278,11 @@ class Portal:
 			LOG.info("Portal not reachable for role: %s", exc)
 			return None
 
-	def report_addons(self, addons: list, network: Optional[list] = None) -> bool:
-		body = json.dumps({"addons": addons, "network": network or []}).encode()
+	def report_addons(self, addons: list, network: Optional[list] = None, ha_port: Optional[int] = None) -> bool:
+		report = {"addons": addons, "network": network or []}
+		if ha_port:
+			report["ha_port"] = ha_port
+		body = json.dumps(report).encode()
 		try:
 			with self._request("POST", API_ADDONS, body=body, timeout=30,
 			                   headers={"Content-Type": "application/json"}):
@@ -1424,6 +1508,9 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	save_json(state_path, state)
 	role = info.get("role")
 	interval = int(info.get("interval_seconds") or DEFAULT_INTERVAL)
+	update_note = ensure_auto_update(state, state_path)
+	if update_note:
+		LOG.info("%s", update_note)
 
 	core_note = enforce_core(info.get("core"), state, state_path, core_stopped, set_running)
 	if core_note:
@@ -1492,11 +1579,16 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 			# every pass: the portal starts Core only for a takeover, and
 			# then this side is no longer the standby.
 			return "standby: Core is running; not applying", interval
-		blocker = version_blocker(latest.get("ha_version") or "", local_version())
+		target = (latest.get("ha_version") or "").strip()
+		blocker = version_blocker(target, local_version())
 		if blocker:
-			portal.report_applied(latest["id"], False, blocker,
-			                      needs_core_version=(latest.get("ha_version") or "").strip())
-			return f"standby: {blocker}", interval
+			# Catch up rather than wait for someone to open a stopped install.
+			followed = follow_core(target, local_version(), state, state_path, now,
+			                       core_stopped=core_stopped, set_running=set_running)
+			portal.report_applied(latest["id"], False, followed or blocker, needs_core_version=target)
+			if followed and followed.startswith("updated"):
+				return f"standby: {followed}", 5
+			return f"standby: {followed or blocker}", interval
 		try:
 			blob, meta = portal.download()
 			if meta.get("id") and meta["id"] != latest["id"]:

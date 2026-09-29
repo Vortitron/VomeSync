@@ -374,14 +374,36 @@ class TestRunOnce:
 		assert (standby / "automations.yaml").read_text() == "[]\n"
 		assert portal.reports == []
 
-	def test_standby_on_an_older_core_refuses_and_says_why(self, tmp_path):
+	def test_standby_on_an_older_core_updates_it_and_stays_stopped(self, tmp_path, monkeypatch):
+		"""chap-test, 29 Sept 2026: on 2026.9.3 behind an install on 2026.9.4,
+		it refused every snapshot and nothing could update it -- stopped, so
+		unreachable over the relay and not openable by its owner."""
+		calls = []
+		monkeypatch.setattr(cs, "_supervisor_call",
+		                    lambda method, path, body=None, timeout=60: calls.append((method, path, body)) or (200, {}))
+		stops = []
 		portal, standby, data = self._standby_case(tmp_path, snapshot_version="2026.10.0")
-		cs.run_once(portal, standby, data,
-		            core_stopped=lambda: True, local_version=lambda: "2026.9.1")
-		assert (standby / "automations.yaml").read_text() == "[]\n"
-		assert portal.reports[0][1] is False
-		assert "update Core" in portal.reports[0][2]
+		answers = iter([True, False])  # stopped until the update, which starts it
+		cs.run_once(portal, standby, data, core_stopped=lambda: next(answers, False),
+		            local_version=lambda: "2026.9.1", set_running=lambda running: stops.append(running) or True)
+		assert ("POST", "/core/update", {"version": "2026.10.0"}) in calls
+		assert stops == [False]  # the update started Core; a standby stays stopped
+		assert (standby / "automations.yaml").read_text() == "[]\n"  # not applied until the next pass
+		assert portal.reports[0][1] is False and "updated Home Assistant to 2026.10.0" in portal.reports[0][2]
 		assert portal.needs == "2026.10.0"
+
+	def test_a_failed_core_update_is_said_and_not_retried_every_pass(self, tmp_path, monkeypatch):
+		calls = []
+		monkeypatch.setattr(cs, "_supervisor_call",
+		                    lambda method, path, body=None, timeout=60: calls.append(path) or (500, {}))
+		portal, standby, data = self._standby_case(tmp_path, snapshot_version="2026.10.0")
+		cs.run_once(portal, standby, data, core_stopped=lambda: True, local_version=lambda: "2026.9.1")
+		cs.run_once(portal, standby, data, core_stopped=lambda: True, local_version=lambda: "2026.9.1")
+		assert calls.count("/core/update") == 1
+		assert "could not update" in portal.reports[0][2] and "did not finish" in portal.reports[1][2]
+
+	def test_it_never_updates_core_downwards(self, tmp_path):
+		assert cs.follow_core("2026.9.1", "2026.10.0", {}, tmp_path / "s.json", 0) is None
 
 	def test_unknown_role_does_nothing(self, tmp_path):
 		portal, standby, data = self._standby_case(tmp_path)
@@ -1053,7 +1075,7 @@ class TestSeedRestore:
 	def test_the_add_on_list_is_reported_when_it_changes(self, tmp_path):
 		sent = []
 		class P:
-			def report_addons(self, addons, network=None):
+			def report_addons(self, addons, network=None, ha_port=None):
 				sent.append((addons, network))
 				return True
 		listing = {"data": {"addons": [{"slug": "a", "name": "A", "state": "started"}]}}
@@ -1073,6 +1095,27 @@ class TestSeedRestore:
 		assert len(sent) == 2
 		assert sent[0][1] == [{"interface": "enp1s0", "address": "10.100.29.248/28", "gateway": None},
 		                      {"interface": "enp2s0", "address": "192.168.1.66/24", "gateway": "192.168.1.1"}]
+
+	def test_it_reports_the_port_its_home_assistant_listens_on(self, tmp_path):
+		"""chap-test2, 29 Sept 2026: a fresh HA OS listened on 80, not 8123;
+		the other install of a house pair probes it there."""
+		sent = []
+
+		def call(method, path, body=None, timeout=60):
+			if path == "/core/info":
+				return 200, {"data": {"port": 80}}
+			if path == "/network/info":
+				return 200, {"data": {"interfaces": []}}
+			return 200, {"data": {"addons": [{"slug": "a", "name": "A", "state": "started"}]}}
+
+		class P:
+			def report_addons(self, addons, network=None, ha_port=None):
+				sent.append(ha_port)
+				return True
+
+		cs.maybe_report_addons(P(), {}, tmp_path / "s.json", 1000, call)
+		assert sent == [80]
+		assert cs.core_port(lambda *a, **k: (200, {"data": {"port": "x"}})) is None
 
 	def test_the_sender_holds_the_same_add_ons(self, tmp_path):
 		"""Symmetric: after a seed the same add-ons exist on both sides, and
@@ -1281,3 +1324,27 @@ class TestForwardUi:
 		cs.ensure_forward_ui({"forward_ui": True, "role": "active"}, state, tmp_path / "s.json", call)
 		assert not [c for c in calls if c[2] and "forward_ui" in (c[2] or {})]
 		assert state["forward_ui_set"] is True
+
+
+class TestAutoUpdate:
+	"""A stopped standby cannot be opened to update its add-ons, so this one
+	turns on the Supervisor's automatic updates for itself."""
+
+	def test_it_turns_them_on_once(self, tmp_path):
+		calls = []
+
+		def call(method, path, body=None, timeout=60):
+			calls.append((method, path, body))
+			return 200, {"data": {"auto_update": False}} if method == "GET" else {}
+
+		state = {}
+		assert "automatic updates" in cs.ensure_auto_update(state, tmp_path / "s.json", call)
+		assert ("POST", "/addons/self/options", {"auto_update": True}) in calls
+		assert cs.ensure_auto_update(state, tmp_path / "s.json", call) is None
+		assert len(calls) == 2
+
+	def test_already_on_is_left_alone(self, tmp_path):
+		calls = []
+		call = lambda method, path, body=None, timeout=60: calls.append(method) or (200, {"data": {"auto_update": True}})
+		assert cs.ensure_auto_update({}, tmp_path / "s.json", call) is None
+		assert calls == ["GET"]
