@@ -378,7 +378,23 @@ Redis backup and GDPR notes: **[VomeSync-server](https://github.com/Vortitron/Vo
 - **Website**: [sync.vome.io](https://sync.vome.io)
 
 ## License
-- Add-On: MIT License (open-source).
-- Server/Website: Proprietary, managed by [Your Name/Company].
+Everything in this repository -- the Vome add-on, the Vome CHAP add-on and
+the Home Assistant integration -- is under the
+[Functional Source License, Version 1.1, MIT Future License](LICENSE.md)
+(FSL-1.1-MIT) from 29 September 2026. In plain words:
+
+- **Use it freely.** At home, for your own Home Assistant, with Vome or
+  without it, for as long as you like: read it, run it, change it, share it.
+- **Don't compete with it.** You may not use it to offer a commercial
+  product or service that does what it does, or stands in for Vome.
+- **It becomes MIT.** Each release turns into plain MIT two years after it
+  is published.
+
+Releases published before 29 September 2026 were under the MIT License and
+stay under it. The license text is the one that governs; this summary is
+only a guide.
+
+The Vome website and servers (vome.io) are proprietary and not in this
+repository.
 
 _Disclaimer: VomeSync is not liable for misuse of public switches. VomeSync is in Public Beta - Features may be changed to premium, changed functionality or removed with no notice._
