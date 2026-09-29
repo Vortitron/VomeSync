@@ -1660,6 +1660,29 @@ def publish_status(outcome: str, data_dir: Path = DATA_DIR, config_dir: Path = C
 		LOG.warning("Could not write the status file for the Vome panel")
 
 
+VOME_ROLE_CHECK_SECONDS = 300
+
+
+def vome_pair_role(binding: dict, now: float, data_dir: Path = DATA_DIR,
+                   portal_factory: Callable[[dict], "Portal"] = None) -> Optional[str]:
+	"""This install's role in a Vome CHAP pair, asked of Vome at most every
+	five minutes and remembered while Vome cannot be reached.
+
+	An install connected to Vome but in no Vome pair ("none") may be in a
+	local pair: Vome for the relay and the rest, the two installs deciding
+	between themselves (chap_plan §11).
+	"""
+	state_path = data_dir / STATE_FILE
+	state = load_json(state_path)
+	if now - float(state.get("vome_role_at") or 0) >= VOME_ROLE_CHECK_SECONDS:
+		info = (portal_factory or Portal)(binding).role()
+		state["vome_role_at"] = now
+		if info is not None:
+			state["vome_role"] = info.get("role")
+		save_json(state_path, state)
+	return state.get("vome_role")
+
+
 def main() -> None:
 	logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 	import sys
@@ -1675,7 +1698,7 @@ def main() -> None:
 		binding = load_binding()
 		options = local_pair.read_options(DATA_DIR)
 		if options["mode"] != local_pair.OFF:
-			if binding:
+			if binding and vome_pair_role(binding, time.time()) in (ROLE_ACTIVE, ROLE_STANDBY):
 				# A Vome CHAP pair decides for itself; the two would disagree.
 				if not told_both:
 					LOG.warning("local_pair is set, but this install is in a Vome CHAP pair, "

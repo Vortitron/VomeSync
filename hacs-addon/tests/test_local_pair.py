@@ -130,6 +130,9 @@ class Install(lp.Env):
 			self.addons[s] = running
 		return []
 
+	def addon_names(self):
+		return {"core_mosquitto": "Mosquitto broker", "45df7312_zigbee2mqtt": "Zigbee2MQTT"}
+
 
 def tick(house, *installs, seconds=lp.PASS_SECONDS):
 	house.now += seconds
@@ -338,6 +341,87 @@ def test_moving_the_home_loses_nothing(pair, house):
 	assert spare.core_running and lp.is_holder(spare.pair) and spare.pair["epoch"] == 2
 	tick(house, main)
 	assert not main.core_running and not lp.is_holder(main.pair)
+	# Moved on purpose: it stays until the owner moves it back.
+	for _ in range(3):
+		tick(house, main, spare, seconds=lp.BACK_AFTER)
+	assert lp.is_holder(spare.pair) and spare.core_running
+
+
+def _taken_over(house, main, spare):
+	main.on = main.core_running = False
+	for _ in range(20):
+		tick(house, spare)
+	assert lp.is_holder(spare.pair) and spare.pair["took_over"]
+
+
+def test_the_home_goes_back_to_the_main_install_once_it_is_steady(pair, house):
+	"""Owner, 29 Sept 2026: "we still need to have one designated Live and
+	the other standby". After a takeover the home goes home by itself."""
+	main, spare = pair
+	_taken_over(house, main, spare)
+	main.on = main.core_running = True
+	(spare.config_dir / "automations.yaml").write_text("- id: made-while-away\n")
+	tick(house, main, spare, seconds=lp.SNAPSHOT_EVERY)   # main stands down, spare builds a copy
+	tick(house, main, spare)                              # main takes it
+	assert not main.core_running
+	# Not before it has been back and in step for BACK_AFTER.
+	tick(house, spare, main)
+	assert lp.is_holder(spare.pair) and not spare.pair.get("moving_to")
+	for _ in range(lp.BACK_AFTER // lp.PASS_SECONDS + 8):
+		tick(house, spare, main)
+		if main.core_running:
+			break
+	assert main.core_running and lp.is_holder(main.pair) and not spare.core_running
+	assert (main.config_dir / "automations.yaml").read_text() == "- id: made-while-away\n"
+	assert main.notices[lp.NOTICE_RUNNING][0].startswith("Back on")
+	tick(house, spare, main, seconds=lp.BACK_AFTER)
+	assert lp.is_holder(main.pair) and main.core_running   # and it stays
+
+
+def test_a_main_install_that_keeps_dropping_out_is_not_handed_the_home(pair, house):
+	main, spare = pair
+	_taken_over(house, main, spare)
+	main.on = True
+	tick(house, main, spare, seconds=lp.SNAPSHOT_EVERY)
+	for _ in range(6):
+		tick(house, spare, main, seconds=lp.BACK_AFTER // 3)
+		main.on = not main.on
+	assert lp.is_holder(spare.pair)
+
+
+def test_a_smaller_standby_runs_only_what_was_chosen_for_it(pair, house):
+	main, spare = pair
+	tick(house, main)
+	assert {a["slug"] for a in main.pair["peer_addons"]} == {"core_mosquitto", "45df7312_zigbee2mqtt"}
+	assert lp.choose_standby_addons(main.data_dir, ["core_mosquitto", "not_there"])[0]
+	assert lp.choose_standby_addons(spare.data_dir, [])[0] is False   # chosen on the main install
+	tick(house, spare)
+	_taken_over(house, main, spare)
+	assert spare.addons["core_mosquitto"] and not spare.addons["45df7312_zigbee2mqtt"]
+	assert spare.addons["a0d7b954_ssh"]
+
+
+def test_the_panel_offers_the_standby_s_add_ons_on_the_main_install(pair, house):
+	main, spare = pair
+	tick(house, main)
+	page = lp.render_panel(lp.panel_view(main.data_dir, house.now), "tok")
+	assert "Zigbee2MQTT" in page and "action='addons'" in page and page.count(" checked") == 2
+
+
+def test_a_vome_connected_install_in_no_vome_pair_may_pair_locally(tmp_path):
+	class Portal:
+		calls = 0
+
+		def __init__(self, binding):
+			pass
+
+		def role(self):
+			Portal.calls += 1
+			return None if Portal.calls == 3 else {"role": "none"}
+	assert cs.vome_pair_role({}, 1000, tmp_path, Portal) == "none"
+	assert cs.vome_pair_role({}, 1100, tmp_path, Portal) == "none" and Portal.calls == 1   # remembered
+	Portal.role = lambda self: {"role": "standby"}
+	assert cs.vome_pair_role({}, 1400, tmp_path, Portal) == "standby"
 
 
 def test_a_move_the_standby_cannot_take_is_called_off(pair, house):

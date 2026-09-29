@@ -41,8 +41,16 @@ serves it; the other fetches it when it changes and applies it while its
 Core is stopped (chap_sync.apply_snapshot), following the running install's
 Home Assistant version first when it is behind.
 
-**No automatic move back.** Both installs are at home, so neither is the
-better place to be; the home stays where it went until the owner moves it.
+**The main install is the home's place** (owner, 29 Sept 2026: "we still
+need to have one designated Live and the other standby"). After a takeover,
+once the main install has been back and in step for ``BACK_AFTER``, the
+home moves back to it the same careful way as a move the owner asks for. A
+move the owner makes on purpose (to work on the main install) stays until
+they move it back.
+
+**The standby can be smaller**: on the main install's panel the owner picks
+which of the standby's add-ons it runs when it stands in; the rest stay
+stopped (all, until they choose).
 
 Stdlib only, like the rest of the add-on. TLS with a pre-shared key needs
 Python 3.13 (the add-on's base image); the rules here are plain functions.
@@ -77,6 +85,7 @@ PSK_IDENTITY = "vome-chap-local-1"
 
 T_TAKE = 120               # the router in sight and the running install gone, this long
 MOVE_TIMEOUT = 10 * 60     # a move the other install has not caught up with is called off
+BACK_AFTER = 180           # the main install back, and in step, this long: the home goes home
 PASS_SECONDS = 10          # how often a pass runs
 SNAPSHOT_EVERY = 120       # the running install looks for configuration changes this often
 PEER_TIMEOUT = 5
@@ -550,6 +559,10 @@ class Env:
 	def set_addons(self, slugs: list, running: bool) -> list:
 		return self.cs.set_addons_running(slugs, running)
 
+	def addon_names(self) -> Optional[dict]:
+		listed = self.cs.addon_list()
+		return {a["slug"]: a["name"] for a in listed} if listed is not None else None
+
 
 def _house_address(network: list) -> tuple[Optional[str], Optional[str]]:
 	"""This install's first private IPv4 address on the house network, and its router."""
@@ -569,6 +582,8 @@ def my_status(pair: dict, env: Env) -> dict:
 	"""What this install tells the other on each request."""
 	meta = _load(env.data_dir / SNAPSHOT_META)
 	return {"id": pair.get("id"), "name": pair.get("name"), "holder": pair.get("holder"),
+	        "mode": pair.get("mode"), "home_addons": pair.get("home_addons"),
+	        "standby_addons": pair.get("standby_addons") if pair.get("mode") == MAIN else None,
 	        "epoch": pair.get("epoch"), "address": pair.get("address"), "ha_port": pair.get("ha_port"),
 	        "ha_version": pair.get("ha_version"), "applied_sha256": pair.get("applied_sha256"),
 	        "moving_to": pair.get("moving_to"),
@@ -618,17 +633,22 @@ def _hold_addons(pair: dict, env: Env, running: bool) -> Optional[str]:
 		if found is None:
 			return None
 		pair["held_addons"] = held_addons(found)
+		names = env.addon_names() or {}
+		pair["home_addons"] = [{"slug": s, "name": names.get(s, s)} for s in pair["held_addons"]]
 	held = list(pair.get("held_addons") or [])
 	if not held:
 		return None
-	target = held if running else []
+	# A standby standing in runs what the owner chose for it on the main
+	# install's panel; None (never chosen) is all of them.
+	allowed = pair.get("allowed_addons") if pair.get("mode") == STANDBY else None
+	target = [s for s in held if allowed is None or s in allowed] if running else []
 	if pair.get("held_addons_target") == target:
 		return None
 	failed = env.set_addons([s for s in held if s not in target], False) + env.set_addons(target, True)
 	if failed:
 		return f"add-ons not yet as they should be: {', '.join(failed)}; will retry"
 	pair["held_addons_target"] = target
-	return (f"started {len(held)} add-on(s)" if running else f"stopped {len(held)} add-on(s)")
+	return (f"running {len(target)} of {len(held)} add-on(s)" if running else f"stopped {len(held)} add-on(s)")
 
 
 def _snapshot_if_due(pair: dict, env: Env, now: float, force: bool = False) -> Optional[str]:
@@ -709,6 +729,19 @@ def ask_move(data_dir: Path, cancel: bool = False) -> tuple[bool, str]:
 	return True, f"moving the home to {peer_name(pair)}"
 
 
+def choose_standby_addons(data_dir: Path, slugs: Optional[list]) -> tuple[bool, str]:
+	"""The owner's pick, on the main install, of what the standby runs when it
+	stands in. None: all of them."""
+	with _lock:
+		pair = load_pair(data_dir)
+		if pair.get("mode") != MAIN:
+			return False, "choose on the main install"
+		known = {a.get("slug") for a in pair.get("peer_addons") or []}
+		pair["standby_addons"] = None if slugs is None else sorted(s for s in slugs if s in known)
+		save_pair(data_dir, pair)
+	return True, "saved what the standby runs when it stands in"
+
+
 def _move_step(pair: dict, env: Env, peer_status: Optional[dict], now: float) -> Optional[str]:
 	"""Hand the home to the other install, losing nothing.
 
@@ -739,18 +772,48 @@ def _move_step(pair: dict, env: Env, peer_status: Optional[dict], now: float) ->
 	if not peer_status or peer_status.get("applied_sha256") != pair["move_snapshot"]:
 		return None  # it fetches on its own pass
 	pair.update({"holder": pair["moving_to"], "epoch": int(pair.get("epoch") or 0) + 1})
-	for k in ("moving_to", "move_asked_at", "move_snapshot"):
+	for k in ("moving_to", "move_asked_at", "move_snapshot", "took_over", "main_back_since", "move_back"):
 		pair.pop(k, None)
 	return f"moved the home to {peer_name(pair)} (move {pair['epoch']})"
 
 
+def back_due(pair: dict, peer_status: Optional[dict], now: float, in_step: bool) -> Optional[str]:
+	"""Should the home go back to the main install now? Updates the watch.
+
+	Only on a standby running the home because it took over (not because the
+	owner moved it here), with the main install answering and in step for
+	``BACK_AFTER`` together: a main install that flaps keeps its clock at 0.
+	"""
+	if not (is_holder(pair) and pair.get("mode") == STANDBY and pair.get("took_over")) or pair.get("moving_to"):
+		pair.pop("main_back_since", None)
+		return None
+	if not peer_status or peer_status.get("mode") != MAIN or not in_step:
+		pair.pop("main_back_since", None)
+		return None
+	since = pair.setdefault("main_back_since", now)
+	if now - float(since) < BACK_AFTER:
+		return None
+	return f"{peer_name(pair)} has been back and in step for {int(now - float(since))} s"
+
+
 def _say_running_here(pair: dict, env: Env) -> None:
-	when = time.strftime("%H:%M", time.localtime(float(pair.get("took_over_at") or env.clock())))
-	if env.notify(NOTICE_RUNNING, "This Home Assistant is running your home",
-	              f"**{pair.get('name') or 'This install'}** took over your home at {when}: "
-	              f"{peer_name(pair)} stopped answering while the house router still did.\n\n"
-	              "It stays here until you move it back. When the other install returns it "
-	              "stops its own Home Assistant and takes this one's configuration."):
+	kind = pair.get("say_running_here")
+	this = pair.get("name") or "This install"
+	if kind == "back":
+		title, message = (f"Back on {this}",
+		                  f"**{this}** is running your home again, with everything changed on "
+		                  f"{peer_name(pair)} while it was away. {peer_name(pair)} is standing by.")
+	elif kind == "moved":
+		title, message = (f"You are on {this}",
+		                  f"As you asked, **{this}** is running your home; {peer_name(pair)} is "
+		                  "standing by. Move it back from the Vome CHAP panel when you are done.")
+	else:
+		when = time.strftime("%H:%M", time.localtime(float(pair.get("took_over_at") or env.clock())))
+		title, message = ("This Home Assistant is running your home",
+		                  f"**{this}** took over your home at {when}: {peer_name(pair)} stopped "
+		                  "answering while the house router still did.\n\nWhen it is back and has "
+		                  "taken this one's changes, your home moves back to it by itself.")
+	if env.notify(NOTICE_RUNNING, title, message):
 		pair.pop("say_running_here", None)
 
 
@@ -810,6 +873,10 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 		else:
 			pair["peer_seen_at"] = now
 			pair["peer_applied_sha256"] = peer_status.get("applied_sha256")
+			if peer_status.get("mode") == MAIN and pair.get("mode") == STANDBY:
+				pair["allowed_addons"] = peer_status.get("standby_addons")
+			if pair.get("mode") == MAIN:
+				pair["peer_addons"] = peer_status.get("home_addons")
 			peer = pair.setdefault("peer", {})
 			for k in ("name", "address", "ha_port", "id"):
 				if peer_status.get(k):
@@ -817,6 +884,10 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 			if adopt(pair, peer_status.get("holder"), peer_status.get("epoch")):
 				notes.append(("this install runs the home" if is_holder(pair)
 				              else f"{peer_name(pair)} runs the home") + f" (move {pair['epoch']})")
+				for k in ("took_over", "main_back_since", "moving_to", "move_asked_at", "move_snapshot"):
+					pair.pop(k, None)
+				if is_holder(pair):
+					pair["say_running_here"] = "back" if pair.get("mode") == MAIN else "moved"
 
 	peer_ok = bool(peer_status)
 	if pair.get("peer") and not peer_ok:
@@ -828,11 +899,18 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 	reason = takeover_due(pair, now, router_ok, peer_ok)
 	if reason:
 		pair.update({"holder": pair["id"], "epoch": int(pair.get("epoch") or 0) + 1,
-		             "took_over_at": now, "say_running_here": True})
+		             "took_over_at": now, "took_over": True, "say_running_here": True})
 		pair.pop("peer_lost_since", None)
 		notes.append(f"taking over the home: {reason}")
 		LOG.warning("taking over the home: %s", reason)
 
+	if is_holder(pair):
+		mine = _load(env.data_dir / SNAPSHOT_META).get("sha256")
+		back = back_due(pair, peer_status, now, bool(mine) and pair.get("peer_applied_sha256") == mine)
+		if back:
+			pair.update({"moving_to": pair["peer"]["id"], "move_back": True})
+			notes.append(f"moving the home back: {back}")
+			LOG.info("moving the home back to %s: %s", peer_name(pair), back)
 	moved = _move_step(pair, env, peer_status, now)
 	if moved:
 		notes.append(moved)
@@ -917,7 +995,9 @@ def panel_view(data_dir: Path, now: Optional[float] = None) -> dict:
 	        "peer_answering": bool(seen and now - float(seen) < 3 * PASS_SECONDS + PEER_TIMEOUT),
 	        "peer_seen_at": seen,
 	        "in_step": bool(meta.get("sha256")) and pair.get("peer_applied_sha256") == meta.get("sha256"),
-	        "code": pair.get("code_shown")}
+	        "code": pair.get("code_shown"), "took_over": bool(pair.get("took_over")),
+	        "is_main": options["mode"] == MAIN, "peer_addons": pair.get("peer_addons") or [],
+	        "standby_addons": pair.get("standby_addons")}
 	if not peer:
 		view["state"] = "waiting_for_standby" if view["running_here"] else "pairing"
 	elif view["moving"]:
@@ -947,8 +1027,14 @@ def render_panel(view: dict, token: str = "") -> str:
 		            "<p class='muted'>Keep it private: it lets an install take a copy of this one.</p>")
 	else:
 		peer = _esc(view["peer"])
-		if view["running_here"]:
+		if view["running_here"] and not view.get("is_main"):
+			rows.append(f"<p><b>{_esc(view['name'])}</b> (this one) is running your home in place of {peer}.</p>")
+			if view.get("took_over"):
+				rows.append(f"<p class='muted'>It took over; your home goes back to {peer} by itself once "
+				            "that has been back and in step for three minutes.</p>")
+		elif view["running_here"]:
 			rows.append(f"<p><b>{_esc(view['name'])}</b> (this one) runs your home.</p>")
+		if view["running_here"]:
 			if not view["peer_answering"]:
 				when = time.strftime("%H:%M", time.localtime(float(view["peer_seen_at"]))) if view.get("peer_seen_at") else "a while"
 				rows.append(f"<p class='bad'>{peer} is not answering (last heard {when}). Nothing can take "
@@ -970,6 +1056,16 @@ def render_panel(view: dict, token: str = "") -> str:
 			           f"<button{disabled}>Move the home to {peer}</button></form>"
 			           "<p class='muted'>Home Assistant stops here for a minute or two while the last "
 			           "changes go across, then starts there.</p>")
+	if view.get("is_main") and view.get("peer_addons") and state != "moving":
+		chosen = view.get("standby_addons")
+		boxes = "".join(
+			f"<label><input type='checkbox' name='a' value='{_esc(a.get('slug'))}'"
+			f"{' checked' if chosen is None or a.get('slug') in chosen else ''}> {_esc(a.get('name'))}</label><br>"
+			for a in view["peer_addons"])
+		actions += (f"<h3>When {_esc(view['peer'])} stands in</h3><form method='post' action='addons'>"
+		            f"<input type='hidden' name='t' value='{_esc(token)}'><input type='hidden' name='sent' value='1'>"
+		            f"{boxes}<p class='muted'>A smaller machine can run just what matters; the rest stay "
+		            "stopped there.</p><button>Save</button></form>")
 	return ("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' "
 	        "content='width=device-width,initial-scale=1'><title>Vome CHAP</title><style>"
 	        "body{font-family:system-ui,sans-serif;margin:16px;max-width:720px;color:#1f2328;background:#fff}"
@@ -1013,9 +1109,12 @@ class _PanelHandler(http.server.BaseHTTPRequestHandler):
 		if form.get("t", [""])[0] != _FORM_TOKEN:
 			return self._html(403, "<p>This page is out of date; reload it.</p>")
 		action = self.path.rstrip("/").rsplit("/", 1)[-1]
-		if action not in ("move", "cancel"):
+		if action not in ("move", "cancel", "addons"):
 			return self._html(404, "")
-		ok, message = ask_move(self.server.data_dir, cancel=action == "cancel")  # type: ignore[attr-defined]
+		if action == "addons":
+			ok, message = choose_standby_addons(self.server.data_dir, form.get("a", []))  # type: ignore[attr-defined]
+		else:
+			ok, message = ask_move(self.server.data_dir, cancel=action == "cancel")  # type: ignore[attr-defined]
 		LOG.info("panel: %s", message)
 		# Back to the page (relative: ingress serves it under its own path).
 		self.send_response(303)

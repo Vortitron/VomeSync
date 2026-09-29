@@ -53,10 +53,18 @@ notification. A standby that cannot see the router either does nothing: it
 is the one cut off.
 
 **When the main install comes back** it sees the home has moved, stops its
-own Home Assistant and takes the standby's configuration. The home stays on
-the standby until you move it back: open the *Vome CHAP* panel on the install
-running your home and press *Move the home to …*. Home Assistant stops there
-for a minute or two while the last changes go across, so nothing is lost.
+own Home Assistant and takes the standby's configuration. Once it has been
+back and in step for three minutes, your home moves back to it by itself:
+Home Assistant stops on the standby for a minute or two while the last
+changes go across, so nothing is lost.
+
+**Moving it yourself.** To work on the main install, open the *Vome CHAP*
+panel on it and press *Move the home to …*. The home stays on the standby
+until you move it back the same way.
+
+**A smaller standby.** The standby can be a lesser machine: on the main
+install's *Vome CHAP* panel, tick which of the standby's add-ons it runs
+when it stands in. The rest stay stopped there.
 
 **Good to know**
 
