@@ -9,6 +9,10 @@
 #   RELEASE_TAG_RESOLVED   the tag to create, e.g. vome-addon-v0.3.37
 #   RELEASE_ARTIFACT       the zip filename inside dist/, e.g. vome-addon-v0.3.37.zip
 #
+# Optional: RELEASE_NOTES_FILE, the release's text (the add-on's CHANGELOG.md
+# section for this version, written by vome/package_release.py). Without it
+# GitHub generates notes from the commits, as before.
+#
 # Kept as its own script rather than inline in the Jenkinsfile: the
 # alternative is a `sh '''...'''` block whose JSON payloads and Groovy
 # string interpolation fight each other over which quote characters mean
@@ -29,14 +33,17 @@ if [ ! -f "${ARTIFACT_PATH}" ]; then
 	exit 1
 fi
 
-payload=$(python3 -c "
-import json
-print(json.dumps({
-    'tag_name': '${RELEASE_TAG_RESOLVED}',
-    'name': '${RELEASE_TAG_RESOLVED}',
-    'target_commitish': 'main',
-    'generate_release_notes': True,
-}))
+# Values reach Python through the environment, never pasted into its source.
+payload=$(RELEASE_NOTES_FILE="${RELEASE_NOTES_FILE:-}" python3 -c "
+import json, os
+tag = os.environ['RELEASE_TAG_RESOLVED']
+notes_file = os.environ.get('RELEASE_NOTES_FILE') or ''
+release = {'tag_name': tag, 'name': tag, 'target_commitish': 'main'}
+if notes_file and os.path.isfile(notes_file):
+    release['body'] = open(notes_file, encoding='utf-8').read()
+else:
+    release['generate_release_notes'] = True
+print(json.dumps(release))
 ")
 
 response=$(curl -sS -w '\n%{http_code}' \

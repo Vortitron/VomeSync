@@ -1,17 +1,29 @@
 // =============================================================================
-// Vome Supervisor add-on — Release packaging + publishing (VomeSync repo)
+// VomeSync Supervisor add-ons — Release packaging + publishing
 //
-// Packages the add-on, tests it, and -- if GITHUB_TOKEN is available --
+// Packages one add-on, tests it, and -- if GITHUB_TOKEN is available --
 // publishes the result as a GitHub Release with the zip attached. Runs
 // manually from the Jenkins GUI, or automatically from
-// vome-addon-autorelease whenever vome/config.yaml's version changes and
+// vome-addon-autorelease whenever an add-on's config.yaml version changes and
 // has no matching release tag yet.
+//
+// Two add-ons (owner, 30 Sept 2026: make CHAP's releases match): Vome
+// (vome/, tags vome-addon-vX.Y.Z) and Vome CHAP (vome_chap/, tags
+// vome-chap-vX.Y.Z, release notes from its CHANGELOG.md). Which one comes
+// from ADDON, or from the tag's prefix: a parameter new to a Jenkinsfile is
+// only registered after the job's first run, and until then a caller's
+// ADDON would be dropped without a word -- and Vome released instead.
 // =============================================================================
 
 pipeline {
     agent any
 
     parameters {
+        choice(
+            name: 'ADDON',
+            choices: ['vome', 'vome_chap'],
+            description: 'Which add-on: vome (Vome) or vome_chap (Vome CHAP). A RELEASE_TAG starting vome-chap- means vome_chap whatever this says.'
+        )
         string(
             name: 'RELEASE_TAG',
             defaultValue: '',
@@ -27,7 +39,55 @@ pipeline {
     }
 
     stages {
+        stage('Which add-on') {
+            steps {
+                script {
+                    def tag = (params.RELEASE_TAG ?: '').trim()
+                    env.ADDON_DIR = tag.startsWith('vome-chap-') ? 'vome_chap' : (params.ADDON ?: 'vome')
+                    currentBuild.description = "${env.ADDON_DIR} ${tag ?: '(tag from config.yaml)'}"
+                }
+            }
+        }
+
+        stage('Validate CHAP') {
+            when { environment name: 'ADDON_DIR', value: 'vome_chap' }
+            steps {
+                sh '''
+                    test -f repository.yaml
+                    test -f vome_chap/config.yaml
+                    test -f vome_chap/Dockerfile
+                    test -f vome_chap/chap_sync.py
+                    test -f vome_chap/local_pair.py
+                    test -f vome_chap/CHANGELOG.md
+                    test -f vome/package_release.py
+                '''
+            }
+        }
+
+        stage('Test CHAP') {
+            when { environment name: 'ADDON_DIR', value: 'vome_chap' }
+            steps {
+                sh '''
+                    python3.11 -m venv .venv-addon
+                    . .venv-addon/bin/activate
+                    python -m pip install --upgrade pip
+                    pip install -r hacs-addon/tests/requirements.txt
+                    python -m pytest \
+                        hacs-addon/tests/test_chap_sync.py \
+                        hacs-addon/tests/test_local_pair.py \
+                        --tb=short -q \
+                        --junitxml=junit-vome-addon-release.xml
+                '''
+            }
+            post {
+                always {
+                    junit 'junit-vome-addon-release.xml'
+                }
+            }
+        }
+
         stage('Validate') {
+            when { environment name: 'ADDON_DIR', value: 'vome' }
             steps {
                 sh '''
                     test -f repository.yaml
@@ -43,6 +103,7 @@ pipeline {
         }
 
         stage('Sync + Test') {
+            when { environment name: 'ADDON_DIR', value: 'vome' }
             steps {
                 sh '''
                     chmod +x vome/build.sh
@@ -72,9 +133,9 @@ pipeline {
             steps {
                 sh '''
                     test -f vome/package_release.py
-                    python3 vome/package_release.py
-                    test -f dist/vome-addon-release.txt
-                    ls -la dist/vome-addon-*.zip
+                    ADDON="$ADDON_DIR" python3 vome/package_release.py
+                    test -f dist/release.txt
+                    ls -la dist/*.zip
                 '''
             }
         }
@@ -82,8 +143,8 @@ pipeline {
 
     post {
         success {
-            archiveArtifacts artifacts: 'dist/vome-addon-*.zip,dist/vome-addon-release.txt', fingerprint: true
-            echo 'Vome add-on release artifact created and archived.'
+            archiveArtifacts artifacts: 'dist/*.zip,dist/*.txt,dist/*.md', fingerprint: true
+            echo "${env.ADDON_DIR} release artifact created and archived."
             script {
                 // Archiving in Jenkins is not a release: nothing outside this
                 // Jenkins instance could ever discover the artefact. This is
@@ -98,7 +159,7 @@ pipeline {
                 if (!env.GITHUB_TOKEN?.trim()) {
                     echo 'GITHUB_TOKEN is not set -- skipping the GitHub release. The artifact is archived in Jenkins only.'
                 } else {
-                    def info = readFile('dist/vome-addon-release.txt').trim()
+                    def info = readFile('dist/release.txt').trim()
                     def props = [:]
                     info.split('\n').each { line ->
                         def parts = line.split('=', 2)
@@ -107,16 +168,17 @@ pipeline {
                     def tag = props['tag']
                     def artifactName = props['artifact']
                     if (!tag || !artifactName) {
-                        error("dist/vome-addon-release.txt did not contain both tag= and artifact=: ${info}")
+                        error("dist/release.txt did not contain both tag= and artifact=: ${info}")
                     }
-                    withEnv(["RELEASE_TAG_RESOLVED=${tag}", "RELEASE_ARTIFACT=${artifactName}"]) {
+                    def notes = props['notes'] ? "dist/${props['notes']}" : ''
+                    withEnv(["RELEASE_TAG_RESOLVED=${tag}", "RELEASE_ARTIFACT=${artifactName}", "RELEASE_NOTES_FILE=${notes}"]) {
                         sh 'scripts/publish_addon_release.sh'
                     }
                 }
             }
         }
         failure {
-            echo 'Vome add-on release pipeline failed.'
+            echo "${env.ADDON_DIR ?: 'Add-on'} release pipeline failed."
         }
         cleanup {
             cleanWs()
