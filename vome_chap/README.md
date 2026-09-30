@@ -32,7 +32,8 @@ the Vome add-on on its own never asks for it.
 
 The same add-on can pair two Home Assistants in your house with each other,
 so the second takes over when the first stops -- also when your internet is
-down. No Vome account, no time limit.
+down. No Vome account, no time limit. Step by step, with pictures:
+<https://vome.io/chap/local>.
 
 1. Install **Vome CHAP** on both Home Assistants.
 2. On the one running your home, set **local_pair** to `main` in the add-on's
