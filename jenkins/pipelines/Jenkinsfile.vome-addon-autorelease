@@ -13,6 +13,11 @@
 // tag namespace is shared with the HACS integration's own release tags,
 // and those need to stay a clean vX.Y.Z for HACS's version display and
 // update-comparison logic to read correctly.
+//
+// Both add-ons (owner, 30 Sept 2026: make CHAP's releases match): Vome
+// (vome/config.yaml -> vome-addon-vX.Y.Z) and Vome CHAP
+// (vome_chap/config.yaml -> vome-chap-vX.Y.Z). Each bump gets its own
+// release; a push bumping both gets two.
 // =============================================================================
 
 pipeline {
@@ -43,35 +48,46 @@ pipeline {
 	}
 
 	stages {
-		stage('Check for a version bump') {
+		stage('Check for version bumps') {
 			steps {
 				script {
 					sh 'git fetch --tags -q'
-					def version = sh(
-						script: "grep -m1 '^version:' vome/config.yaml | sed -E 's/version: *\"([^\"]+)\"/\\1/'",
-						returnStdout: true
-					).trim()
-					if (!version) {
-						error('Could not read a version out of vome/config.yaml')
+					def addons = [[dir: 'vome', prefix: 'vome-addon'], [dir: 'vome_chap', prefix: 'vome-chap']]
+					def due = []
+					def seen = []
+					for (a in addons) {
+						def version = sh(
+							script: "grep -m1 '^version:' ${a.dir}/config.yaml | sed -E 's/version: *\"([^\"]+)\"/\\1/'",
+							returnStdout: true
+						).trim()
+						if (!version) {
+							error("Could not read a version out of ${a.dir}/config.yaml")
+						}
+						def tag = "${a.prefix}-v${version}"
+						def existing = sh(script: "git tag -l '${tag}'", returnStdout: true).trim()
+						seen << (existing ? "${tag} (already released)" : "${tag} (new)")
+						if (!existing) {
+							due << "${a.dir}=${tag}"
+						}
 					}
-					env.ADDON_VERSION = version
-					env.ADDON_TAG = "vome-addon-v${version}"
-					def existing = sh(script: "git tag -l '${env.ADDON_TAG}'", returnStdout: true).trim()
-					env.ADDON_ALREADY_RELEASED = existing ? 'true' : 'false'
-					currentBuild.description = env.ADDON_ALREADY_RELEASED == 'true'
-						? "${env.ADDON_TAG} (already released)"
-						: "${env.ADDON_TAG} (new)"
+					env.ADDONS_DUE = due.join(' ')
+					currentBuild.description = seen.join(', ')
 				}
 			}
 		}
 
 		stage('Release') {
 			when {
-				expression { env.ADDON_ALREADY_RELEASED == 'false' }
+				expression { env.ADDONS_DUE?.trim() }
 			}
 			steps {
-				build job: 'VomeSync/vome-addon-release', wait: true, propagate: true,
-					parameters: [string(name: 'RELEASE_TAG', value: env.ADDON_TAG)]
+				script {
+					for (item in env.ADDONS_DUE.trim().split(' ')) {
+						def parts = item.split('=', 2)
+						build job: 'VomeSync/vome-addon-release', wait: true, propagate: true,
+							parameters: [string(name: 'ADDON', value: parts[0]), string(name: 'RELEASE_TAG', value: parts[1])]
+					}
+				}
 			}
 		}
 	}
@@ -79,15 +95,15 @@ pipeline {
 	post {
 		success {
 			script {
-				if (env.ADDON_ALREADY_RELEASED == 'false') {
-					echo "✓ Released ${env.ADDON_TAG}."
+				if (env.ADDONS_DUE?.trim()) {
+					echo "✓ Released ${env.ADDONS_DUE}."
 				} else {
-					echo "No version bump (still ${env.ADDON_TAG}) -- nothing to release."
+					echo "No version bump -- nothing to release (${currentBuild.description})."
 				}
 			}
 		}
 		failure {
-			echo "✗ Add-on auto-release failed for ${env.ADDON_TAG ?: 'unresolved version'} -- check vome-addon-release for which stage gave up."
+			echo "✗ Add-on auto-release failed (${env.ADDONS_DUE ?: 'unresolved versions'}) -- check vome-addon-release for which stage gave up."
 		}
 	}
 }
