@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.36"
+INTEGRATION_VERSION = "0.9.37"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -197,6 +197,10 @@ RELAY_WS_MSG_PONG = "pong"
 RELAY_RECONNECT_DELAY = 5
 RELAY_RECONNECT_MAX_DELAY = 60
 RELAY_RPC_TIMEOUT = 30
+# Largest body a relayed call returns base64-encoded (expect="base64", e.g. a
+# camera still). It crosses the tunnel as one WebSocket message, a third
+# bigger than the bytes; a still asked for at a sensible width is well under.
+RELAY_RPC_MAX_BINARY_BYTES = 8 * 1024 * 1024
 RELAY_ALLOWED_METHODS = ("GET", "POST", "PUT", "DELETE")
 
 # Full-UI forwarding protocol (opt-in, see CONF_RELAY_FORWARD_UI).  The backend
