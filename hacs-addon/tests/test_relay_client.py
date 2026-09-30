@@ -2217,3 +2217,55 @@ class TestRpcFailureIsContained:
 
 		with pytest.raises(asyncio.CancelledError):
 			await client._handle_rpc(MagicMock(), {"requestId": "r1"})
+
+
+
+class TestBinaryOverTheRelay:
+	"""A camera still could not cross the relay: execute() read every body
+	with resp.text(), which raises on a JPEG."""
+
+	@pytest.mark.asyncio
+	async def test_base64_returns_the_bytes_and_their_type(self):
+		import base64 as b64
+		import json as js
+		jpeg = b"\xff\xd8\xff\xe0 not text \x00\x9c\xff\xd9"
+		session, resp = _mock_session_for_forward(status=200, body=jpeg)
+		resp.headers = {"Content-Type": "image/jpeg"}
+		client = _client(session, local_token="llt", local_url="http://127.0.0.1:8123")
+		status, body, error = await client.execute(
+			"GET", "/api/camera_proxy/camera.door?width=1024", None, expect="base64")
+		assert status == 200 and error is None
+		decoded = js.loads(body)
+		assert decoded["content_type"] == "image/jpeg"
+		assert b64.b64decode(decoded["base64"]) == jpeg
+
+	@pytest.mark.asyncio
+	async def test_text_stays_text_without_it(self):
+		session, _ = _mock_session_with_response(status=200, text='{"ok": true}')
+		client = _client(session, local_token="llt", local_url="http://127.0.0.1:8123")
+		status, body, _ = await client.execute("GET", "/api/states", None)
+		assert body == '{"ok": true}'
+
+	@pytest.mark.asyncio
+	async def test_an_oversized_body_is_refused_not_sent(self, monkeypatch):
+		monkeypatch.setattr(rc, "RELAY_RPC_MAX_BINARY_BYTES", 4)
+		session, resp = _mock_session_for_forward(status=200, body=b"12345")
+		resp.headers = {"Content-Type": "image/jpeg"}
+		client = _client(session, local_token="llt", local_url="http://127.0.0.1:8123")
+		status, body, error = await client.execute(
+			"GET", "/api/camera_proxy/camera.door", None, expect="base64")
+		assert status == 0 and body is None and "too large" in error
+
+	@pytest.mark.asyncio
+	async def test_the_rpc_handler_passes_expect_through(self):
+		client = _client(AsyncMock(spec=aiohttp.ClientSession), local_token="llt")
+		seen = {}
+
+		async def fake_execute(method, path, body, target=None, *, expect=None):
+			seen["expect"] = expect
+			return 200, "{}", None
+		client.execute = fake_execute
+		client._send = AsyncMock()
+		await client._handle_rpc(None, {"requestId": "r1", "method": "GET",
+		                                "path": "/api/camera_proxy/camera.door", "expect": "base64"})
+		assert seen["expect"] == "base64"

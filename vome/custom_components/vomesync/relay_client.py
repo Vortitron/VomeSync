@@ -100,6 +100,7 @@ from .const import (
 	RELAY_RPC_TARGET_ESPHOME,
 	RELAY_RPC_TARGET_FILES,
 	RELAY_RPC_TARGET_WEBSOCKET,
+	RELAY_RPC_MAX_BINARY_BYTES,
 	RELAY_RPC_TIMEOUT,
 	RELAY_WS_MAX_COMMAND_BYTES,
 	WS_COMMAND_TYPE_RE,
@@ -773,7 +774,8 @@ class RelayClient:
 		request_id = data.get("requestId")
 		try:
 			status, body, error = await self.execute(
-				data.get("method"), data.get("path"), data.get("body"), data.get("target")
+				data.get("method"), data.get("path"), data.get("body"), data.get("target"),
+				expect=data.get("expect"),
 			)
 		except asyncio.CancelledError:
 			raise
@@ -1438,6 +1440,8 @@ class RelayClient:
 		path: Optional[str],
 		body: Any,
 		target: Optional[str] = None,
+		*,
+		expect: Optional[str] = None,
 	) -> tuple[int, Optional[str], Optional[str]]:
 		"""Execute one relayed call locally; return ``(status, body_text, error)``.
 
@@ -1445,6 +1449,9 @@ class RelayClient:
 		default), the ESPHome dashboard (``esphome``), a file under the config
 		directory (``files``), or one allowlisted HA WebSocket command
 		(``websocket``).  ``status`` is 0 on a local failure.
+
+		``expect="base64"`` (core only) is for a body that is not text — a
+		camera still: see :meth:`_execute_core`.
 		"""
 		if target == RELAY_RPC_TARGET_ESPHOME:
 			return await self._execute_esphome(method, path, body)
@@ -1452,7 +1459,7 @@ class RelayClient:
 			return await self._execute_files(method, path, body)
 		if target == RELAY_RPC_TARGET_WEBSOCKET:
 			return await self._execute_websocket(body)
-		return await self._execute_core(method, path, body)
+		return await self._execute_core(method, path, body, expect=expect)
 
 	def _config_dir(self) -> Optional[Path]:
 		"""Home Assistant's config directory, resolved."""
@@ -1678,9 +1685,17 @@ class RelayClient:
 			return 0, None, f"Local Home Assistant WebSocket error: {err}"
 
 	async def _execute_core(
-		self, method: Optional[str], path: Optional[str], body: Any
+		self, method: Optional[str], path: Optional[str], body: Any,
+		*, expect: Optional[str] = None,
 	) -> tuple[int, Optional[str], Optional[str]]:
-		"""Proxy one HA core REST call.  Only ``/api/...`` paths are permitted."""
+		"""Proxy one HA core REST call.  Only ``/api/...`` paths are permitted.
+
+		The body goes back as text, which is what every JSON call wants and
+		what an image cannot survive: ``resp.text()`` on a JPEG raises, so a
+		camera still could not cross the relay at all. With
+		``expect="base64"`` the reply is instead a JSON string of the raw
+		bytes, base64-encoded, and their content type.
+		"""
 		portion = _safe_path_portion(path)
 		if portion is None or not (portion.startswith("/api/") or portion == "/api/"):
 			return 0, None, "Refusing to execute a non-/api path."
@@ -1704,6 +1719,17 @@ class RelayClient:
 				json=body if body is not None else None,
 				timeout=aiohttp.ClientTimeout(total=RELAY_RPC_TIMEOUT),
 			) as resp:
+				if expect == "base64":
+					raw = await resp.read()
+					if len(raw) > RELAY_RPC_MAX_BINARY_BYTES:
+						return 0, None, (
+							f"Response too large to relay ({len(raw)} bytes; "
+							f"limit {RELAY_RPC_MAX_BINARY_BYTES})."
+						)
+					return resp.status, json.dumps({
+						"content_type": resp.headers.get("Content-Type", ""),
+						"base64": base64.b64encode(raw).decode("ascii"),
+					}), None
 				text = await resp.text()
 				return resp.status, text, None
 		except asyncio.TimeoutError:
