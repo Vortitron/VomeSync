@@ -1,0 +1,15 @@
+configuration:
+  local_pair:
+    name: Local pair
+    description: >-
+      Pair this Home Assistant with another one in your house, so one takes
+      over when the other stops -- no Vome account needed. "main" on the one
+      running your home (it then shows a pairing code), "standby" on the
+      other. Leave "off" if you use CHAP through Vome.
+  pair_code:
+    name: Pairing code
+    description: >-
+      On the standby only: the code the main install shows (it starts with
+      vcp1.). Keep it private.
+network:
+  8177/tcp: Local pair (the other Home Assistant in your house)

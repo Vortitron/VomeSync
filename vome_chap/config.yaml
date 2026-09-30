@@ -1,13 +1,14 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome CHAP
-version: "0.1.18"
+version: "0.2.0"
 slug: vome_chap
 description: >
   Keeps a Vome CHAP standby of this Home Assistant ready to take over:
   syncs your configuration to it, stops and starts Home Assistant here when
   a failover says so, and makes the one-off backup the standby is first
   filled from. Only needed if you use CHAP protection; install the Vome
-  add-on too.
+  add-on too -- or pair two Home Assistants in your house with each other,
+  no Vome needed (local_pair).
 url: https://github.com/Vortitron/VomeSync
 arch:
   - aarch64
@@ -28,5 +29,21 @@ map:
   - backup:rw
 startup: services
 boot: auto
-options: {}
-schema: {}
+# The local pair (two Home Assistants in one house, no Vome needed): the two
+# installs talk on this port, over TLS with the key in the pairing code.
+ports:
+  8177/tcp: 8177
+ports_description:
+  8177/tcp: Local pair (the other Home Assistant in your house)
+# Its panel, on the install running the home: the pair, the pairing code,
+# and moving the home to the other install.
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:home-switch-outline
+panel_title: Vome CHAP
+options:
+  local_pair: "off"
+  pair_code: ""
+schema:
+  local_pair: list(off|main|standby)
+  pair_code: str?

@@ -1660,13 +1660,64 @@ def publish_status(outcome: str, data_dir: Path = DATA_DIR, config_dir: Path = C
 		LOG.warning("Could not write the status file for the Vome panel")
 
 
+VOME_ROLE_CHECK_SECONDS = 300
+
+
+def vome_pair_role(binding: dict, now: float, data_dir: Path = DATA_DIR,
+                   portal_factory: Callable[[dict], "Portal"] = None) -> Optional[str]:
+	"""This install's role in a Vome CHAP pair, asked of Vome at most every
+	five minutes and remembered while Vome cannot be reached.
+
+	An install connected to Vome but in no Vome pair ("none") may be in a
+	local pair: Vome for the relay and the rest, the two installs deciding
+	between themselves (chap_plan §11).
+	"""
+	state_path = data_dir / STATE_FILE
+	state = load_json(state_path)
+	if now - float(state.get("vome_role_at") or 0) >= VOME_ROLE_CHECK_SECONDS:
+		info = (portal_factory or Portal)(binding).role()
+		state["vome_role_at"] = now
+		if info is not None:
+			state["vome_role"] = info.get("role")
+		save_json(state_path, state)
+	return state.get("vome_role")
+
+
 def main() -> None:
 	logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+	import sys
+	import local_pair
+	env = local_pair.Env(sys.modules[__name__], DATA_DIR, CONFIG_DIR)
+	env.server = local_pair.LanServer(DATA_DIR, lambda: local_pair.my_status(local_pair.load_pair(DATA_DIR), env))
+	local_pair.start_panel(DATA_DIR)
+	last_local, told_both = None, False
 	while True:
 		paired = redeem_pairing()
 		if paired:
 			LOG.info("%s", paired)
 		binding = load_binding()
+		options = local_pair.read_options(DATA_DIR)
+		if options["mode"] != local_pair.OFF:
+			if binding and vome_pair_role(binding, time.time()) in (ROLE_ACTIVE, ROLE_STANDBY):
+				# A Vome CHAP pair decides for itself; the two would disagree.
+				if not told_both:
+					LOG.warning("local_pair is set, but this install is in a Vome CHAP pair, "
+					            "which decides; local pairing stays off")
+					told_both = True
+			else:
+				try:
+					outcome, wait = local_pair.run_local_once(options, env)
+				except Exception:  # noqa: BLE001 - one bad pass must not end the service
+					LOG.exception("local pair pass failed")
+					outcome, wait = "local pair pass failed", 30
+				if outcome != last_local:  # every 10 s; the log is for changes
+					LOG.info("%s", outcome)
+					last_local = outcome
+				publish_status(outcome)
+				sleep_unless_nudged(wait)
+				continue
+		elif env.server:
+			env.server.stop()
 		if not binding:
 			publish_status(paired or "not paired")
 			sleep_unless_nudged(IDLE_INTERVAL)
