@@ -1138,6 +1138,20 @@ def panel_view(data_dir: Path, now: Optional[float] = None) -> dict:
 	return view
 
 
+def summary(data_dir: Path) -> Optional[dict]:
+	"""What the pair looks like, for the status file in /config (the Vome app's
+	panel, and Vome's support): the panel's view without the pairing code."""
+	view = panel_view(data_dir)
+	if view.get("state") == "off":
+		return None
+	pair = load_pair(data_dir)
+	keep = ("state", "mode", "running_here", "name", "address", "peer", "peer_address", "epoch",
+	        "router_ok", "moving", "peer_answering", "peer_seen_at", "in_step", "took_over")
+	out = {k: view.get(k) for k in keep}
+	out["pair_key"] = bool(pair.get("pair_key_ok"))
+	return out
+
+
 def render_panel(view: dict, token: str = "") -> str:
 	rows, actions = [], ""
 	state = view["state"]
