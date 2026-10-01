@@ -16,6 +16,10 @@ Security, from a review of the local pair:
   through Vome), and small answers otherwise; at most 16 connections at once.
 - The app page's form token is compared in constant time.
 
+Quick or careful: a new *takeover_after* setting on the standby, how long
+the main install must be out of reach (with your router answering) before
+it takes over: 30 seconds to 15 minutes, 2 minutes as before if unset.
+
 Clearer names: the two installs are "Main install" and "Standby" in their
 notifications and on the app's page, which also shows each one's address;
 or name them yourself with the new *install_name* setting ("Kitchen NUC").
