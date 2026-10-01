@@ -152,8 +152,8 @@ def pair(house, tmp_path):
 	main.set_options("main")
 	spare.set_options("off")
 	main.run()
-	code = main.pair["code_shown"]
-	assert code and code in main.notices[lp.NOTICE_CODE][1]
+	code = lp.panel_view(main.data_dir, house.now)["code"]
+	assert code and lp.NOTICE_CODE in main.notices
 	spare.set_options("standby", code)
 	tick(house, spare, main)
 	return main, spare
@@ -264,7 +264,7 @@ def test_nothing_to_run_the_home_with_nothing_to_take_over_with(house, tmp_path)
 	spare = Install(house, "spare", "192.168.1.89", tmp_path)
 	main.set_options("main")
 	main.run()
-	code = main.pair["code_shown"]
+	code = lp.panel_view(main.data_dir, house.now)["code"]
 	main.on = False           # gone before the standby ever took a copy
 	spare.set_options("standby", code)
 	for _ in range(5):
@@ -459,7 +459,7 @@ def test_the_panel_shows_the_code_until_a_standby_joins(house, tmp_path):
 	main.run()
 	view = lp.panel_view(main.data_dir, house.now)
 	assert view["state"] == "waiting_for_standby"
-	assert main.pair["code_shown"] in lp.render_panel(view)
+	assert view["code"].startswith(lp.CODE_PREFIX) and view["code"] in lp.render_panel(view)
 
 
 def test_the_panel_moves_the_home_only_with_its_own_form(pair, tmp_path):
@@ -492,8 +492,9 @@ def test_only_the_paired_key_gets_in(tmp_path):
 	key = bytes(range(32))
 	data = tmp_path / "d"
 	data.mkdir()
+	lp.save_pair(data, {"id": "main", "mode": "main", "key": __import__("base64").b64encode(key).decode()})
 	server = lp.LanServer(data, lambda: {"id": "main", "holder": "main", "epoch": 1}, port=0, bind="127.0.0.1")
-	server.ensure(key)
+	server.ensure()
 	try:
 		port = server.bound_port
 		assert lp.call_peer("127.0.0.1", port, key, "GET", "/v1/status")[:2] == (200, {"id": "main", "holder": "main", "epoch": 1})
@@ -501,5 +502,85 @@ def test_only_the_paired_key_gets_in(tmp_path):
 		status, body, _ = lp.call_peer("127.0.0.1", port, key, "POST", "/v1/hello",
 		                               {"id": "spare", "address": "192.168.1.89", "name": "Spare"})
 		assert status == 200 and json.loads((data / lp.HELLO_FILE).read_text())["name"] == "Spare"
+	finally:
+		server.stop()
+
+
+
+# ── Security review, 1 Oct 2026 ───────────────────────────────────────────
+
+def test_the_code_is_never_in_a_notification(house, tmp_path):
+	"""Every user of Home Assistant sees its notifications; the code lets an
+	install copy everything. It is on the app's panel, for administrators."""
+	main = Install(house, "main", "192.168.1.116", tmp_path)
+	main.set_options("main")
+	main.run()
+	code = lp.panel_view(main.data_dir, house.now)["code"]
+	title, message = main.notices[lp.NOTICE_CODE]
+	assert code not in message and "vcp1." not in message and "Open Web UI" in message
+
+
+def test_both_sides_derive_the_same_pair_key(pair):
+	main, spare = pair
+	assert lp.pair_key(main.pair) == lp.pair_key(spare.pair) != lp.key_of(main.pair)
+	assert lp.pair_key({"id": "a", "mode": "main", "key": main.pair["key"]}) is None  # no peer yet
+
+
+def test_once_the_pair_key_is_used_the_code_opens_nothing_but_a_hello(pair):
+	main, spare = pair
+	lan = main.lan
+	(main.data_dir / lp.PAIR_SEEN_FILE).unlink(missing_ok=True)  # as with a peer still on 0.2.0
+	assert lan.answer("GET", "/v1/status", None, identity=lp.CODE_IDENTITY)[0] == 200  # it carries on
+	assert lan.answer("GET", "/v1/status", None, identity=lp.PAIR_IDENTITY)[0] == 200
+	assert lan.answer("GET", "/v1/status", None, identity=lp.CODE_IDENTITY)[0] == 403
+	assert lan.answer("GET", "/v1/snapshot", None, identity=lp.CODE_IDENTITY)[0] == 403
+	assert lan.lookup(lp.PAIR_IDENTITY) == lp.pair_key(main.pair)
+	assert lan.lookup("someone-else") is None
+
+
+def test_a_second_install_with_the_code_does_not_replace_the_standby(pair):
+	main, spare = pair
+	status, body, _ = main.lan.answer("POST", "/v1/hello", {"id": "intruder", "address": "192.168.1.66"},
+	                                  identity=lp.CODE_IDENTITY)
+	assert status == 409 and "already has a standby" in body["error"]
+	ok, _, _ = main.lan.answer("POST", "/v1/hello", {"id": spare.pair["id"], "address": "192.168.1.89"},
+	                           identity=lp.CODE_IDENTITY)
+	assert ok == 200  # its own standby may say hello again
+
+
+def test_a_snapshot_that_unpacks_to_too_much_is_refused(tmp_path, monkeypatch):
+	import io
+	import tarfile
+	monkeypatch.setattr(cs, "MAX_UNPACKED_BYTES", 1000)
+	buf = io.BytesIO()
+	with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+		for name, size in ((".storage/core.config_entries", 600), (".HA_VERSION", 600)):
+			info = tarfile.TarInfo(name)
+			info.size = size
+			tar.addfile(info, io.BytesIO(b"x" * size))
+	config = make_config(tmp_path / "c")
+	with pytest.raises(cs.ApplyRefused, match="unpacks to more than"):
+		cs.apply_snapshot(config, buf.getvalue())
+	assert (config / ".HA_VERSION").read_text() == "2026.9.4"  # nothing touched
+
+
+@needs_psk
+def test_the_pair_key_and_the_size_caps_over_real_tls(tmp_path, monkeypatch):
+	key = bytes(range(32))
+	data = tmp_path / "main"
+	data.mkdir()
+	lp.save_pair(data, {"id": "m1", "mode": "main", "key": __import__("base64").b64encode(key).decode(),
+	                    "holder": "m1", "epoch": 1, "peer": {"id": "s1"}})
+	server = lp.LanServer(data, lambda: {"id": "m1", "pad": "x" * 2000}, port=0, bind="127.0.0.1")
+	server.ensure()
+	try:
+		port = server.bound_port
+		own = lp.pair_key({"id": "s1", "mode": "standby", "key": __import__("base64").b64encode(key).decode(),
+		                   "peer": {"id": "m1"}})
+		assert lp.call_peer("127.0.0.1", port, own, "GET", "/v1/status", identity=lp.PAIR_IDENTITY)[0] == 200
+		assert lp.call_peer("127.0.0.1", port, key, "GET", "/v1/status")[0] == 403  # the code: hello only now
+		assert lp.call_peer("127.0.0.1", port, bytes(32), "GET", "/v1/status", identity=lp.PAIR_IDENTITY)[0] == 0
+		monkeypatch.setattr(lp, "MAX_JSON", 1000)
+		assert lp.call_peer("127.0.0.1", port, own, "GET", "/v1/status", identity=lp.PAIR_IDENTITY)[0] == 413
 	finally:
 		server.stop()
