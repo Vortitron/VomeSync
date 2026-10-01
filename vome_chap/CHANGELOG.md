@@ -16,6 +16,11 @@ Security, from a review of the local pair:
   through Vome), and small answers otherwise; at most 16 connections at once.
 - The app page's form token is compared in constant time.
 
+Clearer names: the two installs are "Main install" and "Standby" in their
+notifications and on the app's page, which also shows each one's address;
+or name them yourself with the new *install_name* setting ("Kitchen NUC").
+Renaming does not re-pair.
+
 Also fixed: in a local pair this app now turns on its own automatic updates,
 as it does in a Vome pair. A standby's Home Assistant is stopped, so nobody
 can open it to update the app; until now it kept the version it was paired

@@ -68,8 +68,9 @@ class Install(lp.Env):
 		self.lan = lp.LanServer(data, lambda: lp.my_status(lp.load_pair(data), self))
 		house.installs[ip] = self
 
-	def set_options(self, mode, code=""):
-		(self.data_dir / lp.OPTIONS_FILE).write_text(json.dumps({"local_pair": mode, "pair_code": code}))
+	def set_options(self, mode, code="", name=""):
+		(self.data_dir / lp.OPTIONS_FILE).write_text(json.dumps({"local_pair": mode, "pair_code": code,
+		                                                         "install_name": name}))
 
 	def run(self):
 		assert self.on
@@ -612,3 +613,20 @@ def test_the_real_env_asks_the_supervisor(tmp_path):
 			return "turned on"
 	env = lp.Env(FakeCs, tmp_path, tmp_path)
 	assert env.keep_updating({}) == "turned on" and calls == [tmp_path / lp.PAIR_FILE]
+
+
+
+def test_installs_are_named_by_role_unless_the_owner_names_them(pair, house):
+	"""After a sync both carry the same Home Assistant and host name; "Home
+	Assistant at 192.168.1.116" in every message read badly (30 Sept 2026)."""
+	main, spare = pair
+	assert main.pair["name"] == "Main install" and spare.pair["name"] == "Standby"
+	tick(house, main)
+	assert main.pair["peer"]["name"] == "Standby"
+	page = lp.render_panel(lp.panel_view(main.data_dir, house.now), "t")
+	assert "<b>Main install</b> (this one, 192.168.1.116)" in page and "Standby (192.168.1.89)" in page
+	before = spare.pair["id"]
+	spare.set_options("standby", spare.pair and lp.read_options(spare.data_dir)["code"], name="Kitchen NUC")
+	tick(house, spare, main)
+	assert spare.pair["id"] == before  # renaming does not re-pair
+	assert main.pair["peer"]["name"] == "Kitchen NUC"

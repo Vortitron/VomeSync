@@ -44,6 +44,8 @@ panel_title: Vome CHAP
 options:
   local_pair: "off"
   pair_code: ""
+  install_name: ""
 schema:
   local_pair: list(off|main|standby)
   pair_code: str?
+  install_name: str?
