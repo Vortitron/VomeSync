@@ -74,6 +74,9 @@ when it stands in. The rest stay stopped there.
 - Made the standby by restoring a backup of the main install? Pair it
   straight away: until then both run as the same home and take turns on
   your Vome address. Pairing stops the standby's Home Assistant.
+- Set **home_address** on the main install (an unused address, e.g.
+  192.168.1.15) and point the app at it: whichever install runs your home
+  holds it.
 - Give both machines fixed addresses on your network (a reservation on your
   router), so they can always find each other.
 - A USB radio (a Zigbee or Z-Wave stick) cannot move between machines. Use a

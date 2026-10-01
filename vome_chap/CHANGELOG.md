@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 — 1 October 2026
+
+**Your home's address follows the running install, in a local pair too.**
+Set *home_address* on the main install (an unused address on your house
+network, e.g. 192.168.1.15) and point the app and your dashboards at it:
+whichever Home Assistant runs your home holds it, so nothing needs changing
+after a takeover. The standby learns it from the main install. Both installs
+need a fixed address of their own. An address in use (an install's own, the
+router's) or off your house network is refused, with a note in the log.
+
 ## 0.2.1 — 1 October 2026
 
 Security, from a review of the local pair:

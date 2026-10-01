@@ -130,6 +130,7 @@ def read_options(data_dir: Path) -> dict:
 		wait = T_TAKE
 	return {"mode": mode, "code": str(raw.get("pair_code") or "").strip(),
 	        "name": str(raw.get("install_name") or "").strip()[:40],
+	        "home_address": str(raw.get("home_address") or "").strip()[:43],
 	        # Quick or careful (owner, 28 Sept 2026: "would people rather it come
 	        # up quickly and risk ... or make sure everything stays in order but
 	        # few mins downtime"). The standby's choice; 30 s to 15 min.
@@ -669,6 +670,11 @@ class Env:
 	def set_addons(self, slugs: list, running: bool) -> list:
 		return self.cs.set_addons_running(slugs, running)
 
+	def hold_home_address(self, pair: dict, address: str, hold: bool) -> Optional[str]:
+		"""Hold or release the home's address (chap_sync.enforce_home_address)."""
+		return self.cs.enforce_home_address({"home_address": {"address": address, "hold": hold}},
+		                                    pair, self.data_dir / PAIR_FILE)
+
 	def keep_updating(self, pair: dict) -> Optional[str]:
 		"""Turn on this app's automatic updates, once (chap_sync.ensure_auto_update)."""
 		return self.cs.ensure_auto_update(pair, self.data_dir / PAIR_FILE)
@@ -676,6 +682,38 @@ class Env:
 	def addon_names(self) -> Optional[dict]:
 		listed = self.cs.addon_list()
 		return {a["slug"]: a["name"] for a in listed} if listed is not None else None
+
+
+def home_address_for(raw: str, network: list) -> tuple[Optional[str], Optional[str]]:
+	"""``(address/prefix, None)`` for the owner's home address, or ``(None, why)``.
+
+	The prefix comes from this install's own interface on that network when
+	the owner leaves it off. Never one of this install's own addresses or its
+	router's: taking those would break the house network.
+	"""
+	import ipaddress
+	if not raw:
+		return None, None
+	try:
+		ip = ipaddress.ip_interface(raw).ip
+	except ValueError:
+		return None, f"home_address {raw!r} is not an address"
+	if ip.version != 4 or not ip.is_private:
+		return None, f"home_address {ip} is not a private IPv4 address on your house network"
+	for entry in network or []:
+		try:
+			own = ipaddress.ip_interface(str(entry.get("address") or ""))
+		except ValueError:
+			continue
+		gateway = str(entry.get("gateway") or "")
+		if ip == own.ip or str(ip) == gateway:
+			return None, f"home_address {ip} is already in use here (this install or its router)"
+		if ip in own.network:
+			if ip in (own.network.network_address, own.network.broadcast_address):
+				return None, f"home_address {ip} is not a usable address on {own.network}"
+			prefix = ipaddress.ip_interface(raw).network.prefixlen if "/" in raw else own.network.prefixlen
+			return f"{ip}/{prefix}", None
+	return None, f"home_address {ip} is not on this install's house network"
 
 
 def _house_address(network: list) -> tuple[Optional[str], Optional[str]]:
@@ -697,6 +735,7 @@ def my_status(pair: dict, env: Env) -> dict:
 	meta = _load(env.data_dir / SNAPSHOT_META)
 	return {"id": pair.get("id"), "name": pair.get("name"), "holder": pair.get("holder"),
 	        "mode": pair.get("mode"), "home_addons": pair.get("home_addons"),
+	        "home_address": pair.get("home_address_raw") if pair.get("mode") == MAIN else None,
 	        "standby_addons": pair.get("standby_addons") if pair.get("mode") == MAIN else None,
 	        "epoch": pair.get("epoch"), "address": pair.get("address"), "ha_port": pair.get("ha_port"),
 	        "ha_version": pair.get("ha_version"), "applied_sha256": pair.get("applied_sha256"),
@@ -951,6 +990,8 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 	# test pair, 30 Sept 2026). Not part of the settings' identity: renaming
 	# does not re-pair.
 	pair["name"] = options.get("name") or (DEFAULT_NAMES[options["mode"]])
+	if options["mode"] == MAIN:
+		pair["home_address_raw"] = options.get("home_address") or ""
 
 	if options["mode"] == STANDBY and not key_of(pair):
 		try:
@@ -1000,6 +1041,7 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 			pair["peer_applied_sha256"] = peer_status.get("applied_sha256")
 			if peer_status.get("mode") == MAIN and pair.get("mode") == STANDBY:
 				pair["allowed_addons"] = peer_status.get("standby_addons")
+				pair["home_address_raw"] = peer_status.get("home_address") or ""
 			if pair.get("mode") == MAIN:
 				pair["peer_addons"] = peer_status.get("home_addons")
 			peer = pair.setdefault("peer", {})
@@ -1045,6 +1087,17 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 	for step in (core, _hold_addons(pair, env, running_here)):
 		if step:
 			notes.append(step)
+	# The home's address at home follows whichever install runs the home, so
+	# the app and dashboards need no change after a takeover. Held only when
+	# Home Assistant here is (or is about to be) the one running the home.
+	home, why = home_address_for(pair.get("home_address_raw") or "", network)
+	if why and pair.get("home_address_why") != why:
+		notes.append(why)
+	pair["home_address_why"] = why
+	if home:
+		held = env.hold_home_address(pair, home, running_here and not pair.get("moving_to"))
+		if held:
+			notes.append(held)
 
 	if running_here and not pair.get("moving_to"):
 		made = _snapshot_if_due(pair, env, now)

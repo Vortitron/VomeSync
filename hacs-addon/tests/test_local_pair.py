@@ -65,6 +65,7 @@ class Install(lp.Env):
 		self.on, self.core_running = True, True
 		self.addons = {s: True for s in HOME_ADDONS}
 		self.notices = {}
+		self.holding = "never asked"
 		self.lan = lp.LanServer(data, lambda: lp.my_status(lp.load_pair(data), self))
 		house.installs[ip] = self
 
@@ -133,6 +134,12 @@ class Install(lp.Env):
 
 	def addon_names(self):
 		return {"core_mosquitto": "Mosquitto broker", "45df7312_zigbee2mqtt": "Zigbee2MQTT"}
+
+	def hold_home_address(self, pair, address, hold):
+		if self.holding == (address if hold else None):
+			return None
+		self.holding = address if hold else None
+		return ("took" if hold else "released") + f" the home's address {address}"
 
 	def keep_updating(self, pair):
 		if pair.get("auto_update_on"):
@@ -663,3 +670,33 @@ def test_the_status_file_summary_never_carries_the_code(house, tmp_path, pair):
 	off = Install(house, "off", "192.168.1.31", tmp_path)
 	off.set_options("off")
 	assert lp.summary(off.data_dir) is None
+
+
+
+def test_the_home_s_address_follows_whichever_install_runs_the_home(pair, house):
+	"""Your original brief (26 Sept 2026): "something that is consistent so the
+	app just works and connects to whichever is the running one"."""
+	main, spare = pair
+	opts = json.loads((main.data_dir / lp.OPTIONS_FILE).read_text())
+	(main.data_dir / lp.OPTIONS_FILE).write_text(json.dumps({**opts, "home_address": "192.168.1.15"}))
+	tick(house, main, spare)
+	tick(house, main, spare)
+	assert main.holding == "192.168.1.15/24" and spare.holding is None
+	main.on = main.core_running = False
+	for _ in range(20):
+		tick(house, spare)
+	assert spare.holding == "192.168.1.15/24"   # the standby learnt it from the main
+	main.on = main.core_running = True
+	tick(house, main)
+	assert main.holding is None                 # back, standing by: lets it go
+
+
+@pytest.mark.parametrize("raw, ok", [
+	("192.168.1.15", "192.168.1.15/24"), ("192.168.1.15/24", "192.168.1.15/24"),
+	("192.168.1.116", None), ("192.168.1.1", None), ("192.168.1.255", None),
+	("8.8.8.8", None), ("10.0.0.5", None), ("banana", None), ("", None),
+])
+def test_a_home_address_must_be_a_spare_one_on_the_house_network(raw, ok):
+	network = [{"interface": "eth0", "address": "192.168.1.116/24", "gateway": "192.168.1.1"}]
+	got, why = lp.home_address_for(raw, network)
+	assert got == ok and (bool(why) == bool(raw and not ok))
