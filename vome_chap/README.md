@@ -37,8 +37,9 @@ down. No Vome account, no time limit. Step by step, with pictures:
 
 1. Install **Vome CHAP** on both Home Assistants.
 2. On the one running your home, set **local_pair** to `main` in the add-on's
-   *Configuration* tab and save. Home Assistant shows a pairing code (also in
-   the add-on's *Vome CHAP* panel in the sidebar).
+   *Configuration* tab and save. The pairing code is on the add-on's own page
+   (*Open Web UI*, or *Show in sidebar*), which only administrators can open;
+   a notification tells you it is ready.
 3. On the other, set **local_pair** to `standby`, paste the code into
    **pair_code**, and save.
 
