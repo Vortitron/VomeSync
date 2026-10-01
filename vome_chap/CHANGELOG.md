@@ -16,6 +16,12 @@ Security, from a review of the local pair:
   through Vome), and small answers otherwise; at most 16 connections at once.
 - The app page's form token is compared in constant time.
 
+Also fixed: in a local pair this app now turns on its own automatic updates,
+as it does in a Vome pair. A standby's Home Assistant is stopped, so nobody
+can open it to update the app; until now it kept the version it was paired
+with. Pairs made with 0.2.0: update the app on the standby once by hand
+(start its Home Assistant, update, and it stops again by itself).
+
 ## 0.2.0 — 29 September 2026
 
 **The local pair: two Home Assistants in your house, no Vome needed.**

@@ -658,6 +658,10 @@ class Env:
 	def set_addons(self, slugs: list, running: bool) -> list:
 		return self.cs.set_addons_running(slugs, running)
 
+	def keep_updating(self, pair: dict) -> Optional[str]:
+		"""Turn on this app's automatic updates, once (chap_sync.ensure_auto_update)."""
+		return self.cs.ensure_auto_update(pair, self.data_dir / PAIR_FILE)
+
 	def addon_names(self) -> Optional[dict]:
 		listed = self.cs.addon_list()
 		return {a["slug"]: a["name"] for a in listed} if listed is not None else None
@@ -945,6 +949,12 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 	key = key_of(pair)
 	if env.server and key:
 		env.server.ensure(key)
+	# A standby's Home Assistant is stopped, so nobody can open it to update
+	# this app: without automatic updates it would keep the version it was
+	# paired with for good (found 1 Oct 2026, writing up 0.2.1's fixes).
+	updating = env.keep_updating(pair)
+	if updating:
+		notes.append(updating)
 	joined = take_hello(pair, env.data_dir, now)
 	if joined:
 		notes.append(joined)
