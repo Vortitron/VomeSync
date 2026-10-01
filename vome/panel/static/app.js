@@ -1564,15 +1564,52 @@ const cu = document.getElementById("copy-url");
 		return `${mins}m left`;
 	}
 
+	// Agents don't share one config format: Cursor and Claude Code read
+	// "mcpServers", VS Code's .vscode/mcp.json "servers", OpenCode "mcp" with
+	// its own entry shape. Vome renders each (mcp.clients); a portal from
+	// before that sends only the Cursor block, which is offered on its own.
+	let agentClient = "cursor";
+
+	function agentClients() {
+		const mcp = (agentIssued && agentIssued.mcp) || {};
+		const clients = Array.isArray(mcp.clients) ? mcp.clients.filter((c) => c && c.id && c.json) : [];
+		if (clients.length) return clients;
+		return mcp.json ? [{ id: "cursor", label: "Cursor / Claude Code", where: "~/.cursor/mcp.json, or your agent's MCP config", json: mcp.json }] : [];
+	}
+
+	function agentChosenClient() {
+		const clients = agentClients();
+		return clients.find((c) => c.id === agentClient) || clients[0] || null;
+	}
+
+	function agentShowClient(id) {
+		agentClient = id;
+		const chosen = agentChosenClient();
+		if (!chosen) return;
+		const pre = document.getElementById("agent-json");
+		const where = document.getElementById("agent-where");
+		if (pre) pre.textContent = chosen.json;
+		if (where) where.textContent = chosen.where || "";
+		document.querySelectorAll("[data-agent-client]").forEach((btn) => {
+			btn.className = btn.getAttribute("data-agent-client") === chosen.id ? "primary" : "ghost";
+		});
+	}
+
 	function agentKeyCard() {
 		if (!agentIssued) return "";
-		const json = agentIssued.mcp && agentIssued.mcp.json ? agentIssued.mcp.json : "";
-		if (!json) return "";
+		const clients = agentClients();
+		const chosen = agentChosenClient();
+		if (!chosen) return "";
+		const picker = clients.length > 1 ? `
+				<div class="row" role="group" aria-label="Your agent">
+					${clients.map((c) => `<button type="button" class="${c.id === chosen.id ? "primary" : "ghost"}" data-agent-client="${escapeHtml(c.id)}">${escapeHtml(c.label || c.id)}</button>`).join("")}
+				</div>` : "";
 		return `
 			<div class="card">
-				<h2>Your <code>mcp.json</code></h2>
-				<p class="muted">Paste this into <code>~/.cursor/mcp.json</code>, VS Code's <code>mcp.json</code>, or your agent's MCP config, and restart it. Nothing to install.</p>
-				<pre id="agent-json" class="pre-scroll">${escapeHtml(json)}</pre>
+				<h2>Your MCP config</h2>
+				${picker}
+				<p class="muted">Paste this into <code id="agent-where">${escapeHtml(chosen.where || "")}</code>, and restart your agent. Nothing to install.</p>
+				<pre id="agent-json" class="pre-scroll">${escapeHtml(chosen.json)}</pre>
 				<div class="row">
 					<button type="button" class="primary" id="agent-copy">Copy</button>
 				</div>
@@ -1584,7 +1621,7 @@ const cu = document.getElementById("copy-url");
 		return `
 			<div class="card">
 				<h2>Work on this Home Assistant from your editor</h2>
-				<p class="muted">Cursor, VS Code, Claude and anything else that speaks MCP can read this instance and change it — entity ids, live state, logs and automations — instead of you pasting them back and forth.</p>
+				<p class="muted">Cursor, VS Code, Claude Code, OpenCode and anything else that speaks MCP can read this instance and change it — entity ids, live state, logs and automations — instead of you pasting them back and forth.</p>
 				<p class="muted">The key below is <strong>not</strong> a Home Assistant token. It reaches this instance only, only through Vome, and only within the permissions you tick here, which Vome enforces at its end and writes to an audit log. Widening it means coming back to this page.</p>
 			</div>`;
 	}
@@ -1663,7 +1700,7 @@ const cu = document.getElementById("copy-url");
 						<button type="button" class="primary" id="agent-save"${agentBusy ? " disabled" : ""}>Save permissions</button>
 						<button type="button" class="ghost" id="agent-replace"${agentBusy ? " disabled" : ""}>Replace key</button>
 					</div>
-					<p class="muted">Saving does not change the key itself, so your <code>mcp.json</code> keeps working.</p>
+					<p class="muted">Saving does not change the key itself, so the MCP config you pasted keeps working.</p>
 				</div>
 				<div class="card">
 					<h2>Revoke</h2>
@@ -1679,7 +1716,7 @@ const cu = document.getElementById("copy-url");
 				"/api/agent_key/scopes",
 				{ scopes: agentCheckedScopes() },
 				"Saving…",
-				(res) => { showBanner("Permissions saved. Your mcp.json is unchanged.", "info"); return res; },
+				(res) => { showBanner("Permissions saved. Your MCP config is unchanged.", "info"); return res; },
 			);
 
 			const replace = document.getElementById("agent-replace");
@@ -1781,6 +1818,8 @@ const cu = document.getElementById("copy-url");
 
 	document.addEventListener("click", (ev) => {
 		if (ev.target && ev.target.id === "agent-copy") agentCopyJson();
+		const pick = ev.target && ev.target.closest && ev.target.closest("[data-agent-client]");
+		if (pick) agentShowClient(pick.getAttribute("data-agent-client"));
 	});
 
 	// ── Standby sync (CHAP) ─────────────────────────────────────────────

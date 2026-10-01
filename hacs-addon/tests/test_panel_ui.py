@@ -274,7 +274,19 @@ def test_the_trial_is_never_presented_as_permanent():
 
 def test_saving_permissions_promises_the_key_does_not_change():
 	view = _agent_view()
-	assert "mcp.json</code> keeps working" in view
+	assert "you pasted keeps working" in view
+
+
+def test_the_key_card_offers_each_agent_its_own_format():
+	"""OpenCode rejects the Cursor block outright ("mcpServers" was
+	unexpected) and VS Code's .vscode/mcp.json wants "servers"; Vome sends a
+	rendering per agent in mcp.clients. A portal from before that sends only
+	mcp.json, which must still be shown rather than an empty card."""
+	card = PANEL_JS[PANEL_JS.index("function agentClients("):PANEL_JS.index("function agentIntro(")]
+	assert "mcp.clients" in card
+	assert "data-agent-client" in card
+	assert "mcp.json ?" in card, "an older portal's single block is still shown"
+	assert "OpenCode" in PANEL_JS
 
 
 def test_a_linked_house_is_sent_to_its_account_not_offered_a_trial():

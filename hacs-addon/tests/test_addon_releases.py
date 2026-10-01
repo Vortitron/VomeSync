@@ -22,10 +22,13 @@ def _version(addon):
 	return re.search(r'^version:\s*"([^"]+)"', (ROOT / addon / "config.yaml").read_text(), re.M).group(1)
 
 
-def test_every_chap_version_has_a_changelog_entry():
-	"""A bump without one would ship an empty update dialog and release."""
-	changelog = (ROOT / "vome_chap" / "CHANGELOG.md").read_text(encoding="utf-8")
-	assert pr.changelog_section(changelog, _version("vome_chap"))
+@pytest.mark.parametrize("addon", ["vome_chap", "vome"])
+def test_every_version_has_a_changelog_entry(addon):
+	"""A bump without one would ship an empty update dialog and release.
+	Vome's own changelog starts at 0.3.46, whose release notes had to tell
+	OpenCode users why their key never connected."""
+	changelog = (ROOT / addon / "CHANGELOG.md").read_text(encoding="utf-8")
+	assert pr.changelog_section(changelog, _version(addon))
 
 
 def test_a_section_is_only_its_own_version():
@@ -50,8 +53,7 @@ def test_packaging_either_add_on(tmp_path, monkeypatch, addon, tag, artifact):
 	info = dict(line.split("=", 1) for line in (tmp_path / "dist" / "release.txt").read_text().splitlines())
 	assert info["tag"] == tag.format(v=v) and info["artifact"] == artifact.format(v=v)
 	assert (tmp_path / "dist" / info["artifact"]).exists()
-	if addon == "vome_chap":
-		assert info["notes"] == "release-notes.md" and (tmp_path / "dist" / "release-notes.md").read_text().strip()
+	assert info["notes"] == "release-notes.md" and (tmp_path / "dist" / "release-notes.md").read_text().strip()
 
 
 def test_an_unknown_add_on_is_refused(monkeypatch):
