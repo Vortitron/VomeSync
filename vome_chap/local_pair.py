@@ -105,6 +105,7 @@ PEER_TIMEOUT = 5
 PEER_MISSING_NOTICE = 10 * 60   # tell the owner their standby has gone, after this long
 
 MAIN, STANDBY, OFF = "main", "standby", "off"
+DEFAULT_NAMES = {MAIN: "Main install", STANDBY: "Standby"}
 
 NOTICE_CODE = "vome_chap_local_code"
 NOTICE_RUNNING = "vome_chap_running_here"   # the same notice the Vome pairs use
@@ -122,7 +123,8 @@ def read_options(data_dir: Path) -> dict:
 	except (OSError, ValueError):
 		raw = {}
 	mode = raw.get("local_pair") if raw.get("local_pair") in (MAIN, STANDBY) else OFF
-	return {"mode": mode, "code": str(raw.get("pair_code") or "").strip()}
+	return {"mode": mode, "code": str(raw.get("pair_code") or "").strip(),
+	        "name": str(raw.get("install_name") or "").strip()[:40]}
 
 
 def _settings_digest(options: dict) -> str:
@@ -934,7 +936,12 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 	address, gateway = _house_address(network)
 	pair.update({"address": address, "ha_port": env.core_port() or pair.get("ha_port"),
 	             "ha_version": env.core_version() or pair.get("ha_version")})
-	pair.setdefault("name", f"Home Assistant at {address}" if address else "this Home Assistant")
+	# By role unless the owner names it: after a sync both installs carry the
+	# same Home Assistant name and host name, so neither tells them apart, and
+	# "Home Assistant at 192.168.1.116" in every message read badly (first
+	# test pair, 30 Sept 2026). Not part of the settings' identity: renaming
+	# does not re-pair.
+	pair["name"] = options.get("name") or (DEFAULT_NAMES[options["mode"]])
 
 	if options["mode"] == STANDBY and not key_of(pair):
 		try:
@@ -1141,13 +1148,16 @@ def render_panel(view: dict, token: str = "") -> str:
 		            "<p class='muted'>Keep it private: it lets an install take a copy of this one.</p>")
 	else:
 		peer = _esc(view["peer"])
+		here = f", {_esc(view['address'])}" if view.get("address") else ""
+		if view.get("peer_address"):
+			peer = f"{peer} ({_esc(view['peer_address'])})"
 		if view["running_here"] and not view.get("is_main"):
-			rows.append(f"<p><b>{_esc(view['name'])}</b> (this one) is running your home in place of {peer}.</p>")
+			rows.append(f"<p><b>{_esc(view['name'])}</b> (this one{here}) is running your home in place of {peer}.</p>")
 			if view.get("took_over"):
 				rows.append(f"<p class='muted'>It took over; your home goes back to {peer} by itself once "
 				            "that has been back and in step for three minutes.</p>")
 		elif view["running_here"]:
-			rows.append(f"<p><b>{_esc(view['name'])}</b> (this one) runs your home.</p>")
+			rows.append(f"<p><b>{_esc(view['name'])}</b> (this one{here}) runs your home.</p>")
 		if view["running_here"]:
 			if not view["peer_answering"]:
 				when = time.strftime("%H:%M", time.localtime(float(view["peer_seen_at"]))) if view.get("peer_seen_at") else "a while"

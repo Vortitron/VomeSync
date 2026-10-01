@@ -11,5 +11,10 @@ configuration:
     description: >-
       On the standby only: the code the main install shows (it starts with
       vcp1.). Keep it private.
+  install_name:
+    name: This install's name
+    description: >-
+      Optional: what to call this Home Assistant in the pair's notifications
+      and on its page ("Kitchen NUC"). Without it, "Main install" or "Standby".
 network:
   8177/tcp: Local pair (the other Home Assistant in your house)
