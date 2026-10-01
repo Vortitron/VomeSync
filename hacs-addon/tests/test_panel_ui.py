@@ -309,3 +309,12 @@ def test_an_expired_key_is_not_offered_buttons_that_cannot_work():
 	assert "data.active === false" in view
 	assert "This key has expired" in view
 	assert "Clear it and start again" in view
+
+
+def test_a_local_pair_is_shown_not_as_unpaired():
+	"""Vome CHAP 0.2.1+ writes a local pair's summary to the status file; the
+	panel shows it instead of "Not paired", which read as unprotected."""
+	from pathlib import Path
+	js = (Path(__file__).resolve().parents[2] / "vome" / "panel" / "static" / "app.js").read_text(encoding="utf-8")
+	assert "const lp = d.local_pair;" in js and "Two Home Assistants in your house" in js
+	assert "is not answering" in js and "Open Web UI" in js

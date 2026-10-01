@@ -1857,6 +1857,36 @@ const cu = document.getElementById("copy-url");
 				</div>`;
 			return;
 		}
+		// A local pair (Vome CHAP 0.2.1+): two Home Assistants in the house
+		// deciding between themselves. Shown here rather than "Not paired",
+		// which read as if nothing protected this install.
+		const lp = d.local_pair;
+		if (lp && lp.state && lp.state !== "off") {
+			const here = lp.running_here;
+			const other = escapeHtml(lp.peer || "the other install");
+			let line;
+			if (lp.state === "waiting_for_standby") {
+				line = `<p>${pill(true, "Ready for a standby", "")} This install runs your home. The pairing code is on the Vome CHAP app's page.</p>`;
+			} else if (lp.state === "pairing") {
+				line = `<p>${pill(false, "", "Pairing")} Meeting the main install…</p>`;
+			} else if (lp.moving) {
+				line = `<p>${pill(false, "", "Moving")} Your home is moving to ${other}.</p>`;
+			} else if (here) {
+				line = `<p>${pill(true, "Running your home", "")} ${lp.peer_answering
+					? (lp.in_step ? `${other} is standing by, in step.` : `${other} is standing by, catching up.`)
+					: `<strong>${other} is not answering</strong>: nothing can take over until it is back.`}</p>`;
+			} else {
+				line = `<p>${pill(true, "Standing by", "")} ${other} runs your home.</p>`;
+			}
+			viewEl.innerHTML = `
+				<div class="card">
+					<h2>Two Home Assistants in your house</h2>
+					<p class="muted">This install is in a local pair, run by the Vome CHAP app: if the one running your home stops, the other takes over, with or without the internet.</p>
+					${line}
+					<p class="muted">To move your home, choose what a standby runs, or see the pairing code: <em>Settings &rarr; Apps &rarr; Vome CHAP &rarr; Open Web UI</em>.</p>
+				</div>`;
+			return;
+		}
 		const status = d.paired
 			? `<p>${pill(true, "Paired", "")} as <code>${escapeHtml(d.server_id)}</code> with <code>${escapeHtml(d.portal_url)}</code>.</p>
 			   <p class="muted">Last sent to the standby: ${escapeHtml(chapWhen(d.uploaded_at))}. Last taken from it: ${escapeHtml(chapWhen(d.applied_at))}.</p>

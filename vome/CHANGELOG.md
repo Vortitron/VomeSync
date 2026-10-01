@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.48 — 1 October 2026
+
+The panel's CHAP page shows a local pair (two Home Assistants in your house,
+Vome CHAP 0.2.1 or later) -- which one runs your home, whether the other
+answers and is in step -- instead of "Not paired".
+
 ## 0.3.47 — 1 October 2026
 
 **Security: the Vome panel answers only Home Assistant.**
