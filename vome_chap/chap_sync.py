@@ -1654,13 +1654,17 @@ def sleep_unless_nudged(seconds: float, config_dir: Path = CONFIG_DIR,
 STATUS_FILE_NAME = ".vome_chap_status.json"
 
 
-def publish_status(outcome: str, data_dir: Path = DATA_DIR, config_dir: Path = CONFIG_DIR) -> None:
+def publish_status(outcome: str, data_dir: Path = DATA_DIR, config_dir: Path = CONFIG_DIR,
+                   local: Optional[dict] = None) -> None:
 	"""Leave this install's status where the Vome add-on's panel can read it.
 
-	The two add-ons share only /config. Never the credential; never synced.
+	The two add-ons share only /config. Never the credential, never a pairing
+	code; never synced. ``local``: a local pair's summary (local_pair.summary).
 	"""
 	status = panel_status(data_dir)
 	status.update({"last_outcome": outcome, "updated_at": int(time.time())})
+	if local:
+		status["local_pair"] = local
 	try:
 		save_json(config_dir / STATUS_FILE_NAME, status)
 	except OSError:
@@ -1720,7 +1724,11 @@ def main() -> None:
 				if outcome != last_local:  # every 10 s; the log is for changes
 					LOG.info("%s", outcome)
 					last_local = outcome
-				publish_status(outcome)
+				try:
+					summary = local_pair.summary(DATA_DIR)
+				except Exception:  # noqa: BLE001 - a status line must not stop the pass
+					summary = None
+				publish_status(outcome, local=summary)
 				sleep_unless_nudged(wait)
 				continue
 		elif env.server:

@@ -647,3 +647,19 @@ def test_the_owner_picks_quick_or_careful(pair, house):
 	for raw, got in ((5, 30), (5000, 900), ("soon", lp.T_TAKE), (None, lp.T_TAKE)):
 		(spare.data_dir / lp.OPTIONS_FILE).write_text(json.dumps({**opts, "takeover_after": raw}))
 		assert lp.read_options(spare.data_dir)["takeover_after"] == got, raw
+
+
+
+def test_the_status_file_summary_never_carries_the_code(house, tmp_path, pair):
+	main, spare = pair
+	tick(house, main)
+	got = lp.summary(main.data_dir)
+	assert got["state"] == "running_here" and got["in_step"] and got["peer"] == "Standby"
+	assert "code" not in got and "vcp1." not in json.dumps(got)
+	waiting = Install(house, "lonely", "192.168.1.30", tmp_path)
+	waiting.set_options("main")
+	waiting.run()
+	assert "vcp1." not in json.dumps(lp.summary(waiting.data_dir))
+	off = Install(house, "off", "192.168.1.31", tmp_path)
+	off.set_options("off")
+	assert lp.summary(off.data_dir) is None
