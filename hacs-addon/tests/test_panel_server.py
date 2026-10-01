@@ -298,3 +298,19 @@ def test_a_link_is_named_after_the_home_assistant_not_home_assistant(monkeypatch
 	assert server.ha_display_name() == "GamlaBio house"
 	monkeypatch.setattr(server, "_ha_request", lambda m, p, b=None: (502, {"error": "down"}))
 	assert server.ha_display_name() == "Home Assistant"
+
+
+def test_only_home_assistant_s_ingress_reaches_the_panel():
+	"""Security review, 1 Oct 2026: every app on the same Home Assistant shares
+	its internal network, and could call the panel directly -- issue an agent
+	key, unlink -- without the sign-in ingress puts in front of it."""
+	sent = []
+
+	class Fake:
+		client_address = ("172.30.33.7", 51000)  # another app's container
+		_send_json = staticmethod(lambda status, body: sent.append((status, body)))
+	assert server.PanelHandler._from_ingress(Fake()) is False and sent[0][0] == 403
+	Fake.client_address = ("172.30.32.2", 51000)  # the Supervisor's ingress
+	assert server.PanelHandler._from_ingress(Fake()) is True
+	Fake.client_address = ("127.0.0.1", 51000)
+	assert server.PanelHandler._from_ingress(Fake()) is True
