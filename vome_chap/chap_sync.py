@@ -84,6 +84,7 @@ VOLATILE = frozenset({".storage/core.restore_state"})
 REFRESH_SECONDS = 6 * 3600
 IDLE_INTERVAL = 60
 MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
+MAX_UNPACKED_BYTES = 1024 * 1024 * 1024
 
 ROLE_ACTIVE = "active"
 ROLE_STANDBY = "standby"
@@ -306,6 +307,12 @@ def _safe_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
 		if not is_synced(name):
 			raise ApplyRefused(f"snapshot holds a path this side does not sync: {name}")
 		members.append(m)
+	# Declared sizes are what extraction writes: a small, highly compressed
+	# snapshot must not unpack to fill the disk (security review, 1 Oct 2026;
+	# a local pair's snapshot comes from a machine on the house network).
+	if sum(m.size for m in members) > MAX_UNPACKED_BYTES:
+		raise ApplyRefused("snapshot unpacks to more than "
+		                   f"{MAX_UNPACKED_BYTES // (1024 * 1024)} MB; not applying it")
 	names = {m.name for m in members}
 	missing = [n for n in REQUIRED_IN_SNAPSHOT if n not in names]
 	if missing:

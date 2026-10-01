@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.1 — 1 October 2026
+
+Security, from a review of the local pair:
+
+- The pairing code is no longer in a Home Assistant notification, which
+  every user of Home Assistant can see; it is on this app's page, which only
+  administrators can open. The notification says where to find it.
+- Once paired, the two installs switch to a key of their own, derived for
+  that pair: an old pairing code -- in a screenshot, say -- opens nothing
+  but an introduction, and a second install with the code cannot replace
+  your standby. Pairs made with 0.2.0 carry on while they update.
+- Limits on what the other install can send: a configuration snapshot of
+  at most 256 MB that unpacks to at most 1 GB (this also guards snapshots
+  through Vome), and small answers otherwise; at most 16 connections at once.
+- The app page's form token is compared in constant time.
+
 ## 0.2.0 — 29 September 2026
 
 **The local pair: two Home Assistants in your house, no Vome needed.**

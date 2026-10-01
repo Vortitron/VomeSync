@@ -58,6 +58,8 @@ Python 3.13 (the add-on's base image); the rules here are plain functions.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import http.client
 import http.server
 import json
@@ -81,7 +83,18 @@ HELLO_FILE = "local_pair_hello.json"   # the server thread's news, taken up by t
 
 LAN_PORT = 8177
 CODE_PREFIX = "vcp1."
-PSK_IDENTITY = "vome-chap-local-1"
+# Two keys (security review, 1 Oct 2026). The code's key only introduces a
+# standby: after that both sides use a key derived for that exact pair, so a
+# pairing code seen later -- in a screenshot, an old notification -- opens
+# nothing. CODE_IDENTITY keeps working for everything until the pair key has
+# been used once, so pairs made with 0.2.0 carry on while they update.
+PSK_IDENTITY = CODE_IDENTITY = "vome-chap-local-1"
+PAIR_IDENTITY = "vome-chap-pair-1"
+PAIR_SEEN_FILE = "local_pair_key_seen"
+
+MAX_DOWNLOAD = 256 * 1024 * 1024   # a configuration snapshot from the other install
+MAX_JSON = 1024 * 1024             # anything else it answers
+MAX_CONNECTIONS = 16               # at once, on the house network
 
 T_TAKE = 120               # the router in sight and the running install gone, this long
 MOVE_TIMEOUT = 10 * 60     # a move the other install has not caught up with is called off
@@ -167,6 +180,15 @@ def key_of(pair: dict) -> Optional[bytes]:
 	except ValueError:
 		return None
 	return key if len(key) == 32 else None
+
+
+def pair_key(pair: dict) -> Optional[bytes]:
+	"""The key for this pair alone, once both installs know each other."""
+	key, peer = key_of(pair), (pair.get("peer") or {}).get("id")
+	if not key or not peer or not pair.get("id"):
+		return None
+	main, standby = (pair["id"], peer) if pair.get("mode") == MAIN else (peer, pair["id"])
+	return hmac.new(key, f"vome-chap-pair|{main}|{standby}".encode(), hashlib.sha256).digest()
 
 
 # ── The pairing code ──────────────────────────────────────────────────────
@@ -274,47 +296,69 @@ def _require_psk() -> None:
 		raise RuntimeError("this Python cannot do TLS with a pre-shared key (needs 3.13)")
 
 
-def server_context(key: bytes) -> ssl.SSLContext:
+# Which key the connection being served proved: the handshake runs in the
+# request's own thread (_TLSServer.get_request), so a thread-local is its.
+_conn = threading.local()
+
+
+def server_context(lookup: Callable[[str], Optional[bytes]]) -> ssl.SSLContext:
+	"""A server context whose key is looked up, per handshake, by identity."""
 	_require_psk()
 	ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 	ctx.minimum_version = ssl.TLSVersion.TLSv1_3
 	ctx.set_ciphers("PSK")
-	ctx.set_psk_server_callback(lambda identity: key if identity == PSK_IDENTITY else b"", None)
+
+	def callback(identity):
+		key = lookup(identity)
+		_conn.identity = identity if key else None
+		return key or b""
+	ctx.set_psk_server_callback(callback, None)
 	return ctx
 
 
-def client_context(key: bytes) -> ssl.SSLContext:
+def client_context(key: bytes, identity: str = CODE_IDENTITY) -> ssl.SSLContext:
 	_require_psk()
 	ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 	ctx.check_hostname = False
 	ctx.verify_mode = ssl.CERT_NONE  # the key is the proof, both ways
 	ctx.minimum_version = ssl.TLSVersion.TLSv1_3
 	ctx.set_ciphers("PSK")
-	ctx.set_psk_client_callback(lambda hint: (PSK_IDENTITY, key))
+	ctx.set_psk_client_callback(lambda hint: (identity, key))
 	return ctx
 
 
 def call_peer(address: str, port: int, key: bytes, method: str, path: str,
               body: Optional[dict] = None, timeout: float = PEER_TIMEOUT,
-              sink: Optional[Path] = None) -> tuple[int, Any, dict]:
+              sink: Optional[Path] = None, identity: str = CODE_IDENTITY) -> tuple[int, Any, dict]:
 	"""One request to the other install. ``(status, json or None, headers)``;
 	status 0 when it could not be reached. With ``sink`` a body is written
-	there instead of parsed (a snapshot)."""
-	conn = http.client.HTTPSConnection(address, port, timeout=timeout, context=client_context(key))
+	there instead of parsed (a snapshot). Nothing larger than MAX_DOWNLOAD
+	(a snapshot) or MAX_JSON (anything else) is taken: 413."""
+	conn = http.client.HTTPSConnection(address, port, timeout=timeout,
+	                                   context=client_context(key, identity))
 	try:
 		data = json.dumps(body).encode() if body is not None else None
 		conn.request(method, path, body=data, headers={"Content-Type": "application/json"} if data else {})
 		resp = conn.getresponse()
 		headers = {k.lower(): v for k, v in resp.getheaders()}
 		if sink is not None and resp.status == 200:
+			taken = 0
 			with open(sink, "wb") as fh:
 				while True:
 					chunk = resp.read(1 << 20)
 					if not chunk:
 						break
+					taken += len(chunk)
+					if taken > MAX_DOWNLOAD:
+						break
 					fh.write(chunk)
+			if taken > MAX_DOWNLOAD:
+				sink.unlink(missing_ok=True)
+				return 413, None, headers
 			return resp.status, None, headers
-		raw = resp.read()
+		raw = resp.read(MAX_JSON + 1)
+		if len(raw) > MAX_JSON:
+			return 413, None, headers
 		try:
 			return resp.status, (json.loads(raw) if raw else None), headers
 		except ValueError:
@@ -358,7 +402,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 		return None
 
 	def do_GET(self):  # noqa: N802 - http.server's naming
-		self._send(*self.server.lan.answer("GET", self.path, None))  # type: ignore[attr-defined]
+		self._send(*self.server.lan.answer("GET", self.path, None,  # type: ignore[attr-defined]
+		                                   identity=getattr(_conn, "identity", None)))
 
 	def do_POST(self):  # noqa: N802
 		try:
@@ -366,7 +411,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 			body = json.loads(self.rfile.read(length) or b"{}")
 		except (ValueError, OSError):
 			return self._json(400, {"error": "bad request"})
-		self._send(*self.server.lan.answer("POST", self.path, body))  # type: ignore[attr-defined]
+		self._send(*self.server.lan.answer("POST", self.path, body,  # type: ignore[attr-defined]
+		                                   identity=getattr(_conn, "identity", None)))
 
 
 class _TLSServer(http.server.ThreadingHTTPServer):
@@ -376,6 +422,20 @@ class _TLSServer(http.server.ThreadingHTTPServer):
 	def __init__(self, address, ctx: ssl.SSLContext):
 		super().__init__(address, _Handler)
 		self.ctx = ctx
+		self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+	def process_request(self, request, client_address):
+		# A few at a time: the other install makes one request a pass.
+		if not self._slots.acquire(blocking=False):
+			self.shutdown_request(request)
+			return
+		super().process_request(request, client_address)
+
+	def process_request_thread(self, request, client_address):
+		try:
+			super().process_request_thread(request, client_address)
+		finally:
+			self._slots.release()
 
 	def get_request(self):
 		sock, addr = self.socket.accept()
@@ -392,13 +452,34 @@ class LanServer:
 	             bind: str = "0.0.0.0"):
 		self.data_dir, self._status, self.port, self.bind = data_dir, status, port, bind
 		self._httpd: Optional[_TLSServer] = None
-		self._key: Optional[bytes] = None
 
 	def status(self) -> dict:
 		return self._status()
 
-	def answer(self, method: str, path: str, body: Any) -> tuple[int, Any, dict]:
-		"""One request from the other install: ``(status, json or file, headers)``."""
+	def lookup(self, identity: str) -> Optional[bytes]:
+		"""The key a connecting install must hold, by the identity it gives."""
+		pair = load_pair(self.data_dir)
+		if identity == PAIR_IDENTITY:
+			return pair_key(pair)
+		if identity == CODE_IDENTITY:
+			return key_of(pair)
+		return None
+
+	def answer(self, method: str, path: str, body: Any, identity: Optional[str] = PAIR_IDENTITY) -> tuple[int, Any, dict]:
+		"""One request from the other install: ``(status, json or file, headers)``.
+
+		``identity``: the key it proved. The code's key introduces a standby
+		(hello); for anything else it is refused once the pair key has been
+		used.
+		"""
+		seen = self.data_dir / PAIR_SEEN_FILE
+		if identity == PAIR_IDENTITY and not seen.exists():
+			try:
+				seen.touch(mode=0o600)
+			except OSError:
+				pass
+		elif identity != PAIR_IDENTITY and not (method == "POST" and path == "/v1/hello") and seen.exists():
+			return 403, {"error": "use the pair's own key"}, {}
 		if method == "GET" and path == "/v1/status":
 			return 200, self.status(), {}
 		if method == "GET" and path == "/v1/snapshot":
@@ -424,6 +505,11 @@ class LanServer:
 			return 400, {"error": "who are you?"}
 		if peer_id == pair.get("id"):
 			return 409, {"error": "this install has the same identity as the main one"}
+		known = (pair.get("peer") or {}).get("id")
+		if known and known != peer_id:
+			# A second install with the code: it does not replace the standby.
+			return 409, {"error": "this main install already has a standby; to pair another, "
+			                      "turn its local_pair off and on again for a new code"}
 		try:
 			port = int(body.get("port") or LAN_PORT)
 		except (TypeError, ValueError):
@@ -437,15 +523,14 @@ class LanServer:
 			path.chmod(0o600)
 		return 200, self.status()
 
-	def ensure(self, key: bytes) -> None:
-		"""Listening with this key (restarted if the key changed)."""
-		if self._httpd and self._key == key:
+	def ensure(self, key: Optional[bytes] = None) -> None:
+		"""Listening (the keys are looked up per connection, so once is enough)."""
+		if self._httpd:
 			return
-		self.stop()
-		httpd = _TLSServer((self.bind, self.port), server_context(key))
+		httpd = _TLSServer((self.bind, self.port), server_context(self.lookup))
 		httpd.lan = self  # type: ignore[attr-defined]
 		threading.Thread(target=httpd.serve_forever, name="vome-chap-lan", daemon=True).start()
-		self._httpd, self._key = httpd, key
+		self._httpd = httpd
 		LOG.info("listening on the house network, port %s", httpd.server_address[1])
 
 	@property
@@ -456,7 +541,7 @@ class LanServer:
 		if self._httpd:
 			self._httpd.shutdown()
 			self._httpd.server_close()
-			self._httpd, self._key = None, None
+			self._httpd = None
 
 
 def _load(path: Path) -> dict:
@@ -526,9 +611,23 @@ class Env:
 		return ha_answers(address, port)
 
 	def peer(self, pair: dict, method: str, path: str, body=None, sink=None):
+		"""The pair's own key; the code's key only until the pair key has
+		worked once (the other side may still be on 0.2.0, or not know us)."""
 		peer = pair.get("peer") or {}
-		return call_peer(peer["address"], int(peer.get("port") or LAN_PORT), key_of(pair),
-		                 method, path, body, sink=sink)
+		keys = []
+		own = pair_key(pair)
+		if own:
+			keys.append((PAIR_IDENTITY, own))
+		if not own or not pair.get("pair_key_ok"):
+			keys.append((CODE_IDENTITY, key_of(pair)))
+		for identity, key in keys:
+			got = call_peer(peer["address"], int(peer.get("port") or LAN_PORT), key,
+			                method, path, body, sink=sink, identity=identity)
+			if got[0]:
+				if identity == PAIR_IDENTITY and got[0] != 403:
+					pair["pair_key_ok"] = True
+				return got
+		return 0, None, {}
 
 	def core_stopped(self) -> bool:
 		return self.cs.core_is_stopped()
@@ -929,12 +1028,15 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 			_say_running_here(pair, env)
 		if options["mode"] == MAIN and not pair.get("peer") and address and key:
 			code = make_code(address, LAN_PORT, key, pair["id"], pair["name"])
+			# The code itself only on the app's panel, which only administrators
+			# can open: every user of Home Assistant sees its notifications, and
+			# the code lets an install take a copy of everything here.
 			if pair.get("code_shown") != code and env.notify(
 					NOTICE_CODE, "Vome CHAP: pair a standby",
-					"To make another Home Assistant in your house this one's standby, open its "
-					"**Vome CHAP** add-on settings, set *local_pair* to **standby** and paste this "
-					f"code into *pair_code*:\n\n`{code}`\n\nKeep it private: it lets an install "
-					"take a copy of this one's configuration."):
+					"This Home Assistant is ready for a standby. Its pairing code is on the "
+					"**Vome CHAP** app's page: *Settings → Apps → Vome CHAP → Open Web UI*. On "
+					"the other Home Assistant, set *local_pair* to **standby** and paste the code "
+					"into *pair_code*."):
 				pair["code_shown"] = code
 		if pair.get("peer") and pair.get("code_shown"):
 			if env.dismiss(NOTICE_CODE):
@@ -995,7 +1097,9 @@ def panel_view(data_dir: Path, now: Optional[float] = None) -> dict:
 	        "peer_answering": bool(seen and now - float(seen) < 3 * PASS_SECONDS + PEER_TIMEOUT),
 	        "peer_seen_at": seen,
 	        "in_step": bool(meta.get("sha256")) and pair.get("peer_applied_sha256") == meta.get("sha256"),
-	        "code": pair.get("code_shown"), "took_over": bool(pair.get("took_over")),
+	        "code": (make_code(pair["address"], LAN_PORT, key_of(pair), pair["id"], pair.get("name") or "")
+	                 if options["mode"] == MAIN and not peer and pair.get("address") and key_of(pair) else None),
+	        "took_over": bool(pair.get("took_over")),
 	        "is_main": options["mode"] == MAIN, "peer_addons": pair.get("peer_addons") or [],
 	        "standby_addons": pair.get("standby_addons")}
 	if not peer:
@@ -1106,7 +1210,7 @@ class _PanelHandler(http.server.BaseHTTPRequestHandler):
 			return self._html(403, "")
 		length = min(int(self.headers.get("Content-Length") or 0), 4096)
 		form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
-		if form.get("t", [""])[0] != _FORM_TOKEN:
+		if not hmac.compare_digest(form.get("t", [""])[0].encode(), _FORM_TOKEN.encode()):
 			return self._html(403, "<p>This page is out of date; reload it.</p>")
 		action = self.path.rstrip("/").rsplit("/", 1)[-1]
 		if action not in ("move", "cancel", "addons"):
