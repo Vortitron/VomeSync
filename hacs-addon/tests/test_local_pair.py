@@ -630,3 +630,20 @@ def test_installs_are_named_by_role_unless_the_owner_names_them(pair, house):
 	tick(house, spare, main)
 	assert spare.pair["id"] == before  # renaming does not re-pair
 	assert main.pair["peer"]["name"] == "Kitchen NUC"
+
+
+
+def test_the_owner_picks_quick_or_careful(pair, house):
+	"""Owner, 28 Sept 2026: quick (risk a blip moving the home) or careful
+	(a few minutes' downtime)? The standby's takeover_after, 30 s to 15 min."""
+	main, spare = pair
+	opts = json.loads((spare.data_dir / lp.OPTIONS_FILE).read_text())
+	(spare.data_dir / lp.OPTIONS_FILE).write_text(json.dumps({**opts, "takeover_after": 30}))
+	main.on = main.core_running = False
+	tick(house, spare)            # starts the clock
+	tick(house, spare, seconds=35)
+	assert lp.is_holder(spare.pair)
+	assert lp.read_options(spare.data_dir)["takeover_after"] == 30
+	for raw, got in ((5, 30), (5000, 900), ("soon", lp.T_TAKE), (None, lp.T_TAKE)):
+		(spare.data_dir / lp.OPTIONS_FILE).write_text(json.dumps({**opts, "takeover_after": raw}))
+		assert lp.read_options(spare.data_dir)["takeover_after"] == got, raw

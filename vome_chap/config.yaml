@@ -45,7 +45,9 @@ options:
   local_pair: "off"
   pair_code: ""
   install_name: ""
+  takeover_after: 120
 schema:
   local_pair: list(off|main|standby)
   pair_code: str?
   install_name: str?
+  takeover_after: int(30,900)?

@@ -50,8 +50,9 @@ connect or read it).
 
 **When it takes over.** If the standby can reach your router but not the
 main install -- neither this add-on nor its Home Assistant -- for two
-minutes, it starts its Home Assistant and your add-ons and says so in a
-notification. A standby that cannot see the router either does nothing: it
+minutes (or whatever its *takeover_after* setting says: shorter is quicker,
+longer rides out a reboot), it starts its Home Assistant and your add-ons
+and says so in a notification. A standby that cannot see the router either does nothing: it
 is the one cut off.
 
 **When the main install comes back** it sees the home has moved, stops its

@@ -97,6 +97,7 @@ MAX_JSON = 1024 * 1024             # anything else it answers
 MAX_CONNECTIONS = 16               # at once, on the house network
 
 T_TAKE = 120               # the router in sight and the running install gone, this long
+TAKE_MIN, TAKE_MAX = 30, 900  # the owner's range for it (setting takeover_after)
 MOVE_TIMEOUT = 10 * 60     # a move the other install has not caught up with is called off
 BACK_AFTER = 180           # the main install back, and in step, this long: the home goes home
 PASS_SECONDS = 10          # how often a pass runs
@@ -123,8 +124,16 @@ def read_options(data_dir: Path) -> dict:
 	except (OSError, ValueError):
 		raw = {}
 	mode = raw.get("local_pair") if raw.get("local_pair") in (MAIN, STANDBY) else OFF
+	try:
+		wait = int(raw.get("takeover_after") or T_TAKE)
+	except (TypeError, ValueError):
+		wait = T_TAKE
 	return {"mode": mode, "code": str(raw.get("pair_code") or "").strip(),
-	        "name": str(raw.get("install_name") or "").strip()[:40]}
+	        "name": str(raw.get("install_name") or "").strip()[:40],
+	        # Quick or careful (owner, 28 Sept 2026: "would people rather it come
+	        # up quickly and risk ... or make sure everything stays in order but
+	        # few mins downtime"). The standby's choice; 30 s to 15 min.
+	        "takeover_after": max(TAKE_MIN, min(TAKE_MAX, wait))}
 
 
 def _settings_digest(options: dict) -> str:
@@ -262,7 +271,7 @@ def is_holder(pair: dict) -> bool:
 	return bool(pair.get("holder")) and pair.get("holder") == pair.get("id")
 
 
-def takeover_due(pair: dict, now: float, router_ok: bool, peer_ok: bool) -> Optional[str]:
+def takeover_due(pair: dict, now: float, router_ok: bool, peer_ok: bool, wait: int = T_TAKE) -> Optional[str]:
 	"""Should this install take the home? Updates the watch in ``pair``.
 
 	Only an install that is not running the home, is paired, and has taken
@@ -280,7 +289,7 @@ def takeover_due(pair: dict, now: float, router_ok: bool, peer_ok: bool) -> Opti
 	since = pair.setdefault("peer_lost_since", now)
 	if not pair.get("applied_sha256"):
 		return None  # nothing to run the home with yet
-	if now - float(since) < T_TAKE:
+	if now - float(since) < wait:
 		return None
 	return (f"{peer_name(pair)} has not answered for {int(now - float(since))} s "
 	        "while the house router did")
@@ -1012,7 +1021,7 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 	router_ok = env.router_ok(gateway)
 	pair["router_ok"] = router_ok
 
-	reason = takeover_due(pair, now, router_ok, peer_ok)
+	reason = takeover_due(pair, now, router_ok, peer_ok, options.get("takeover_after", T_TAKE))
 	if reason:
 		pair.update({"holder": pair["id"], "epoch": int(pair.get("epoch") or 0) + 1,
 		             "took_over_at": now, "took_over": True, "say_running_here": True})

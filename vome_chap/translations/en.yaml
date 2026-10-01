@@ -16,5 +16,12 @@ configuration:
     description: >-
       Optional: what to call this Home Assistant in the pair's notifications
       and on its page ("Kitchen NUC"). Without it, "Main install" or "Standby".
+  takeover_after:
+    name: Take over after (seconds)
+    description: >-
+      On the standby: how long the main install must be out of reach, with
+      your router answering, before the standby takes over. Shorter is
+      quicker; longer rides out a reboot or a blip without moving your home.
+      30 to 900; 120 if unset.
 network:
   8177/tcp: Local pair (the other Home Assistant in your house)
