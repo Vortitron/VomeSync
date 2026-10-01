@@ -133,6 +133,13 @@ class Install(lp.Env):
 	def addon_names(self):
 		return {"core_mosquitto": "Mosquitto broker", "45df7312_zigbee2mqtt": "Zigbee2MQTT"}
 
+	def keep_updating(self, pair):
+		if pair.get("auto_update_on"):
+			return None
+		pair["auto_update_on"] = True
+		self.auto_update_turned_on = True
+		return "turned on automatic updates"
+
 
 def tick(house, *installs, seconds=lp.PASS_SECONDS):
 	house.now += seconds
@@ -584,3 +591,24 @@ def test_the_pair_key_and_the_size_caps_over_real_tls(tmp_path, monkeypatch):
 		assert lp.call_peer("127.0.0.1", port, own, "GET", "/v1/status", identity=lp.PAIR_IDENTITY)[0] == 413
 	finally:
 		server.stop()
+
+
+
+def test_both_installs_turn_on_their_own_updates(pair):
+	"""A standby's Home Assistant is stopped, so nobody can update this app on
+	it by hand; without this it kept the version it was paired with (found
+	1 Oct 2026)."""
+	main, spare = pair
+	assert main.auto_update_turned_on and spare.auto_update_turned_on
+
+
+def test_the_real_env_asks_the_supervisor(tmp_path):
+	calls = []
+
+	class FakeCs:
+		@staticmethod
+		def ensure_auto_update(state, path):
+			calls.append(path)
+			return "turned on"
+	env = lp.Env(FakeCs, tmp_path, tmp_path)
+	assert env.keep_updating({}) == "turned on" and calls == [tmp_path / lp.PAIR_FILE]
