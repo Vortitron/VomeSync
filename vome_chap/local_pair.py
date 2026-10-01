@@ -93,6 +93,16 @@ PAIR_IDENTITY = "vome-chap-pair-1"
 PAIR_SEEN_FILE = "local_pair_key_seen"
 
 MAX_DOWNLOAD = 256 * 1024 * 1024   # a configuration snapshot from the other install
+MAX_SEED = 4 * 1024 * 1024 * 1024  # the apps' data from the other install
+
+# The apps' own data (a Zigbee2MQTT database, a Matter fabric): a backup of
+# the home's apps, made by the install running the home, restored on the
+# other with its Home Assistant stopped (owner, 26 Sept 2026: "if adding
+# devices doesn't sync then we have an issue"). Hourly, and on every move.
+SEED_EVERY = 3600
+SEED_FILE = "lan_seed.tar"
+SEED_META = "lan_seed.json"
+SEED_FOLDERS = ("share", "ssl", "addons/local")  # not media: it can fill a small standby
 MAX_JSON = 1024 * 1024             # anything else it answers
 MAX_CONNECTIONS = 16               # at once, on the house network
 
@@ -201,6 +211,12 @@ def pair_key(pair: dict) -> Optional[bytes]:
 		return None
 	main, standby = (pair["id"], peer) if pair.get("mode") == MAIN else (peer, pair["id"])
 	return hmac.new(key, f"vome-chap-pair|{main}|{standby}".encode(), hashlib.sha256).digest()
+
+
+def seed_password(pair: dict) -> Optional[str]:
+	"""The apps' backup's password: from the pair's own key, so only the pair."""
+	own = pair_key(pair)
+	return hmac.new(own, b"vome-chap-seed", hashlib.sha256).hexdigest()[:40] if own else None
 
 
 # ── The pairing code ──────────────────────────────────────────────────────
@@ -341,7 +357,8 @@ def client_context(key: bytes, identity: str = CODE_IDENTITY) -> ssl.SSLContext:
 
 def call_peer(address: str, port: int, key: bytes, method: str, path: str,
               body: Optional[dict] = None, timeout: float = PEER_TIMEOUT,
-              sink: Optional[Path] = None, identity: str = CODE_IDENTITY) -> tuple[int, Any, dict]:
+              sink: Optional[Path] = None, identity: str = CODE_IDENTITY,
+              max_bytes: int = 0) -> tuple[int, Any, dict]:
 	"""One request to the other install. ``(status, json or None, headers)``;
 	status 0 when it could not be reached. With ``sink`` a body is written
 	there instead of parsed (a snapshot). Nothing larger than MAX_DOWNLOAD
@@ -354,6 +371,7 @@ def call_peer(address: str, port: int, key: bytes, method: str, path: str,
 		resp = conn.getresponse()
 		headers = {k.lower(): v for k, v in resp.getheaders()}
 		if sink is not None and resp.status == 200:
+			cap = max_bytes or MAX_DOWNLOAD
 			taken = 0
 			with open(sink, "wb") as fh:
 				while True:
@@ -361,10 +379,10 @@ def call_peer(address: str, port: int, key: bytes, method: str, path: str,
 					if not chunk:
 						break
 					taken += len(chunk)
-					if taken > MAX_DOWNLOAD:
+					if taken > cap:
 						break
 					fh.write(chunk)
-			if taken > MAX_DOWNLOAD:
+			if taken > cap:
 				sink.unlink(missing_ok=True)
 				return 413, None, headers
 			return resp.status, None, headers
@@ -500,6 +518,15 @@ class LanServer:
 			if not is_holder(load_pair(self.data_dir)) or not snap.exists() or not meta.get("sha256"):
 				return 404, {"error": "no snapshot here"}, {}
 			return 200, snap, {"X-Sha256": meta["sha256"]}
+		if method == "GET" and path == "/v1/seed":
+			# The apps' data: only with the pair's own key, never the code's.
+			if identity != PAIR_IDENTITY:
+				return 403, {"error": "use the pair's own key"}, {}
+			seed = self.data_dir / SEED_FILE
+			meta = _load(self.data_dir / SEED_META)
+			if not is_holder(load_pair(self.data_dir)) or not seed.exists() or not meta.get("id"):
+				return 404, {"error": "no apps' data here"}, {}
+			return 200, seed, {"X-Seed-Id": meta["id"]}
 		if method == "POST" and path == "/v1/hello":
 			status, reply = self.hello(body if isinstance(body, dict) else {})
 			return status, reply, {}
@@ -622,7 +649,7 @@ class Env:
 	def ha_ok(self, address: str, port: Optional[int]) -> bool:
 		return ha_answers(address, port)
 
-	def peer(self, pair: dict, method: str, path: str, body=None, sink=None):
+	def peer(self, pair: dict, method: str, path: str, body=None, sink=None, max_bytes: int = 0):
 		"""The pair's own key; the code's key only until the pair key has
 		worked once (the other side may still be on 0.2.0, or not know us)."""
 		peer = pair.get("peer") or {}
@@ -634,7 +661,7 @@ class Env:
 			keys.append((CODE_IDENTITY, key_of(pair)))
 		for identity, key in keys:
 			got = call_peer(peer["address"], int(peer.get("port") or LAN_PORT), key,
-			                method, path, body, sink=sink, identity=identity)
+			                method, path, body, sink=sink, identity=identity, max_bytes=max_bytes)
 			if got[0]:
 				if identity == PAIR_IDENTITY and got[0] != 403:
 					pair["pair_key_ok"] = True
@@ -674,6 +701,52 @@ class Env:
 		"""Hold or release the home's address (chap_sync.enforce_home_address)."""
 		return self.cs.enforce_home_address({"home_address": {"address": address, "hold": hold}},
 		                                    pair, self.data_dir / PAIR_FILE)
+
+	def backup_apps(self, slugs: list, password: str, name: str, dest: Path) -> int:
+		"""A password-protected backup of these apps (and the shared folders)
+		into ``dest``; the Supervisor's copy is removed. Returns its size."""
+		call = self.cs._supervisor_call
+		status, body = call("POST", "/backups/new/partial", {
+			"name": name, "password": password, "compressed": True, "homeassistant": False,
+			"addons": list(slugs), "folders": list(SEED_FOLDERS)}, timeout=3600)
+		slug = ((body or {}).get("data") or {}).get("slug") if isinstance(body, dict) else None
+		if status != 200 or not slug:
+			raise RuntimeError(f"the Supervisor did not make the apps' backup (HTTP {status})")
+		try:
+			return self.cs.download_backup(slug, dest)
+		finally:
+			call("DELETE", f"/backups/{slug}", None, timeout=120)
+
+	def restore_apps(self, src: Path, password: str, name: str, allowed: Optional[list]) -> list:
+		"""Restore the apps (and folders) from ``src``: never Home Assistant,
+		never this app, only those ``allowed`` (None: all). Returns the apps."""
+		import shutil
+		call = self.cs._supervisor_call
+		local = self.cs.BACKUP_DIR / f"{name}.tar"
+		shutil.copyfile(src, local)
+		slug = None
+		try:
+			call("POST", "/backups/reload", None, timeout=300)
+			_, body = call("GET", "/backups", None, timeout=60)
+			found = (((body or {}).get("data") or {}).get("backups") or []) if isinstance(body, dict) else []
+			slug = next((b.get("slug") for b in found if isinstance(b, dict) and b.get("name") == name), None)
+			if not slug:
+				raise RuntimeError("the Supervisor did not pick up the apps' backup")
+			_, body = call("GET", f"/backups/{slug}/info", None, timeout=60)
+			info = ((body or {}).get("data") or {}) if isinstance(body, dict) else {}
+			apps = [a["slug"] for a in info.get("addons") or []
+			        if isinstance(a, dict) and a.get("slug") and not a["slug"].endswith("_vome_chap")
+			        and (allowed is None or a["slug"] in allowed)]
+			folders = [f for f in info.get("folders") or [] if isinstance(f, str) and f]
+			status, body = call("POST", f"/backups/{slug}/restore/partial", {
+				"homeassistant": False, "addons": apps, "folders": folders, "password": password}, timeout=3600)
+			if status != 200 or not isinstance(body, dict) or body.get("result") != "ok":
+				raise RuntimeError(f"the Supervisor did not restore the apps' backup (HTTP {status})")
+			return apps
+		finally:
+			if slug:
+				call("DELETE", f"/backups/{slug}", None, timeout=120)
+			local.unlink(missing_ok=True)
 
 	def keep_updating(self, pair: dict) -> Optional[str]:
 		"""Turn on this app's automatic updates, once (chap_sync.ensure_auto_update)."""
@@ -733,13 +806,16 @@ def _house_address(network: list) -> tuple[Optional[str], Optional[str]]:
 def my_status(pair: dict, env: Env) -> dict:
 	"""What this install tells the other on each request."""
 	meta = _load(env.data_dir / SNAPSHOT_META)
+	seed_meta = _load(env.data_dir / SEED_META)
 	return {"id": pair.get("id"), "name": pair.get("name"), "holder": pair.get("holder"),
 	        "mode": pair.get("mode"), "home_addons": pair.get("home_addons"),
 	        "home_address": pair.get("home_address_raw") if pair.get("mode") == MAIN else None,
 	        "standby_addons": pair.get("standby_addons") if pair.get("mode") == MAIN else None,
 	        "epoch": pair.get("epoch"), "address": pair.get("address"), "ha_port": pair.get("ha_port"),
 	        "ha_version": pair.get("ha_version"), "applied_sha256": pair.get("applied_sha256"),
-	        "moving_to": pair.get("moving_to"),
+	        "moving_to": pair.get("moving_to"), "applied_seed_id": pair.get("applied_seed_id"),
+	        "seed": ({k: seed_meta.get(k) for k in ("id", "created_at", "addons")}
+	                 if is_holder(pair) and seed_meta.get("id") else None),
 	        "snapshot": {k: meta.get(k) for k in ("sha256", "created_at", "ha_version", "file_count")}
 	        if is_holder(pair) and meta.get("sha256") else None}
 
@@ -821,6 +897,67 @@ def _snapshot_if_due(pair: dict, env: Env, now: float, force: bool = False) -> O
 		"ha_version": info.get("ha_version") or pair.get("ha_version"),
 		"created_at": now if changed else meta.get("created_at", now), "built_at": now})
 	return "configuration changed; ready for the other install" if changed else None
+
+
+def _seed_if_due(pair: dict, env: Env, now: float, force: bool = False) -> Optional[str]:
+	"""Back the home's apps up for the other install, hourly or when forced
+	(a move). Only with a peer there to take it and the pair's own key."""
+	meta = _load(env.data_dir / SEED_META)
+	if not force and meta.get("id") and now - float(meta.get("built_at") or 0) < SEED_EVERY:
+		return None
+	password = seed_password(pair)
+	if not password:
+		return None
+	running = env.home_addons()
+	if running is None:
+		return None
+	apps = held_addons(running)
+	if not apps:
+		env.cs.save_json(env.data_dir / SEED_META, {"id": None, "built_at": now, "addons": []})
+		return None
+	seed_id = secrets.token_hex(6)
+	tmp = env.data_dir / (SEED_FILE + ".tmp")
+	try:
+		size = env.backup_apps(apps, password, f"vome-chap-lan-{seed_id}", tmp)
+	except Exception as exc:  # noqa: BLE001 - tried again next time round
+		tmp.unlink(missing_ok=True)
+		env.cs.save_json(env.data_dir / SEED_META, {**meta, "built_at": now, "failed": str(exc)[:200]})
+		return f"could not back the apps up for the other install: {exc}"
+	tmp.replace(env.data_dir / SEED_FILE)
+	env.cs.save_json(env.data_dir / SEED_META, {"id": seed_id, "created_at": now, "built_at": now,
+	                                            "addons": apps, "size": size})
+	return f"backed {len(apps)} app(s) up for the other install"
+
+
+def _take_seed(pair: dict, env: Env, peer_status: dict, now: float) -> Optional[str]:
+	"""Restore the running install's apps here, with Home Assistant stopped."""
+	seed = peer_status.get("seed") or {}
+	seed_id = seed.get("id")
+	if not seed_id or seed_id == pair.get("applied_seed_id"):
+		return None
+	if not env.core_stopped():
+		return None
+	password = seed_password(pair)
+	if not password:
+		return None
+	sink = env.data_dir / (SEED_FILE + ".in")
+	status, _, headers = env.peer(pair, "GET", "/v1/seed", sink=sink, max_bytes=MAX_SEED)
+	if status != 200 or headers.get("x-seed-id") not in (None, seed_id):
+		sink.unlink(missing_ok=True)
+		return None if status in (403, 404) else f"could not fetch the apps' data ({status or 'no answer'})"
+	allowed = pair.get("allowed_addons") if pair.get("mode") == STANDBY else None
+	try:
+		apps = env.restore_apps(sink, password, f"vome-chap-lan-{seed_id}", allowed)
+	except Exception as exc:  # noqa: BLE001 - tried again next pass
+		return f"could not restore the apps' data: {exc}"
+	finally:
+		sink.unlink(missing_ok=True)
+	pair["applied_seed_id"] = seed_id
+	# Restored apps may have started: they are the home's, held here.
+	held = list(pair.get("held_addons") or [])
+	pair["held_addons"] = sorted(set(held) | set(apps))
+	pair.pop("held_addons_target", None)
+	return f"took the apps' data ({len(apps)} app(s))"
 
 
 def _take_snapshot(pair: dict, env: Env, peer_status: dict, now: float) -> Optional[str]:
@@ -909,7 +1046,7 @@ def _move_step(pair: dict, env: Env, peer_status: Optional[dict], now: float) ->
 	pair.setdefault("move_asked_at", now)
 	if pair.get("move_cancelled") or now - float(pair.get("move_asked_at") or now) > MOVE_TIMEOUT:
 		why = "called off" if pair.get("move_cancelled") else f"{peer_name(pair)} did not catch up in time"
-		for k in ("moving_to", "move_asked_at", "move_cancelled", "move_snapshot"):
+		for k in ("moving_to", "move_asked_at", "move_cancelled", "move_snapshot", "move_seed"):
 			pair.pop(k, None)
 		# Home Assistant here was stopped for the move: _hold_core starts it again.
 		return f"move {why}; this install keeps the home"
@@ -921,11 +1058,15 @@ def _move_step(pair: dict, env: Env, peer_status: Optional[dict], now: float) ->
 			return "move: stopped Home Assistant here for a last, complete copy"
 		_snapshot_if_due(pair, env, now, force=True)
 		pair["move_snapshot"] = _load(env.data_dir / SNAPSHOT_META).get("sha256")
+		_seed_if_due(pair, env, now, force=True)
+		pair["move_seed"] = _load(env.data_dir / SEED_META).get("id")
 		return "move: last copy made; waiting for the other install to take it"
 	if not peer_status or peer_status.get("applied_sha256") != pair["move_snapshot"]:
 		return None  # it fetches on its own pass
+	if pair.get("move_seed") and peer_status.get("applied_seed_id") != pair["move_seed"]:
+		return None  # and the apps' data too
 	pair.update({"holder": pair["moving_to"], "epoch": int(pair.get("epoch") or 0) + 1})
-	for k in ("moving_to", "move_asked_at", "move_snapshot", "took_over", "main_back_since", "move_back"):
+	for k in ("moving_to", "move_asked_at", "move_snapshot", "move_seed", "took_over", "main_back_since", "move_back"):
 		pair.pop(k, None)
 	return f"moved the home to {peer_name(pair)} (move {pair['epoch']})"
 
@@ -1103,6 +1244,10 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 		made = _snapshot_if_due(pair, env, now)
 		if made:
 			notes.append(made)
+		if peer_ok and pair.get("peer_applied_sha256"):  # someone to take it, already in step
+			seeded = _seed_if_due(pair, env, now)
+			if seeded:
+				notes.append(seeded)
 		if pair.get("say_running_here"):
 			_say_running_here(pair, env)
 		if options["mode"] == MAIN and not pair.get("peer") and address and key:
@@ -1135,6 +1280,14 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 		taken = _take_snapshot(pair, env, peer_status, now)
 		if taken:
 			notes.append(taken)
+		seeded = _take_seed(pair, env, peer_status, now)
+		if seeded:
+			notes.append(seeded)
+			# At once, not next pass: a restored Zigbee2MQTT left running for
+			# ten seconds is two of them on one coordinator.
+			stopped = _hold_addons(pair, env, False)
+			if stopped:
+				notes.append(stopped)
 
 	save_pair(env.data_dir, pair)
 	who = "running the home" if running_here else "standing by"

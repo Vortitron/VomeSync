@@ -86,8 +86,9 @@ when it stands in. The rest stay stopped there.
   your router dies, your home keeps running. If only its cable comes out, the
   standby takes over too, and when it is plugged back in, the main install
   stops; anything changed on it in between is lost.
-- Your add-ons' own data (a Zigbee2MQTT database, say) is not copied yet:
-  set those add-ons up on both.
+- Your add-ons' own data (a Zigbee2MQTT database, say) is copied too, every
+  hour and whenever the home moves (from 0.2.2; not the media folder).
+  Install the same add-ons on both.
 - SSH, File editor, Studio Code Server and Samba keep running on the standby,
   so you can still reach it.
 - If you also use CHAP through Vome, leave local_pair `off`: Vome's pair

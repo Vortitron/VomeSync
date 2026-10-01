@@ -2,6 +2,15 @@
 
 ## 0.2.2 — 1 October 2026
 
+**Your apps' own data follows too** -- a Zigbee2MQTT database, a Matter
+fabric. The install running your home backs its apps up every hour, and
+again whenever the home moves; the standby restores them with its Home
+Assistant stopped (only the apps you chose for it, never Home Assistant
+itself) and keeps them stopped until it takes over. The backup is protected
+with the pair's own key and travels only between the two. The media folder
+is left out, so a small standby is not filled with recordings. A move waits
+for the apps' data as well as the configuration.
+
 **Your home's address follows the running install, in a local pair too.**
 Set *home_address* on the main install (an unused address on your house
 network, e.g. 192.168.1.15) and point the app and your dashboards at it:

@@ -92,7 +92,7 @@ class Install(lp.Env):
 		other = self.house.installs.get(address)
 		return bool(other) and self.house.reachable(self, other) and other.core_running
 
-	def peer(self, pair, method, path, body=None, sink=None):
+	def peer(self, pair, method, path, body=None, sink=None, max_bytes=0):
 		other = self.house.installs.get((pair.get("peer") or {}).get("address"))
 		if not other or not self.house.reachable(self, other):
 			return 0, None, {}
@@ -134,6 +134,20 @@ class Install(lp.Env):
 
 	def addon_names(self):
 		return {"core_mosquitto": "Mosquitto broker", "45df7312_zigbee2mqtt": "Zigbee2MQTT"}
+
+	def backup_apps(self, slugs, password, name, dest):
+		self.backups = getattr(self, "backups", 0) + 1
+		dest.write_text(json.dumps({"apps": list(slugs), "password": password, "data": self.name}))
+		return dest.stat().st_size
+
+	def restore_apps(self, src, password, name, allowed):
+		got = json.loads(src.read_text())
+		assert got["password"] == password  # the pair's own key on both sides
+		apps = [a for a in got["apps"] if allowed is None or a in allowed]
+		for a in apps:
+			self.addons[a] = True  # a restore may start them
+		self.restored = getattr(self, "restored", []) + [(got["data"], apps)]
+		return apps
 
 	def hold_home_address(self, pair, address, hold):
 		if self.holding == (address if hold else None):
@@ -700,3 +714,98 @@ def test_a_home_address_must_be_a_spare_one_on_the_house_network(raw, ok):
 	network = [{"interface": "eth0", "address": "192.168.1.116/24", "gateway": "192.168.1.1"}]
 	got, why = lp.home_address_for(raw, network)
 	assert got == ok and (bool(why) == bool(raw and not ok))
+
+
+
+# ── The apps' own data (1 Oct 2026) ───────────────────────────────────────
+
+def test_the_apps_data_follows_to_the_standby_and_stays_stopped_there(pair, house):
+	"""The guide's gap: "Not copied yet: your apps' own data (a Zigbee2MQTT
+	database, say)". The running install backs its apps up, the standby
+	restores them with Home Assistant stopped, and keeps them stopped."""
+	main, spare = pair
+	tick(house, main, spare)
+	tick(house, main, spare)
+	assert main.backups == 1
+	assert spare.restored == [("main", ["core_mosquitto", "45df7312_zigbee2mqtt"])]
+	# The restore started them; the standby stopped them in the same pass
+	# (two Zigbee2MQTTs on one coordinator, even for seconds, is trouble).
+	assert not spare.addons["core_mosquitto"] and not spare.addons["45df7312_zigbee2mqtt"]
+	assert not spare.core_running
+	tick(house, main, spare)
+	assert main.backups == 1  # hourly, not every pass
+	tick(house, main, spare, seconds=lp.SEED_EVERY)
+	tick(house, spare)
+	assert main.backups == 2 and len(spare.restored) == 2
+
+
+def test_a_smaller_standby_takes_only_the_apps_chosen_for_it(pair, house):
+	main, spare = pair
+	tick(house, main)
+	lp.choose_standby_addons(main.data_dir, ["core_mosquitto"])
+	tick(house, main, spare)
+	tick(house, main, spare)
+	assert spare.restored[-1] == ("main", ["core_mosquitto"])
+
+
+def test_the_apps_data_needs_the_pair_s_own_key(pair, house):
+	main, spare = pair
+	tick(house, main, spare)
+	assert main.lan.answer("GET", "/v1/seed", None, identity=lp.CODE_IDENTITY)[0] == 403
+	assert main.lan.answer("GET", "/v1/seed", None, identity=lp.PAIR_IDENTITY)[0] == 200
+	assert spare.lan.answer("GET", "/v1/seed", None, identity=lp.PAIR_IDENTITY)[0] == 404  # not running the home
+
+
+def test_a_move_waits_for_the_apps_data_too(pair, house):
+	main, spare = pair
+	tick(house, main, spare)
+	tick(house, main, spare)
+	before = len(spare.restored)
+	lp.ask_move(main.data_dir)
+	tick(house, main)            # stops Home Assistant
+	tick(house, main)            # last copy and the apps' backup
+	assert main.backups == 2
+	tick(house, spare)           # takes both
+	assert len(spare.restored) == before + 1
+	tick(house, main)            # now it moves
+	tick(house, spare)
+	assert lp.is_holder(spare.pair) and spare.core_running
+
+
+def test_the_real_backup_and_restore_ask_the_supervisor_for_the_right_things(tmp_path):
+	calls = []
+
+	class FakeCs:
+		BACKUP_DIR = tmp_path / "backup"
+
+		@staticmethod
+		def _supervisor_call(method, path, body=None, timeout=60):
+			calls.append((method, path, body))
+			if path == "/backups/new/partial":
+				return 200, {"data": {"slug": "abc"}}
+			if path == "/backups":
+				return 200, {"data": {"backups": [{"slug": "xyz", "name": "vome-chap-lan-1"}]}}
+			if path == "/backups/xyz/info":
+				return 200, {"data": {"addons": [{"slug": "core_mosquitto"}, {"slug": "9ca546e0_vome_chap"},
+				                                 {"slug": "a_zigbee2mqtt"}], "folders": ["share", "ssl"]}}
+			if path.endswith("/restore/partial"):
+				return 200, {"result": "ok"}
+			return 200, {}
+
+		@staticmethod
+		def download_backup(slug, dest):
+			dest.write_bytes(b"tar")
+			return 3
+	FakeCs.BACKUP_DIR.mkdir()
+	env = lp.Env(FakeCs, tmp_path, tmp_path)
+	assert env.backup_apps(["core_mosquitto"], "pw", "vome-chap-lan-1", tmp_path / "out.tar") == 3
+	new = next(b for m, p, b in calls if p == "/backups/new/partial")
+	assert new["homeassistant"] is False and "media" not in new["folders"] and new["password"] == "pw"
+	assert ("DELETE", "/backups/abc", None) in calls  # not one of the owner's backups
+
+	calls.clear()
+	apps = env.restore_apps(tmp_path / "out.tar", "pw", "vome-chap-lan-1", ["core_mosquitto"])
+	assert apps == ["core_mosquitto"]  # not this app, not the one not chosen
+	restore = next(b for m, p, b in calls if p.endswith("/restore/partial"))
+	assert restore["homeassistant"] is False and restore["addons"] == ["core_mosquitto"]
+	assert ("DELETE", "/backups/xyz", None) in calls and not (FakeCs.BACKUP_DIR / "vome-chap-lan-1.tar").exists()
