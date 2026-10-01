@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.47 — 1 October 2026
+
+**Security: the Vome panel answers only Home Assistant.**
+
+The panel's port is not open to your network, but every app on the same Home
+Assistant shares its internal network, and any of them could call the panel
+directly — issue an agent key, unlink this install, add a LAN route —
+without the Home Assistant sign-in that normally sits in front of it. The
+panel now refuses anything that does not come through Home Assistant's own
+ingress. Nothing changes for you: the panel opens from the sidebar as before.
+
 ## 0.3.46 — 1 October 2026
 
 **Coding-agent keys now come in your agent's own format: OpenCode and VS Code

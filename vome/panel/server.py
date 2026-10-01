@@ -488,8 +488,26 @@ def _unwrap(payload: Any) -> Any:
 	return payload
 
 
+# Only Home Assistant's ingress may talk to the panel (security review, 1 Oct
+# 2026). The port is not published, but every app on the same Home Assistant
+# shares its internal network: any of them could otherwise call this panel
+# directly -- issue an agent key, unlink, add LAN routes -- without the
+# Home Assistant sign-in that ingress puts in front of it. Ingress requests
+# come from the Supervisor at 172.30.32.2 (Home Assistant's guidance for
+# ingress apps); 127.0.0.1 is the container itself.
+INGRESS_PEERS = frozenset({"172.30.32.2", "127.0.0.1", "::1"})
+
+
 class PanelHandler(BaseHTTPRequestHandler):
 	server_version = "VomePanel/0.2"
+
+	def _from_ingress(self) -> bool:
+		if (self.client_address or ("",))[0] in INGRESS_PEERS:
+			return True
+		LOG.warning("panel: refused a request from %s, which is not Home Assistant's ingress",
+		            (self.client_address or ("?",))[0])
+		self._send_json(403, {"error": "Open the Vome panel from Home Assistant."})
+		return False
 
 	def log_message(self, fmt: str, *args) -> None:
 		LOG.info("%s - " + fmt, self.address_string(), *args)
@@ -547,6 +565,8 @@ class PanelHandler(BaseHTTPRequestHandler):
 		return data if isinstance(data, dict) else {}
 
 	def do_GET(self) -> None:  # noqa: N802
+		if not self._from_ingress():
+			return
 		try:
 			self._route_get()
 		except Exception as err:  # noqa: BLE001 - a handler crash must still return JSON
@@ -554,6 +574,8 @@ class PanelHandler(BaseHTTPRequestHandler):
 			self._send_json(500, {"error": f"Panel error: {err}"})
 
 	def do_POST(self) -> None:  # noqa: N802
+		if not self._from_ingress():
+			return
 		try:
 			self._route_post()
 		except Exception as err:  # noqa: BLE001 - a handler crash must still return JSON
