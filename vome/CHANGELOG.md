@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.49 — 2 October 2026
+
+The Coding agent page connects Claude Code in two steps instead of a JSON
+block: a command to run in Claude Code (it installs Vome's connector and asks
+for the key), then the key to paste. The JSON is still there for anyone who
+prefers it, and the page offers the automation pane, which shows the
+automation Claude is working on. Other agents are unchanged.
+
 ## 0.3.48 — 1 October 2026
 
 The panel's CHAP page shows a local pair (two Home Assistants in your house,

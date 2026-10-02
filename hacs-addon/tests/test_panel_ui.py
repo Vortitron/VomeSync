@@ -318,3 +318,18 @@ def test_a_local_pair_is_shown_not_as_unpaired():
 	js = (Path(__file__).resolve().parents[2] / "vome" / "panel" / "static" / "app.js").read_text(encoding="utf-8")
 	assert "const lp = d.local_pair;" in js and "Two Home Assistants in your house" in js
 	assert "is not answering" in js and "Open Web UI" in js
+
+
+def test_claude_code_is_offered_a_command_and_the_key_not_json():
+	"""Vome sends Claude Code a vome-connect command that asks for the key, so
+	the card shows the command, then the key, and keeps the JSON one click
+	away; a portal that sends no ``connect`` gets the plain JSON card."""
+	card = PANEL_JS[PANEL_JS.index("function agentKeyCard("):PANEL_JS.index("function agentIntro(")]
+	assert "chosen.connect" in card
+	assert "agent-connect-command" in card
+	assert "Paste this key when it asks" in card
+	assert "<details>" in card, "the JSON stays available"
+	assert "Your MCP config" in card, "the plain card is still there for other agents"
+	click = PANEL_JS[PANEL_JS.index('document.addEventListener("click", (ev) => {\n\t\tif (ev.target && ev.target.id === "agent-copy")'):]
+	assert '"agent-copy-command"' in click[:800]
+
