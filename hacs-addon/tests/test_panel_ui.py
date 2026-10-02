@@ -295,6 +295,16 @@ def test_a_linked_house_is_sent_to_its_account_not_offered_a_trial():
 	assert "/account/api-tokens" in view
 
 
+def test_a_linked_house_still_gets_the_claude_code_steps():
+	"""Its key comes from the account, but the card used to stop at "Open API
+	tokens" and promise "the key below", which was not there."""
+	start = PANEL_JS.index('if (offer === "linked_account") {')
+	card = PANEL_JS[start:PANEL_JS.index("return;", start)]
+	assert "agentIntro(true)" in card
+	assert "CLAUDE_CONNECT_COMMAND" in card and "agent-connect-command" in card
+	assert "/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp" in PANEL_JS
+
+
 def test_the_json_box_scrolls_rather_than_widening_the_panel():
 	assert ".pre-scroll" in PANEL_CSS
 	assert "overflow-x: auto" in PANEL_CSS

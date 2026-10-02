@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.50 — 2 October 2026
+
+A Home Assistant linked to a Vome account gets the same Claude Code steps on
+the Coding agent page: create a key on the account, then one command in
+Claude Code that asks for it. The page used to stop at "Open API tokens", and
+its introduction promised a key and permissions below that were not there.
+
 ## 0.3.49 — 2 October 2026
 
 The Coding agent page connects Claude Code in two steps instead of a JSON
