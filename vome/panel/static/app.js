@@ -1583,9 +1583,15 @@ const cu = document.getElementById("copy-url");
 	}
 
 	function agentShowClient(id) {
+		const before = agentChosenClient();
 		agentClient = id;
 		const chosen = agentChosenClient();
 		if (!chosen) return;
+		// Claude Code's card is laid out differently (a command and the key), so redraw it whole.
+		if ((before && before.connect) || chosen.connect) {
+			renderAgent();
+			return;
+		}
 		const pre = document.getElementById("agent-json");
 		const where = document.getElementById("agent-where");
 		if (pre) pre.textContent = chosen.json;
@@ -1604,6 +1610,32 @@ const cu = document.getElementById("copy-url");
 				<div class="row" role="group" aria-label="Your agent">
 					${clients.map((c) => `<button type="button" class="${c.id === chosen.id ? "primary" : "ghost"}" data-agent-client="${escapeHtml(c.id)}">${escapeHtml(c.label || c.id)}</button>`).join("")}
 				</div>` : "";
+		// Claude Code, on the hosted endpoint: Vome sends a command that adds the server and asks for
+		// the key, so nothing goes into a config file. The JSON stays one click away.
+		const connect = chosen.connect && chosen.connect.command && chosen.connect.key ? chosen.connect : null;
+		if (connect) {
+			return `
+			<div class="card">
+				<h2>Connect Claude Code</h2>
+				${picker}
+				<p class="muted">1. In Claude Code, run this. It asks for your Vome key.</p>
+				<pre id="agent-connect-command" class="pre-scroll">${escapeHtml(connect.command)}</pre>
+				<div class="row">
+					<button type="button" class="ghost" id="agent-copy-command">Copy the command</button>
+				</div>
+				<p class="muted">2. Paste this key when it asks.</p>
+				<pre id="agent-json" class="pre-scroll">${escapeHtml(connect.key)}</pre>
+				<div class="row">
+					<button type="button" class="primary" id="agent-copy">Copy the key</button>
+				</div>
+				${connect.pane ? `<p class="muted">To see the automation Claude is working on in a side pane, add this too: <code>${escapeHtml(connect.pane)}</code></p>` : ""}
+				<details>
+					<summary class="muted">Or paste JSON into ${escapeHtml(chosen.where || "your config")} instead</summary>
+					<pre id="agent-connect-json" class="pre-scroll">${escapeHtml(chosen.json)}</pre>
+				</details>
+				<p class="muted"><strong>Shown once.</strong> Vome keeps only a hash of the key and this add-on keeps no copy at all. If you lose it, use Replace key — that keeps the same permissions and the same clock.</p>
+			</div>`;
+		}
 		return `
 			<div class="card">
 				<h2>Your MCP config</h2>
@@ -1794,8 +1826,8 @@ const cu = document.getElementById("copy-url");
 	// Clipboard access can be refused inside Home Assistant's ingress frame,
 	// so falling back to selecting the text is not a nicety: without it the
 	// button silently does nothing and the key is unreachable.
-	function agentCopyJson() {
-		const pre = document.getElementById("agent-json");
+	function agentCopyJson(id = "agent-json", done = "Copied. Paste it into your agent's MCP config.") {
+		const pre = document.getElementById(id);
 		if (!pre) return;
 		const text = pre.textContent || "";
 		const select = () => {
@@ -1811,13 +1843,20 @@ const cu = document.getElementById("copy-url");
 			return;
 		}
 		navigator.clipboard.writeText(text).then(
-			() => showBanner("Copied. Paste it into your agent's MCP config.", "info"),
+			() => showBanner(done, "info"),
 			select,
 		);
 	}
 
 	document.addEventListener("click", (ev) => {
-		if (ev.target && ev.target.id === "agent-copy") agentCopyJson();
+		if (ev.target && ev.target.id === "agent-copy") {
+			// On Claude Code's card the box holds the key, which is pasted when Claude Code asks.
+			const isKey = Boolean(document.getElementById("agent-connect-command"));
+			agentCopyJson("agent-json", isKey ? "Key copied. Paste it when Claude Code asks for it." : undefined);
+		}
+		if (ev.target && ev.target.id === "agent-copy-command") {
+			agentCopyJson("agent-connect-command", "Command copied. Run it in Claude Code.");
+		}
 		const pick = ev.target && ev.target.closest && ev.target.closest("[data-agent-client]");
 		if (pick) agentShowClient(pick.getAttribute("data-agent-client"));
 	});
@@ -1854,6 +1893,36 @@ const cu = document.getElementById("copy-url");
 					<p class="muted">With CHAP protection, Vome keeps a copy of this Home Assistant ready to take over if this machine fails.</p>
 					<p>That part lives in a separate add-on, <strong>Vome CHAP</strong>, because it needs permission to stop and start Home Assistant and to make backups — which this add-on deliberately does not ask for.</p>
 					<p class="muted">Install it from the same add-on store (Settings &rarr; Add-ons &rarr; Add-on store &rarr; Vome CHAP), start it, then come back here.</p>
+				</div>`;
+			return;
+		}
+		// A local pair (Vome CHAP 0.2.1+): two Home Assistants in the house
+		// deciding between themselves. Shown here rather than "Not paired",
+		// which read as if nothing protected this install.
+		const lp = d.local_pair;
+		if (lp && lp.state && lp.state !== "off") {
+			const here = lp.running_here;
+			const other = escapeHtml(lp.peer || "the other install");
+			let line;
+			if (lp.state === "waiting_for_standby") {
+				line = `<p>${pill(true, "Ready for a standby", "")} This install runs your home. The pairing code is on the Vome CHAP app's page.</p>`;
+			} else if (lp.state === "pairing") {
+				line = `<p>${pill(false, "", "Pairing")} Meeting the main install…</p>`;
+			} else if (lp.moving) {
+				line = `<p>${pill(false, "", "Moving")} Your home is moving to ${other}.</p>`;
+			} else if (here) {
+				line = `<p>${pill(true, "Running your home", "")} ${lp.peer_answering
+					? (lp.in_step ? `${other} is standing by, in step.` : `${other} is standing by, catching up.`)
+					: `<strong>${other} is not answering</strong>: nothing can take over until it is back.`}</p>`;
+			} else {
+				line = `<p>${pill(true, "Standing by", "")} ${other} runs your home.</p>`;
+			}
+			viewEl.innerHTML = `
+				<div class="card">
+					<h2>Two Home Assistants in your house</h2>
+					<p class="muted">This install is in a local pair, run by the Vome CHAP app: if the one running your home stops, the other takes over, with or without the internet.</p>
+					${line}
+					<p class="muted">To move your home, choose what a standby runs, or see the pairing code: <em>Settings &rarr; Apps &rarr; Vome CHAP &rarr; Open Web UI</em>.</p>
 				</div>`;
 			return;
 		}

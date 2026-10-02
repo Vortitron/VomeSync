@@ -50,7 +50,18 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 	# add-on panel, with no hint of the real problem.
 	_register_services(hass)
 	_register_http_views(hass)
+	_start_hacs_refresh(hass)
 	return True
+
+
+def _start_hacs_refresh(hass: HomeAssistant) -> None:
+	"""Keep HACS checking custom repositories however often HA restarts."""
+	from .hacs_refresh import async_start
+
+	try:
+		async_start(hass, hass.data.setdefault(DOMAIN, {}))
+	except Exception as err:  # noqa: BLE001 - optional; never blocks setup
+		_LOGGER.debug("HACS refresh not started: %s", err)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

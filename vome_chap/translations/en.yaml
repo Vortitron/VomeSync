@@ -23,5 +23,13 @@ configuration:
       your router answering, before the standby takes over. Shorter is
       quicker; longer rides out a reboot or a blip without moving your home.
       30 to 900; 120 if unset.
+  home_address:
+    name: Your home's address at home
+    description: >-
+      On the main install: one address on your house network that always
+      reaches whichever Home Assistant runs your home -- point the app and
+      your dashboards at it. Pick an unused one outside the range your router
+      hands out (e.g. 192.168.1.15). The standby learns it from the main
+      install. Both need a fixed address of their own.
 network:
   8177/tcp: Local pair (the other Home Assistant in your house)

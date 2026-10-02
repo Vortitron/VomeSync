@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome CHAP
-version: "0.2.1"
+version: "0.2.2"
 slug: vome_chap
 description: >
   Keeps a Vome CHAP standby of this Home Assistant ready to take over:
@@ -46,8 +46,10 @@ options:
   pair_code: ""
   install_name: ""
   takeover_after: 120
+  home_address: ""
 schema:
   local_pair: list(off|main|standby)
   pair_code: str?
   install_name: str?
   takeover_after: int(30,900)?
+  home_address: str?
