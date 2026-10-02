@@ -1649,12 +1649,21 @@ const cu = document.getElementById("copy-url");
 			</div>`;
 	}
 
-	function agentIntro() {
+	// For a linked home, where Vome's reply carries no commands: the same two the trial card shows.
+	const CLAUDE_CONNECT_COMMAND = "/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp";
+	const CLAUDE_PANE_COMMAND = "/plugin install vome-automation --marketplace Vortitron/home-assistant-mcp";
+
+	function agentIntro(linked) {
+		// A linked home's key is made on the account, not here, so its intro must not promise
+		// "the key below" and "the permissions you tick here": that page had neither.
+		const keyNote = linked
+			? `A key is <strong>not</strong> a Home Assistant token. It reaches only the homes you tick on it, only through Vome, which enforces what it may do and writes it to an audit log.`
+			: `The key below is <strong>not</strong> a Home Assistant token. It reaches this instance only, only through Vome, and only within the permissions you tick here, which Vome enforces at its end and writes to an audit log. Widening it means coming back to this page.`;
 		return `
 			<div class="card">
 				<h2>Work on this Home Assistant from your editor</h2>
 				<p class="muted">Cursor, VS Code, Claude Code, OpenCode and anything else that speaks MCP can read this instance and change it — entity ids, live state, logs and automations — instead of you pasting them back and forth.</p>
-				<p class="muted">The key below is <strong>not</strong> a Home Assistant token. It reaches this instance only, only through Vome, and only within the permissions you tick here, which Vome enforces at its end and writes to an audit log. Widening it means coming back to this page.</p>
+				<p class="muted">${keyNote}</p>
 			</div>`;
 	}
 
@@ -1674,13 +1683,25 @@ const cu = document.getElementById("copy-url");
 		}
 
 		if (offer === "linked_account") {
+			// A linked home's keys live on the account (they last, and can be listed and revoked from
+			// anywhere), so the key itself comes from vome.io. The rest is the same as a trial key:
+			// one command in Claude Code that asks for it. This card used to stop at "Open API
+			// tokens", which left people who had come for the editor setup with nowhere to go.
 			const portal = escapeHtml(data.portal_url || "https://vome.io");
 			viewEl.innerHTML = `
-				${agentIntro()}
-				<div class="card info-card">
-					<h2>This Home Assistant has a Vome account</h2>
-					<p class="muted">Keys for a linked home live on the account, so they survive, can be listed and can be revoked from anywhere. Mint one under Account → API tokens, ticking this instance.</p>
-					<div class="row"><a class="btn ghost" href="${portal}/account/api-tokens" target="_blank" rel="noopener">Open API tokens</a></div>
+				${agentIntro(true)}
+				<div class="card">
+					<h2>Connect Claude Code</h2>
+					<p class="muted">This Home Assistant is linked to a Vome account, so its keys live on the account: they last, and you can list and revoke them from anywhere.</p>
+					<p class="muted">1. Create a key under Account → API tokens, ticking this home.</p>
+					<div class="row"><a class="btn primary" href="${portal}/account/api-tokens" target="_blank" rel="noopener">Open API tokens</a></div>
+					<p class="muted">2. In Claude Code, run this. It asks for the key.</p>
+					<pre id="agent-connect-command" class="pre-scroll">${escapeHtml(CLAUDE_CONNECT_COMMAND)}</pre>
+					<div class="row">
+						<button type="button" class="ghost" id="agent-copy-command">Copy the command</button>
+					</div>
+					<p class="muted">To see the automation Claude is working on in a side pane, add this too: <code>${escapeHtml(CLAUDE_PANE_COMMAND)}</code></p>
+					<p class="muted">Cursor, VS Code or OpenCode instead? The API tokens page gives each one its own config to paste.</p>
 				</div>`;
 			return;
 		}
