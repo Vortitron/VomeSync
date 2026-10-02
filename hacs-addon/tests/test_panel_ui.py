@@ -343,3 +343,15 @@ def test_claude_code_is_offered_a_command_and_the_key_not_json():
 	click = PANEL_JS[PANEL_JS.index('document.addEventListener("click", (ev) => {\n\t\tif (ev.target && ev.target.id === "agent-copy")'):]
 	assert '"agent-copy-command"' in click[:800]
 
+
+
+def test_both_side_panes_are_offered_to_claude_code():
+	"""Beside the automation pane there is the ESPHome one (a device's map, its
+	builds and flashes as they run); a portal older than connect.esphome_pane
+	still gets its command from the panel's own constant."""
+	assert "/plugin install vome-esphome --marketplace Vortitron/home-assistant-mcp" in PANEL_JS
+	card = PANEL_JS[PANEL_JS.index("function agentKeyCard("):PANEL_JS.index("function agentIntro(")]
+	assert "connect.esphome_pane || CLAUDE_ESPHOME_COMMAND" in card
+	start = PANEL_JS.index('if (offer === "linked_account") {')
+	linked = PANEL_JS[start:PANEL_JS.index("return;", start)]
+	assert "panesNote(CLAUDE_PANE_COMMAND, CLAUDE_ESPHOME_COMMAND)" in linked

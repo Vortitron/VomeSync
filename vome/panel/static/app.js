@@ -1628,7 +1628,7 @@ const cu = document.getElementById("copy-url");
 				<div class="row">
 					<button type="button" class="primary" id="agent-copy">Copy the key</button>
 				</div>
-				${connect.pane ? `<p class="muted">To see the automation Claude is working on in a side pane, add this too: <code>${escapeHtml(connect.pane)}</code></p>` : ""}
+				${connect.pane ? panesNote(connect.pane, connect.esphome_pane || CLAUDE_ESPHOME_COMMAND) : ""}
 				<details>
 					<summary class="muted">Or paste JSON into ${escapeHtml(chosen.where || "your config")} instead</summary>
 					<pre id="agent-connect-json" class="pre-scroll">${escapeHtml(chosen.json)}</pre>
@@ -1652,6 +1652,14 @@ const cu = document.getElementById("copy-url");
 	// For a linked home, where Vome's reply carries no commands: the same two the trial card shows.
 	const CLAUDE_CONNECT_COMMAND = "/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp";
 	const CLAUDE_PANE_COMMAND = "/plugin install vome-automation --marketplace Vortitron/home-assistant-mcp";
+	const CLAUDE_ESPHOME_COMMAND = "/plugin install vome-esphome --marketplace Vortitron/home-assistant-mcp";
+
+	// The two side panes Claude Code can show beside the conversation; both only read.
+	function panesNote(automation, esphome) {
+		return `<p class="muted">To watch what Claude is doing in a side pane, add either or both:</p>
+				<p class="muted">The automation it is working on: <code>${escapeHtml(automation)}</code></p>
+				<p class="muted">An ESPHome device's map, and its builds and flashes as they run: <code>${escapeHtml(esphome)}</code></p>`;
+	}
 
 	function agentIntro(linked) {
 		// A linked home's key is made on the account, not here, so its intro must not promise
@@ -1700,7 +1708,7 @@ const cu = document.getElementById("copy-url");
 					<div class="row">
 						<button type="button" class="ghost" id="agent-copy-command">Copy the command</button>
 					</div>
-					<p class="muted">To see the automation Claude is working on in a side pane, add this too: <code>${escapeHtml(CLAUDE_PANE_COMMAND)}</code></p>
+					${panesNote(CLAUDE_PANE_COMMAND, CLAUDE_ESPHOME_COMMAND)}
 					<p class="muted">Cursor, VS Code or OpenCode instead? The API tokens page gives each one its own config to paste.</p>
 				</div>`;
 			return;

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.51 — 2 October 2026
+
+The Coding agent page offers Claude Code's second side pane beside the
+automation one: the ESPHome pane, which maps the device Claude is working on
+from its YAML (pins, sensors, what reacts to what) and shows a build or a
+flash as it runs. One command each; both only read.
+
 ## 0.3.50 — 2 October 2026
 
 A Home Assistant linked to a Vome account gets the same Claude Code steps on
