@@ -126,6 +126,10 @@ from .const import (
 	SUPERVISOR_ADDON_INFO_URL,
 	SUPERVISOR_ADDONS_URL,
 	SUPERVISOR_TOKEN_ENV,
+	RELAY_RPC_TARGET_STATES,
+	RELAY_STATES_ENTITY_RE,
+	RELAY_STATES_MAX_ENTITIES,
+	RELAY_STATES_MAX_WATCHES,
 )
 from .login_watch import LoginWatcher
 from .webhooks import is_forwardable_webhook, normalise_webhooks
@@ -998,6 +1002,9 @@ class RelayClient:
 		if data.get("target") == RELAY_RPC_TARGET_ESPHOME:
 			await self._handle_esphome_ws_open(ws, socket_id, data)
 			return
+		if data.get("target") == RELAY_RPC_TARGET_STATES:
+			await self._handle_states_ws_open(ws, socket_id, data)
+			return
 		path = data.get("path") or "/api/websocket"
 		lan = parse_lan_path(path)
 		if lan is not None:
@@ -1024,6 +1031,87 @@ class RelayClient:
 			})
 			return
 		await self._open_bridged_ws(ws, socket_id, _to_ws_url(self.local_url, path))
+
+	async def _handle_states_ws_open(
+		self,
+		ws: aiohttp.ClientWebSocketResponse,
+		socket_id: str,
+		data: dict,
+	) -> None:
+		"""Watch some entities' states and send each change up the relay.
+
+		A dashboard showing a home's lights polled for their states every few
+		seconds, each poll a brokered call counted against the key, and still saw
+		a press land late. This sends a change the moment Home Assistant has it.
+
+		The portal has already checked the key and names the entities; this end
+		accepts nothing else. It reads states through Home Assistant's own state
+		events in this process, so there is no command path here at all: a watch
+		can only ever report states, never change them. First a ``snapshot`` of
+		the entities as they are, then a ``state`` frame for each change (``null``
+		state when one is removed).
+		"""
+		from homeassistant.core import Event, callback
+		from homeassistant.helpers.event import async_track_state_change_event
+
+		raw = data.get("entity_ids")
+		pattern = re.compile(RELAY_STATES_ENTITY_RE)
+		entity_ids = [e for e in raw if isinstance(e, str) and pattern.match(e)] if isinstance(raw, list) else []
+		entity_ids = list(dict.fromkeys(entity_ids))[:RELAY_STATES_MAX_ENTITIES]
+		watches: set = self.__dict__.setdefault("_state_watches", set())
+		if not entity_ids or len(watches) >= RELAY_STATES_MAX_WATCHES:
+			await self._send(ws, {
+				"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id, "code": 1008,
+				"reason": "No entities to watch." if not entity_ids else "Too many watches on this home.",
+			})
+			return
+
+		def frame(entity_id: str, state) -> dict:
+			if state is None:
+				return {"entity_id": entity_id, "state": None}
+			return {
+				"entity_id": entity_id,
+				"state": state.state,
+				"attributes": dict(state.attributes),
+				"last_changed": state.last_changed.isoformat(),
+			}
+
+		queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+
+		@callback
+		def changed(event: Event) -> None:
+			data = event.data
+			with suppress(asyncio.QueueFull):
+				queue.put_nowait(frame(data.get("entity_id"), data.get("new_state")))
+
+		unsubscribe = async_track_state_change_event(self._hass, entity_ids, changed)
+		await self._send(ws, {"type": RELAY_WS_MSG_WS_OPEN_ACK, "socketId": socket_id})
+		snapshot = [frame(e, self._hass.states.get(e)) for e in entity_ids]
+		await self._send(ws, {
+			"type": RELAY_WS_MSG_WS_DATA, "socketId": socket_id,
+			"text": json.dumps({"event": "snapshot", "states": snapshot}, default=str),
+		})
+
+		async def pump() -> None:
+			try:
+				while True:
+					one = await queue.get()
+					# Changes that arrive together go up together.
+					batch = [one]
+					while not queue.empty() and len(batch) < 100:
+						batch.append(queue.get_nowait())
+					await self._send(ws, {
+						"type": RELAY_WS_MSG_WS_DATA, "socketId": socket_id,
+						"text": json.dumps({"event": "states", "states": batch}, default=str),
+					})
+			finally:
+				unsubscribe()
+				watches.discard(socket_id)
+
+		# Torn down like any bridge: the backend's ws_close, or the relay dropping.
+		watches.add(socket_id)
+		self._ws_pumps[socket_id] = asyncio.ensure_future(pump())
+		_LOGGER.debug("Relay (%s): watching %d entities", self._server_id, len(entity_ids))
 
 	async def _handle_lan_ws_open(
 		self,
