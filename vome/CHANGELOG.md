@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.53 — 3 October 2026
+
+The Coding agent page offers all four of Claude Code's side panes, one
+command each: automations, ESPHome, your home's health score (with a Fix
+button on each finding) and a working dashboard with live states. The
+bundled integration says 0.9.38, so it can be told apart from the one
+before live states (0.3.52 carried them, still labelled 0.9.37).
+
 ## 0.3.52 — 3 October 2026
 
 Live states for dashboards. When a dashboard pane in Claude Code (or any

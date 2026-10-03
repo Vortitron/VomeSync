@@ -1628,7 +1628,7 @@ const cu = document.getElementById("copy-url");
 				<div class="row">
 					<button type="button" class="primary" id="agent-copy">Copy the key</button>
 				</div>
-				${connect.pane ? panesNote(connect.pane, connect.esphome_pane || CLAUDE_ESPHOME_COMMAND) : ""}
+				${connect.pane ? panesNote(connect.pane, connect.esphome_pane || CLAUDE_ESPHOME_COMMAND, connect.health_pane, connect.dash_pane) : ""}
 				<details>
 					<summary class="muted">Or paste JSON into ${escapeHtml(chosen.where || "your config")} instead</summary>
 					<pre id="agent-connect-json" class="pre-scroll">${escapeHtml(chosen.json)}</pre>
@@ -1653,12 +1653,16 @@ const cu = document.getElementById("copy-url");
 	const CLAUDE_CONNECT_COMMAND = "/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp";
 	const CLAUDE_PANE_COMMAND = "/plugin install vome-automation --marketplace Vortitron/home-assistant-mcp";
 	const CLAUDE_ESPHOME_COMMAND = "/plugin install vome-esphome --marketplace Vortitron/home-assistant-mcp";
+	const CLAUDE_HEALTH_COMMAND = "/plugin install vome-health --marketplace Vortitron/home-assistant-mcp";
+	const CLAUDE_DASH_COMMAND = "/plugin install vome-dash --marketplace Vortitron/home-assistant-mcp";
 
-	// The two side panes Claude Code can show beside the conversation; both only read.
-	function panesNote(automation, esphome) {
-		return `<p class="muted">To watch what Claude is doing in a side pane, add either or both:</p>
+	// The side panes Claude Code can show beside the conversation; each is one command.
+	function panesNote(automation, esphome, health, dash) {
+		return `<p class="muted">Side panes for Claude Code, one command each:</p>
 				<p class="muted">The automation it is working on: <code>${escapeHtml(automation)}</code></p>
-				<p class="muted">An ESPHome device's map, and its builds and flashes as they run: <code>${escapeHtml(esphome)}</code></p>`;
+				<p class="muted">An ESPHome device's map, and its builds and flashes as they run: <code>${escapeHtml(esphome)}</code></p>
+				<p class="muted">Your home's health score, with a Fix button on each finding: <code>${escapeHtml(health || CLAUDE_HEALTH_COMMAND)}</code></p>
+				<p class="muted">One of your dashboards, working, with live states: <code>${escapeHtml(dash || CLAUDE_DASH_COMMAND)}</code></p>`;
 	}
 
 	function agentIntro(linked) {
@@ -1708,7 +1712,7 @@ const cu = document.getElementById("copy-url");
 					<div class="row">
 						<button type="button" class="ghost" id="agent-copy-command">Copy the command</button>
 					</div>
-					${panesNote(CLAUDE_PANE_COMMAND, CLAUDE_ESPHOME_COMMAND)}
+					${panesNote(CLAUDE_PANE_COMMAND, CLAUDE_ESPHOME_COMMAND, CLAUDE_HEALTH_COMMAND, CLAUDE_DASH_COMMAND)}
 					<p class="muted">Cursor, VS Code or OpenCode instead? The API tokens page gives each one its own config to paste.</p>
 				</div>`;
 			return;

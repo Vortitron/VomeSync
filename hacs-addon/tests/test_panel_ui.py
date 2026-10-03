@@ -354,4 +354,6 @@ def test_both_side_panes_are_offered_to_claude_code():
 	assert "connect.esphome_pane || CLAUDE_ESPHOME_COMMAND" in card
 	start = PANEL_JS.index('if (offer === "linked_account") {')
 	linked = PANEL_JS[start:PANEL_JS.index("return;", start)]
-	assert "panesNote(CLAUDE_PANE_COMMAND, CLAUDE_ESPHOME_COMMAND)" in linked
+	assert "panesNote(CLAUDE_PANE_COMMAND, CLAUDE_ESPHOME_COMMAND, CLAUDE_HEALTH_COMMAND, CLAUDE_DASH_COMMAND)" in linked
+	assert "/plugin install vome-health --marketplace Vortitron/home-assistant-mcp" in PANEL_JS
+	assert "/plugin install vome-dash --marketplace Vortitron/home-assistant-mcp" in PANEL_JS
