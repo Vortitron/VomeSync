@@ -357,3 +357,4 @@ def test_both_side_panes_are_offered_to_claude_code():
 	assert "panesNote(CLAUDE_PANE_COMMAND, CLAUDE_ESPHOME_COMMAND, CLAUDE_HEALTH_COMMAND, CLAUDE_DASH_COMMAND)" in linked
 	assert "/plugin install vome-health --marketplace Vortitron/home-assistant-mcp" in PANEL_JS
 	assert "/plugin install vome-dash --marketplace Vortitron/home-assistant-mcp" in PANEL_JS
+	assert "/plugin install vome-panes --marketplace Vortitron/home-assistant-mcp" in PANEL_JS
