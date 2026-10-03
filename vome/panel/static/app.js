@@ -1655,10 +1655,12 @@ const cu = document.getElementById("copy-url");
 	const CLAUDE_ESPHOME_COMMAND = "/plugin install vome-esphome --marketplace Vortitron/home-assistant-mcp";
 	const CLAUDE_HEALTH_COMMAND = "/plugin install vome-health --marketplace Vortitron/home-assistant-mcp";
 	const CLAUDE_DASH_COMMAND = "/plugin install vome-dash --marketplace Vortitron/home-assistant-mcp";
+	const CLAUDE_PANES_COMMAND = "/plugin install vome-panes --marketplace Vortitron/home-assistant-mcp";
 
 	// The side panes Claude Code can show beside the conversation; each is one command.
 	function panesNote(automation, esphome, health, dash) {
-		return `<p class="muted">Side panes for Claude Code, one command each:</p>
+		return `<p class="muted">Side panes for Claude Code. All four in one command: <code>${escapeHtml(CLAUDE_PANES_COMMAND)}</code></p>
+				<p class="muted">Or the ones you want:</p>
 				<p class="muted">The automation it is working on: <code>${escapeHtml(automation)}</code></p>
 				<p class="muted">An ESPHome device's map, and its builds and flashes as they run: <code>${escapeHtml(esphome)}</code></p>
 				<p class="muted">Your home's health score, with a Fix button on each finding: <code>${escapeHtml(health || CLAUDE_HEALTH_COMMAND)}</code></p>

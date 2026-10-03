@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.54 — 3 October 2026
+
+The Coding agent page offers all four Claude Code panes in one command
+(`vome-panes`), before the panes one by one.
+
 ## 0.3.53 — 3 October 2026
 
 The Coding agent page offers all four of Claude Code's side panes, one
