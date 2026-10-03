@@ -2269,3 +2269,56 @@ class TestBinaryOverTheRelay:
 		await client._handle_rpc(None, {"requestId": "r1", "method": "GET",
 		                                "path": "/api/camera_proxy/camera.door", "expect": "base64"})
 		assert seen["expect"] == "base64"
+
+
+class TestStatesWatch:
+	"""A dashboard's live states over the relay: the entities the portal names,
+	read through Home Assistant's own events, never a way to change anything."""
+
+	def _hass(self, states):
+		return SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: states.get(entity_id)), data={})
+
+	@pytest.mark.asyncio
+	async def test_accepts_only_entity_ids(self, monkeypatch):
+		import homeassistant.helpers.event as event_helpers
+		tracked = []
+		monkeypatch.setattr(event_helpers, "async_track_state_change_event", lambda hass, ids, cb: tracked.append(ids) or (lambda: None))
+		client = RelayClient(self._hass({}), server_id="rly-1", secret="sek", session=AsyncMock())
+		ws = AsyncMock()
+		await client._handle_states_ws_open(ws, "w1", {"entity_ids": ["../etc/passwd", "light kitchen", 42, ""]})
+		assert _sent_payloads(ws)[0]["type"] == "ws_close"
+		assert tracked == []
+
+	@pytest.mark.asyncio
+	async def test_sends_a_snapshot_then_each_change_and_stops_when_closed(self, monkeypatch):
+		import homeassistant.helpers.event as event_helpers
+		from datetime import datetime, timezone
+		subscribed = {}
+
+		def track(hass, ids, cb):
+			subscribed["ids"] = ids
+			subscribed["cb"] = cb
+			subscribed["stopped"] = False
+			return lambda: subscribed.update(stopped=True)
+
+		monkeypatch.setattr(event_helpers, "async_track_state_change_event", track)
+		now = datetime(2026, 10, 3, tzinfo=timezone.utc)
+		light = SimpleNamespace(state="on", attributes={"brightness": 178}, last_changed=now)
+		client = RelayClient(self._hass({"light.kitchen_2": light}), server_id="rly-1", secret="sek", session=AsyncMock())
+		ws = AsyncMock()
+		await client._handle_states_ws_open(ws, "w1", {"entity_ids": ["light.kitchen_2", "light.kitchen_2", "switch.gone"]})
+		assert subscribed["ids"] == ["light.kitchen_2", "switch.gone"]
+		sent = _sent_payloads(ws)
+		assert sent[0]["type"] == "ws_open_ack"
+		snapshot = json.loads(sent[1]["text"])
+		assert snapshot["event"] == "snapshot"
+		assert snapshot["states"][0]["state"] == "on" and snapshot["states"][1]["state"] is None
+
+		off = SimpleNamespace(state="off", attributes={}, last_changed=now)
+		subscribed["cb"](SimpleNamespace(data={"entity_id": "light.kitchen_2", "new_state": off}))
+		await asyncio.sleep(0.05)
+		change = json.loads(_sent_payloads(ws)[2]["text"])
+		assert change["event"] == "states" and change["states"][0]["state"] == "off"
+
+		await client._teardown_tunnel("w1")
+		assert subscribed["stopped"] is True

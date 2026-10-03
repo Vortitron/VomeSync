@@ -306,6 +306,15 @@ FORWARD_HOST_HEADER = "x-ha-original-host"
 # without any inbound exposure.
 RELAY_RPC_TARGET_CORE = "core"
 RELAY_RPC_TARGET_ESPHOME = "esphome"
+# A live watch of some entities' states, for a dashboard that wants changes the
+# moment they happen rather than polling (the portal checks the key and names
+# the entities; this end reads states through HA's own events, read-only).
+RELAY_RPC_TARGET_STATES = "states"
+# At most this many entities in one watch, and at most this many watches at once.
+RELAY_STATES_MAX_ENTITIES = 200
+RELAY_STATES_MAX_WATCHES = 20
+# Ids of entities to watch must look like entity ids: nothing else is accepted.
+RELAY_STATES_ENTITY_RE = r"^[a-z0-9_]+\.[a-z0-9_]+$"
 # Raw files under Home Assistant's config directory.  Hosted homes have no SSH
 # and no host shell, so configuration.yaml -- and anything else with no UI
 # equivalent -- was unreachable except through a file-editor add-on in a
