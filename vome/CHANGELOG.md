@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.52 — 3 October 2026
+
+Live states for dashboards. When a dashboard pane in Claude Code (or any
+client using Vome's MCP) shows this home, Vome can now ask the integration
+to watch just the entities on show and send each change the moment Home
+Assistant has it, over the link the integration already keeps, instead of
+being asked for them every few seconds. It only reports states and never
+changes anything, accepts entity ids and nothing else, and stops when the
+dashboard closes. Works the same on a house linked to Vome and on a home
+hosted by Vome.
+
 ## 0.3.51 — 2 October 2026
 
 The Coding agent page offers Claude Code's second side pane beside the
