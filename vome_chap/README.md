@@ -99,4 +99,4 @@ when it stands in. The rest stay stopped there.
 Releases from 29 September 2026 (version 0.1.17 on) are under the Functional
 Source License (FSL-1.1-MIT): free to use, change and share, at home, with or without Vome;
 not for a competing commercial product or service. Each release becomes MIT
-two years after it is published. See [LICENSE.md](../LICENSE.md).
+two years after it is published. See [LICENSE.md](LICENSE.md).
