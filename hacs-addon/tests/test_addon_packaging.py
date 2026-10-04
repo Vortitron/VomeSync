@@ -95,3 +95,10 @@ def test_addon_exposes_portal_url_config():
 	trans = (ADDON / "translations" / "en.yaml").read_text(encoding="utf-8")
 	assert "Vome site URL" in trans
 	assert "staging.vome.io" not in trans
+
+
+def test_addon_releases_never_take_latest_from_the_integration():
+	# HACS installs GitHub's "latest" release; that has to stay the
+	# integration's vX.Y.Z, so add-on releases are published make_latest=false.
+	script = (ROOT / "scripts" / "publish_addon_release.sh").read_text(encoding="utf-8")
+	assert "'make_latest': 'false'" in script
