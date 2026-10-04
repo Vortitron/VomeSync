@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.38"
+INTEGRATION_VERSION = "0.9.43"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -134,6 +134,14 @@ AGENT_REMOTE_ADDRESS_PATH = "/api/sync/agent/remote-address"
 # owner signs in — see docs/AGENT_KEY.md.
 RELAY_AGENT_PATH = "/api/v1/relay/agent"
 AGENT_MCP_KEY_PATH = "/api/sync/agent/mcp-key"
+# TURN logins for this home's WebRTC cameras, registered with HA's web_rtc
+# so a stream starts when browser and go2rtc cannot reach each other
+# directly.  Off (with a reason and when to ask again) until Vome turns it
+# on for the home — see ice_servers.py.
+AGENT_ICE_SERVERS_PATH = "/api/sync/agent/ice-servers"
+# Whether end-to-end remote access is on for this home, and its
+# <slug>.e2e.vome.io name — see e2e_remote.py.
+AGENT_E2E_PATH = "/api/sync/agent/e2e"
 # Count recorder writes locally. The portal used to GET /api/history/period
 # for every entity over 24 h, which is why Chatty devices always failed on
 # a busy house. This path returns ``{entity_id: count}`` instead.
@@ -322,8 +330,21 @@ RELAY_STATES_ENTITY_RE = r"^[a-z0-9_]+\.[a-z0-9_]+$"
 # ``ha:config``, so it can be withheld or removed on its own.
 RELAY_RPC_TARGET_FILES = "files"
 # Exact path portions of the file API.  ``/read`` and ``/list`` take
-# ``?path=``; ``/write`` takes the same plus a JSON body.
-FILES_ALLOWED_PATHS = ("/list", "/read", "/write")
+# ``?path=``; ``/write`` takes the same plus a JSON body; ``/delete`` (POST
+# only) removes one file.
+FILES_ALLOWED_PATHS = ("/list", "/read", "/write", "/delete")
+# Files at the top of the config directory that ``/delete`` refuses: Home
+# Assistant will not start without the first two, and the rest are its
+# database and version marker.  An agent tidying up must not be able to take
+# any of them with it.
+FILES_DELETE_PROTECTED = (
+	"configuration.yaml",
+	"secrets.yaml",
+	".HA_VERSION",
+	"home-assistant_v2.db",
+	"home-assistant_v2.db-wal",
+	"home-assistant_v2.db-shm",
+)
 FILES_ALLOWED_METHODS = ("GET", "POST")
 # Directories never served, whatever the caller asks for.  ``.storage`` is Home
 # Assistant's own database -- registries, config entries, every credential the

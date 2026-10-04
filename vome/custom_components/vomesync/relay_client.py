@@ -93,6 +93,7 @@ from .const import (
 	RELAY_RECONNECT_MAX_DELAY,
 	FILES_ALLOWED_METHODS,
 	FILES_ALLOWED_PATHS,
+	FILES_DELETE_PROTECTED,
 	FILES_DENIED_DIRS,
 	FILES_MAX_ENTRIES,
 	FILES_MAX_READ_BYTES,
@@ -133,6 +134,7 @@ from .const import (
 )
 from .login_watch import LoginWatcher
 from .webhooks import is_forwardable_webhook, normalise_webhooks
+from . import remote_auth_guard
 from .esphome_ws import WS_PATH, EsphomeWsError, EsphomeWsSession
 from .lan_routes import (
 	ROUTE_HOST,
@@ -507,6 +509,21 @@ def _to_ws_url(base_url: Optional[str], path: str) -> str:
 	return base + path
 
 
+def _json_refusal(
+	message: str, *, error: Optional[str] = None,
+) -> tuple[int, list, str, None]:
+	"""A 403 shaped like core's own, for a request we refuse to forward."""
+	body: dict[str, str] = {"message": message}
+	if error:
+		body = {"error": error, "error_description": message}
+	return (
+		403,
+		[["Content-Type", "application/json"]],
+		base64.b64encode(json.dumps(body).encode()).decode("ascii"),
+		None,
+	)
+
+
 def _safe_path_portion(path: Any) -> Optional[str]:
 	"""Return the path portion (before any query string) of a relayed path,
 	or ``None`` when it is not a clean absolute path.
@@ -632,6 +649,9 @@ class RelayClient:
 		# Live frontend-WebSocket bridges, keyed by the backend's socketId: the
 		# local HA socket plus the task pumping its frames back up the tunnel.
 		self._ws_local: dict[str, aiohttp.ClientWebSocketResponse] = {}
+		# Frontend sockets whose first message (the auth) has not been seen;
+		# see remote_auth_guard.
+		self._ws_auth_pending: set[str] = set()
 		self._ws_pumps: dict[str, asyncio.Task] = {}
 		# Same idea for raw-TCP LAN tunnels (e.g. RDP): a socketId maps to a
 		# local (reader, writer) pair instead of a WebSocket, but rides the
@@ -903,6 +923,26 @@ class RelayClient:
 
 		if not self._forward_ui:
 			return 0, None, None, "Full-UI forwarding is disabled for this Home Assistant."
+
+		# Core sees every forwarded request as local, so it cannot keep a
+		# "local network only" user local; we refuse them here instead.
+		refusal = remote_auth_guard.refuse_request(
+			self._hass, path, _normalise_header_input(data.get("headers")),
+		)
+		if refusal:
+			return _json_refusal(refusal)
+		if remote_auth_guard.is_token_path(path):
+			# Never streamed: the tokens have to be read before they go out.
+			status, headers, body_b64, error = await self._proxy_http_to(
+				method, self.local_url + path, data,
+				error_timeout="Local Home Assistant timed out.",
+				error_client="Local Home Assistant error",
+			)
+			if status == 200 and body_b64 and await remote_auth_guard.refuse_token_response(
+				self._hass, base64.b64decode(body_b64),
+			):
+				return _json_refusal(remote_auth_guard.REFUSAL, error="access_denied")
+			return status, headers, body_b64, error
 		return await self._proxy_http_to(
 			method, self.local_url + path, data,
 			error_timeout="Local Home Assistant timed out.",
@@ -1005,6 +1045,21 @@ class RelayClient:
 		if data.get("target") == RELAY_RPC_TARGET_STATES:
 			await self._handle_states_ws_open(ws, socket_id, data)
 			return
+		if data.get("target") in ("e2e", "e2e-acme"):
+			# End-to-end access: still-encrypted bytes for this home's own TLS
+			# server (or its ACME responder) — see e2e_remote.py.
+			from .e2e_remote import port_for
+			port = port_for(self._hass, data["target"]) if self._hass is not None else None
+			if not port:
+				await self._send(ws, {
+					"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+					"code": 1008, "reason": "End-to-end access is not on for this home.",
+				})
+				return
+			await self._open_bridged_tcp(
+				ws, socket_id, {ROUTE_HOST: "127.0.0.1", ROUTE_PORT: port}, data["target"],
+			)
+			return
 		path = data.get("path") or "/api/websocket"
 		lan = parse_lan_path(path)
 		if lan is not None:
@@ -1030,6 +1085,8 @@ class RelayClient:
 				"code": 1008, "reason": "WebSocket path not permitted.",
 			})
 			return
+		if portion in RELAY_FORWARD_WS_PATHS:
+			self._ws_auth_pending.add(socket_id)
 		await self._open_bridged_ws(ws, socket_id, _to_ws_url(self.local_url, path))
 
 	async def _handle_states_ws_open(
@@ -1462,6 +1519,14 @@ class RelayClient:
 		"""Forward one frame down to the local HA socket or TCP connection."""
 		socket_id = data.get("socketId")
 		local = self._ws_local.get(socket_id)
+		if local is not None and socket_id in self._ws_auth_pending and data.get("text") is not None:
+			refusal = remote_auth_guard.refuse_ws_auth(self._hass, data["text"])
+			if refusal:
+				await self._refuse_ws_auth(socket_id, refusal)
+				return
+			with suppress(ValueError, TypeError, AttributeError):
+				if json.loads(data["text"]).get("type") == "auth":
+					self._ws_auth_pending.discard(socket_id)
 		if local is not None:
 			try:
 				if data.get("dataB64") is not None:
@@ -1480,6 +1545,17 @@ class RelayClient:
 			except (OSError, ValueError, TypeError) as err:
 				_LOGGER.debug("Relay (%s) tcp_data forward failed: %s", self._server_id, err)
 
+	async def _refuse_ws_auth(self, socket_id: str, reason: str) -> None:
+		"""Answer the browser as core would, then close the bridge."""
+		ws = self._ws
+		if ws is not None:
+			with suppress(Exception):
+				await self._send(ws, {
+					"type": RELAY_WS_MSG_WS_DATA, "socketId": socket_id,
+					"text": json.dumps({"type": "auth_invalid", "message": reason}),
+				})
+		await self._teardown_tunnel(socket_id)
+
 	async def _handle_ws_close(self, data: dict) -> None:
 		"""Close a bridged socket because the browser side went away."""
 		await self._teardown_tunnel(data.get("socketId"))
@@ -1488,6 +1564,7 @@ class RelayClient:
 		"""Cancel the pump and close the local socket (WebSocket or TCP) for one bridge."""
 		if not socket_id:
 			return
+		self._ws_auth_pending.discard(socket_id)
 		pump = self._ws_pumps.pop(socket_id, None) or self._tcp_pumps.pop(socket_id, None)
 		if pump is not None:
 			pump.cancel()
@@ -1602,6 +1679,8 @@ class RelayClient:
 		method = (method or "GET").upper()
 		if method not in FILES_ALLOWED_METHODS:
 			return 0, None, f"Unsupported file method: {method}"
+		if portion == "/delete" and method != "POST":
+			return 0, None, "Delete must be a POST."
 
 		rel = ""
 		read_encoding = "utf8"
@@ -1684,6 +1763,30 @@ class RelayClient:
 				return 0, None, f"Could not read the file: {err}"
 			return 200, json.dumps({
 				"path": str(target.relative_to(base)), "content": text, "encoding": "utf8"
+			}), None
+
+		if portion == "/delete":
+			# One file at a time and never a directory: a tidy-up that names the
+			# wrong folder must fail, not empty it. The protected names are
+			# checked on the resolved path, so a symlink called something else
+			# cannot be used to delete configuration.yaml through it.
+			if target == base:
+				return 0, None, "Refusing to delete the config directory."
+			if target.is_dir():
+				return 0, None, "Path is a directory; only single files can be deleted."
+			if not target.is_file():
+				return 0, None, "Not a file, or it does not exist."
+			if target.parent == base and target.name in FILES_DELETE_PROTECTED:
+				return 0, None, (
+					f"Refusing to delete {target.name}: Home Assistant needs it to start "
+					"or to keep its history."
+				)
+			try:
+				target.unlink()
+			except OSError as err:
+				return 0, None, f"Could not delete the file: {err}"
+			return 200, json.dumps({
+				"path": str(target.relative_to(base)), "deleted": True,
 			}), None
 
 		# /write

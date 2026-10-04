@@ -754,8 +754,17 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 
 	async def _link_start(call: ServiceCall) -> ServiceResponse:
 		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
-		if ((entry.options or {}).get(CONF_RELAY) or {}).get(CONF_RELAY_SERVER_ID):
-			return {"status": "already_linked", "entry_id": entry.entry_id}
+		linked_to = ((entry.options or {}).get(CONF_RELAY) or {}).get(CONF_RELAY_SERVER_ID)
+		if linked_to:
+			# Which row, too: a hosted home restored from a physical install
+			# stays linked to its old relay, and Vome uses that link for the
+			# hosted row's files and ESPHome once it knows which one it is.
+			# A row id, not a credential.
+			return {
+				"status": "already_linked",
+				"entry_id": entry.entry_id,
+				"relay_server_id": str(linked_to),
+			}
 		portal_url = _normalise_portal_url(call.data.get("portal_url"))
 		prefetched = str(call.data.get("device_code") or "").strip()
 		if prefetched:

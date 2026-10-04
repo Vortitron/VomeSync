@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.3.59 — 4 October 2026
+
+Groundwork for end-to-end encrypted remote access (integration 0.9.43),
+dormant until Vome turns it on for a home. When it is on, your home gets
+its own certificate for an address under e2e.vome.io, with a key made in
+and never leaving your Home Assistant, and connections to that address
+are decrypted only here. Vome passes them on without being able to read
+them. Nothing changes until then.
+
+## 0.3.58 — 4 October 2026
+
+A Vome-hosted home restored from a physical install keeps its add-on linked
+to the house's original Vome connection. Asked to link again, the add-on now
+says which connection that is (integration 0.9.42), so Vome can use it for
+the hosted home's config files and ESPHome. Before, those tools said "no
+component linked" on such a home. Nothing is re-pointed, and the reply
+carries the connection's id, never its secret.
+
+## 0.3.57 — 4 October 2026
+
+A user marked "Can only log in from the local network" now stays local
+when you reach Home Assistant through your Vome address (integration
+0.9.41). Before, Home Assistant saw every request through Vome as coming
+from inside the house, so such a user could sign in from anywhere if they
+got past the Vome door. That includes the service logins Vome creates for
+add-ons. Vome now refuses them at sign-in, on the live connection and on
+signed camera links, and a refused sign-in leaves no working login behind.
+
+## 0.3.56 — 4 October 2026
+
+Cameras that stream over WebRTC can get a relay for when your phone and
+Home Assistant cannot reach each other directly, such as on mobile data
+or behind a carrier's NAT (integration 0.9.40). Vome issues this home a
+login for a TURN server that lasts a day and hands it to Home Assistant,
+which passes it to both the browser and go2rtc. Until Vome turns this on
+for your home nothing changes, and cameras stream as before.
+
+## 0.3.55 — 4 October 2026
+
+Your coding agent can delete a file it no longer needs from the config
+directory (integration 0.9.39). It deletes one file at a time, never a
+folder. It refuses configuration.yaml, secrets.yaml and Home Assistant's
+database outright, including through a link with another name. It stays
+inside the config directory and out of `.storage`, like reads and writes.
+It needs the same ha:files permission as editing files.
+
 ## 0.3.54 — 3 October 2026
 
 The Coding agent page offers all four Claude Code panes in one command

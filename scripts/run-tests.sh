@@ -252,6 +252,15 @@ run_hass_tests() {
 		log_error "Home Assistant integration tests failed"
 		return 1
 	fi
+
+	# APIs newer than the pinned Core (web_rtc ICE servers, 2024.11+) are
+	# tested on a real current Core in their own Python 3.13 venv.
+	if scripts/run-core-tests.sh; then
+		log_success "Current-Core integration tests passed"
+	else
+		log_error "Current-Core integration tests failed"
+		return 1
+	fi
 }
 
 # Start test services for E2E tests
