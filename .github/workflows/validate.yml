@@ -1,0 +1,38 @@
+# =============================================================================
+# HACS and Home Assistant validation
+#
+# The two checks HACS's default list asks for: its own repository check, and
+# hassfest, Home Assistant's manifest and translations validator. Jenkins
+# still owns the tests (see test.yml); this only proves the integration is
+# shaped the way HACS and Home Assistant expect, so it runs when the
+# integration changes on main, or by hand.
+# =============================================================================
+name: Validate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "custom_components/vomesync/**"
+      - "hacs.json"
+      - ".github/workflows/validate.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: hacs/action@main
+        with:
+          category: integration
+
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
