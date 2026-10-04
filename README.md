@@ -44,6 +44,11 @@ HACS instead:
 Or add the repository yourself: in Home Assistant, **Settings → Add-ons →
 Add-on Store → ⋮ → Repositories**, and paste `https://github.com/Vortitron/VomeSync`.
 
+Without the app, the same free coding-agent key is on the integration's own
+menu: **Settings → Devices & services → Vome → Configure → Coding agent**.
+It gives the key and the commands for Claude Code (side panes included),
+Cursor and VS Code.
+
 ---
 
 # For developers
