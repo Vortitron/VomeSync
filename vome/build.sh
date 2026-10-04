@@ -25,6 +25,10 @@ cp -a "$SRC"/. "$DEST"/
 # one check used to confirm the mirror is honest. (The source tree keeps its
 # own __pycache__; that shows up as a harmless "Only in ..." line instead.)
 find "$DEST" -name '__pycache__' -type d -prune -exec rm -rf {} +
+# The copy's manifest is kept as manifest.json.in and renamed back by the
+# Dockerfile: HACS's default-list check walks the whole repository and wants
+# exactly one manifest.json, the integration's own.
+mv "$DEST/manifest.json" "$DEST/manifest.json.in"
 # Drop any accidental staged_integration leftover from older layouts.
 rm -rf "$(dirname "$0")/staged_integration"
 echo "Synced $SRC → $DEST"

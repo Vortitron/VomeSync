@@ -108,7 +108,8 @@ pipeline {
                 sh '''
                     chmod +x vome/build.sh
                     ./vome/build.sh
-                    diff -qr custom_components/vomesync vome/custom_components/vomesync
+                    diff -qr -x manifest.json -x manifest.json.in custom_components/vomesync vome/custom_components/vomesync
+                    cmp custom_components/vomesync/manifest.json vome/custom_components/vomesync/manifest.json.in
 
                     python3.11 -m venv .venv-addon
                     . .venv-addon/bin/activate

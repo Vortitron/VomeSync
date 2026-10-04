@@ -102,3 +102,17 @@ def test_addon_releases_never_take_latest_from_the_integration():
 	# integration's vX.Y.Z, so add-on releases are published make_latest=false.
 	script = (ROOT / "scripts" / "publish_addon_release.sh").read_text(encoding="utf-8")
 	assert "'make_latest': 'false'" in script
+
+
+def test_the_repository_holds_exactly_one_manifest_json():
+	# HACS's default-list check walks the whole repository for files named
+	# *manifest.json and fails unless there is exactly one: the integration's.
+	# The add-on's bundled copy is manifest.json.in, renamed back in the image.
+	import subprocess
+
+	tracked = subprocess.run(
+		["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True,
+	).stdout.split()
+	manifests = [f for f in tracked if f.endswith("manifest.json")]
+	assert manifests == ["custom_components/vomesync/manifest.json"], manifests
+	assert "manifest.json.in" in DOCKERFILE
