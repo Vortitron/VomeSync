@@ -302,7 +302,8 @@ class E2ERemote:
 
 	async def ensure_certificate(self, session: Optional[aiohttp.ClientSession] = None, *, ssl_context: Any = None) -> bool:
 		"""Get or renew the certificate if due; True when one was issued."""
-		if not self.host or not self.certificate_due():
+		# Reading the certificate is file I/O: never on the event loop.
+		if not self.host or not await self.hass.async_add_executor_job(self.certificate_due):
 			return False
 		account_key = await self.hass.async_add_executor_job(self._key, "account.pem")
 		cert_key = await self.hass.async_add_executor_job(self._key, "key.pem")

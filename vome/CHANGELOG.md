@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.60 — 4 October 2026
+
+End-to-end remote access no longer reads its certificate on Home
+Assistant's event loop, which Home Assistant warned about (integration
+0.9.45). It does not change what it does.
+
 ## 0.3.59 — 4 October 2026
 
 Groundwork for end-to-end encrypted remote access (integration 0.9.43),
