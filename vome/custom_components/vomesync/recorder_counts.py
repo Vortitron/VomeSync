@@ -81,17 +81,21 @@ async def async_recorder_counts(
 		return None
 	try:
 		from homeassistant.components import recorder
-		if recorder.get_instance(hass) is None:
+		instance = recorder.get_instance(hass)
+		if instance is None:
 			return None
 	except Exception:  # noqa: BLE001 - recorder missing is a skip, not a crash
 		_LOGGER.debug("Recorder is not available for chatty-device counts")
 		return None
 
 	start_ts = time.time() - max(1, int(hours)) * 3600
+	# On the recorder's own executor, not Home Assistant's general one:
+	# Home Assistant flags database work anywhere else ("accesses the
+	# database without the database executor") and asks for a bug report.
 	# Let a query failure propagate: the view answers 503 so Vome can
 	# still try the history dump. Returning None here would look like
 	# the recorder is off.
-	return await hass.async_add_executor_job(_query_sync, hass, start_ts)
+	return await instance.async_add_executor_job(_query_sync, hass, start_ts)
 
 
 def _hass_from_request(request) -> Any:

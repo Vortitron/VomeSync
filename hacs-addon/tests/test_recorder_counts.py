@@ -61,3 +61,38 @@ def test_no_http_means_the_view_is_not_registered():
 
 	hass = SimpleNamespace(http=None)
 	assert async_register_view(hass) is False
+
+
+def test_the_count_runs_on_the_recorders_executor(monkeypatch):
+	"""Home Assistant warns when database work runs anywhere but the
+	recorder's own executor, so the count must go through it."""
+	import asyncio
+	import sys
+	import types
+
+	from custom_components.vomesync import recorder_counts
+
+	ran_on = []
+
+	class Recorder:
+		async def async_add_executor_job(self, func, *args):
+			ran_on.append("recorder")
+			return {"light.kitchen": 3}
+
+	class Hass:
+		class config:
+			components = {"recorder"}
+
+		async def async_add_executor_job(self, func, *args):
+			ran_on.append("hass")
+			return {}
+
+	fake = types.ModuleType("homeassistant.components.recorder")
+	fake.get_instance = lambda hass: Recorder()
+	monkeypatch.setitem(sys.modules, "homeassistant.components.recorder", fake)
+	import homeassistant.components as components
+	monkeypatch.setattr(components, "recorder", fake, raising=False)
+
+	counts = asyncio.run(recorder_counts.async_recorder_counts(Hass()))
+	assert counts == {"light.kitchen": 3}
+	assert ran_on == ["recorder"]
