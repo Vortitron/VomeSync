@@ -19,7 +19,11 @@ COPY panel/ /usr/share/vome/panel/
 
 # Scripts are committed executable; chmod here is a local safety net and needs
 # no network (unlike apk).
-RUN chmod +x \
+# build.sh stores the bundled integration's manifest as manifest.json.in, so
+# the repository holds a single manifest.json for HACS; restore its name.
+RUN mv /usr/share/vome/custom_components/vomesync/manifest.json.in \
+		/usr/share/vome/custom_components/vomesync/manifest.json \
+	&& chmod +x \
 	/etc/cont-init.d/*.sh \
 	/etc/services.d/vome/run \
 	/usr/share/vome/panel/server.py

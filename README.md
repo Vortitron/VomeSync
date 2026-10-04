@@ -73,6 +73,7 @@ This repository is the **Home Assistant** side of VomeSync (HACS custom reposito
 - **Add-on Store URL**: `https://github.com/Vortitron/VomeSync` (requires `repository.yaml` at repo root)
 - **Design**:
   - `vome/build.sh` syncs `custom_components/vomesync` → `vome/custom_components/vomesync` (committed; Supervisor build context cannot see the parent tree)
+  - The copy's manifest is committed as `manifest.json.in` and renamed back by `vome/Dockerfile`: HACS's default-list check wants exactly one `manifest.json` in the repository
   - Image is built on the user's Home Assistant from `vome/Dockerfile`. Base is Home Assistant `base-python` so the panel interpreter is already in the image — the build must not `apk add` (Alpine package indexes are a second network dependency and fail on EOL bases).
   - MCP: `ha_addon_install_vome` (+ `ha_supervisor_api`) on Supervised/HAOS targets
   - Jenkins: `VomeSync/vome-addon-ci` + `VomeSync/vome-addon-release`

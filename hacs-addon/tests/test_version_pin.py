@@ -25,7 +25,8 @@ def test_integration_version_matches_manifest():
 
 
 def test_vendored_addon_copy_matches():
-	vendored = ROOT / "vome" / "custom_components" / "vomesync" / "manifest.json"
+	# Stored as manifest.json.in; the add-on's Dockerfile renames it back.
+	vendored = ROOT / "vome" / "custom_components" / "vomesync" / "manifest.json.in"
 	manifest = json.loads((COMPONENT / "manifest.json").read_text())
 	vendored_manifest = json.loads(vendored.read_text())
 	assert vendored_manifest["version"] == manifest["version"], (

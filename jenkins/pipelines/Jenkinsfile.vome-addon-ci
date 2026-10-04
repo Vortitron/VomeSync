@@ -88,11 +88,13 @@ pipeline {
                     test -f vome/panel/server.py
                     chmod +x vome/build.sh
                     ./vome/build.sh
-                    test -f vome/custom_components/vomesync/manifest.json
+                    test -f vome/custom_components/vomesync/manifest.json.in
                     test -f vome/custom_components/vomesync/lan_routes.py
                     test -f vome/custom_components/vomesync/services_remote.py
-                    # Vendored tree must match the HACS source of truth
-                    diff -qr custom_components/vomesync vome/custom_components/vomesync
+                    # Vendored tree must match the HACS source of truth (its
+                    # manifest is stored as manifest.json.in; see vome/build.sh)
+                    diff -qr -x manifest.json -x manifest.json.in custom_components/vomesync vome/custom_components/vomesync
+                    cmp custom_components/vomesync/manifest.json vome/custom_components/vomesync/manifest.json.in
                     python3 -m py_compile vome/panel/server.py
                     # The CHAP add-on: its own manifest, image and worker.
                     test -f vome_chap/config.yaml
