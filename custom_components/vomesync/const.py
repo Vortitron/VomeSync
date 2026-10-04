@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.38"
+INTEGRATION_VERSION = "0.9.39"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -322,8 +322,21 @@ RELAY_STATES_ENTITY_RE = r"^[a-z0-9_]+\.[a-z0-9_]+$"
 # ``ha:config``, so it can be withheld or removed on its own.
 RELAY_RPC_TARGET_FILES = "files"
 # Exact path portions of the file API.  ``/read`` and ``/list`` take
-# ``?path=``; ``/write`` takes the same plus a JSON body.
-FILES_ALLOWED_PATHS = ("/list", "/read", "/write")
+# ``?path=``; ``/write`` takes the same plus a JSON body; ``/delete`` (POST
+# only) removes one file.
+FILES_ALLOWED_PATHS = ("/list", "/read", "/write", "/delete")
+# Files at the top of the config directory that ``/delete`` refuses: Home
+# Assistant will not start without the first two, and the rest are its
+# database and version marker.  An agent tidying up must not be able to take
+# any of them with it.
+FILES_DELETE_PROTECTED = (
+	"configuration.yaml",
+	"secrets.yaml",
+	".HA_VERSION",
+	"home-assistant_v2.db",
+	"home-assistant_v2.db-wal",
+	"home-assistant_v2.db-shm",
+)
 FILES_ALLOWED_METHODS = ("GET", "POST")
 # Directories never served, whatever the caller asks for.  ``.storage`` is Home
 # Assistant's own database -- registries, config entries, every credential the

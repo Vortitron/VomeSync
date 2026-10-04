@@ -2028,9 +2028,85 @@ class TestConfigFiles:
 	@pytest.mark.asyncio
 	async def test_refuses_a_non_allowlisted_operation(self, tmp_path):
 		client = self._client_with_config(tmp_path)
-		status, _body, error = await client.execute("GET", "/delete?path=x", None, "files")
+		status, _body, error = await client.execute("POST", "/chmod?path=x", None, "files")
 		assert status == 0
 		assert "non-allowlisted" in error
+
+	@pytest.mark.asyncio
+	async def test_deletes_one_file_and_says_so(self, tmp_path):
+		(tmp_path / "packages").mkdir()
+		leftover = tmp_path / "packages" / "leftover.yaml"
+		leftover.write_text("x: 1\n", encoding="utf-8")
+		client = self._client_with_config(tmp_path)
+
+		status, body, error = await client.execute(
+			"POST", "/delete?path=packages/leftover.yaml", None, "files"
+		)
+		assert status == 200 and error is None
+		assert json.loads(body) == {"path": "packages/leftover.yaml", "deleted": True}
+		assert not leftover.exists()
+		assert (tmp_path / "packages").is_dir()
+
+	@pytest.mark.asyncio
+	async def test_delete_must_be_a_post(self, tmp_path):
+		(tmp_path / "x.yaml").write_text("x", encoding="utf-8")
+		client = self._client_with_config(tmp_path)
+		status, _body, error = await client.execute("GET", "/delete?path=x.yaml", None, "files")
+		assert status == 0 and "POST" in error
+		assert (tmp_path / "x.yaml").exists()
+
+	@pytest.mark.asyncio
+	async def test_delete_never_removes_a_directory(self, tmp_path):
+		(tmp_path / "packages").mkdir()
+		(tmp_path / "packages" / "a.yaml").write_text("a", encoding="utf-8")
+		client = self._client_with_config(tmp_path)
+		for rel in ("packages", ""):
+			status, _body, error = await client.execute("POST", f"/delete?path={rel}", None, "files")
+			assert status == 0, rel
+			assert "directory" in error, rel
+		assert (tmp_path / "packages" / "a.yaml").exists()
+
+	@pytest.mark.asyncio
+	async def test_delete_refuses_what_home_assistant_needs(self, tmp_path):
+		for name in ("configuration.yaml", "secrets.yaml", "home-assistant_v2.db"):
+			(tmp_path / name).write_text("x", encoding="utf-8")
+		client = self._client_with_config(tmp_path)
+		for name in ("configuration.yaml", "secrets.yaml", "home-assistant_v2.db"):
+			status, _body, error = await client.execute("POST", f"/delete?path={name}", None, "files")
+			assert status == 0, name
+			assert "Refusing to delete" in error, name
+			assert (tmp_path / name).exists(), name
+
+	@pytest.mark.asyncio
+	async def test_a_symlink_cannot_smuggle_out_a_protected_file(self, tmp_path):
+		# The name checked is the resolved one, so an innocent-looking link
+		# that points at configuration.yaml is refused like the real thing.
+		cfg = tmp_path / "configuration.yaml"
+		cfg.write_text("homeassistant:\n", encoding="utf-8")
+		(tmp_path / "harmless.yaml").symlink_to(cfg)
+		client = self._client_with_config(tmp_path)
+		status, _body, error = await client.execute("POST", "/delete?path=harmless.yaml", None, "files")
+		assert status == 0 and "configuration.yaml" in error
+		assert cfg.exists()
+
+	@pytest.mark.asyncio
+	async def test_delete_stays_inside_the_config_directory(self, tmp_path):
+		outside = tmp_path.parent / "outside.txt"
+		outside.write_text("keep", encoding="utf-8")
+		storage = tmp_path / ".storage"
+		storage.mkdir()
+		(storage / "auth").write_text("{}", encoding="utf-8")
+		client = self._client_with_config(tmp_path)
+		for rel, why in (("../outside.txt", "outside"), (".storage/auth", "internal storage")):
+			status, _body, error = await client.execute("POST", f"/delete?path={rel}", None, "files")
+			assert status == 0 and why in error, rel
+		assert outside.exists() and (storage / "auth").exists()
+
+	@pytest.mark.asyncio
+	async def test_deleting_a_missing_file_says_so(self, tmp_path):
+		client = self._client_with_config(tmp_path)
+		status, _body, error = await client.execute("POST", "/delete?path=nope.yaml", None, "files")
+		assert status == 0 and "does not exist" in error
 
 	@pytest.mark.asyncio
 	async def test_a_failed_write_cannot_truncate_the_original(self, tmp_path):

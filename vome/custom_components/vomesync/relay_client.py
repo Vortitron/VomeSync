@@ -93,6 +93,7 @@ from .const import (
 	RELAY_RECONNECT_MAX_DELAY,
 	FILES_ALLOWED_METHODS,
 	FILES_ALLOWED_PATHS,
+	FILES_DELETE_PROTECTED,
 	FILES_DENIED_DIRS,
 	FILES_MAX_ENTRIES,
 	FILES_MAX_READ_BYTES,
@@ -1602,6 +1603,8 @@ class RelayClient:
 		method = (method or "GET").upper()
 		if method not in FILES_ALLOWED_METHODS:
 			return 0, None, f"Unsupported file method: {method}"
+		if portion == "/delete" and method != "POST":
+			return 0, None, "Delete must be a POST."
 
 		rel = ""
 		read_encoding = "utf8"
@@ -1684,6 +1687,30 @@ class RelayClient:
 				return 0, None, f"Could not read the file: {err}"
 			return 200, json.dumps({
 				"path": str(target.relative_to(base)), "content": text, "encoding": "utf8"
+			}), None
+
+		if portion == "/delete":
+			# One file at a time and never a directory: a tidy-up that names the
+			# wrong folder must fail, not empty it. The protected names are
+			# checked on the resolved path, so a symlink called something else
+			# cannot be used to delete configuration.yaml through it.
+			if target == base:
+				return 0, None, "Refusing to delete the config directory."
+			if target.is_dir():
+				return 0, None, "Path is a directory; only single files can be deleted."
+			if not target.is_file():
+				return 0, None, "Not a file, or it does not exist."
+			if target.parent == base and target.name in FILES_DELETE_PROTECTED:
+				return 0, None, (
+					f"Refusing to delete {target.name}: Home Assistant needs it to start "
+					"or to keep its history."
+				)
+			try:
+				target.unlink()
+			except OSError as err:
+				return 0, None, f"Could not delete the file: {err}"
+			return 200, json.dumps({
+				"path": str(target.relative_to(base)), "deleted": True,
 			}), None
 
 		# /write

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.55 — 4 October 2026
+
+Your coding agent can delete a file it no longer needs from the config
+directory (integration 0.9.39). It deletes one file at a time, never a
+folder. It refuses configuration.yaml, secrets.yaml and Home Assistant's
+database outright, including through a link with another name. It stays
+inside the config directory and out of `.storage`, like reads and writes.
+It needs the same ha:files permission as editing files.
+
 ## 0.3.54 — 3 October 2026
 
 The Coding agent page offers all four Claude Code panes in one command
