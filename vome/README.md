@@ -1,9 +1,9 @@
 # Vome Home Assistant Add-on
 
-Supervisor add-on that installs the Vome integration, serves a **sidebar
-control panel** for remote access and LAN tunnels, and lets this Home Assistant
-share virtual switches with other homes — without HACS, a public IP, or
-port-forwarding.
+The Vome app adds a **Vome** panel to your sidebar. From it you can reach
+this Home Assistant from anywhere, see its health score, give a coding agent
+such as Claude Code a scoped key, keep a standby in sync, and share switches
+with other homes. It needs no HACS, public IP or port-forwarding.
 
 The integration code is the **same** `custom_components/vomesync` tree HACS
 installs. Use this add-on *or* HACS, not both, unless you know you want one
@@ -11,14 +11,15 @@ to overwrite the other.
 
 ## What it does
 
-- **Virtual switches** — create switches other Home Assistant homes can watch
-  or toggle (public directory at [sync.vome.io](https://sync.vome.io))
-- **Remote access** — outbound relay to Vome so this instance can be reached
-  without opening router ports
-- **LAN tunnels** — expose selected LAN devices as `/t/<slug>/` on your Vome
-  domain
-- **Sidebar panel** — tree-view UI over the same options the integration menu
-  exposes
+- **Health score**: a score out of 100, and what to fix first
+- **Coding agent**: a key for Claude Code, Cursor or VS Code, scoped to what
+  you tick; no account needed
+- **Remote access**: once linked to vome.io, reach this instance without
+  opening router ports, plus LAN devices as `/t/<slug>/` and webhooks
+- **Standby sync**: keeps a second Home Assistant ready to take over (with the
+  Vome CHAP app)
+- **Switches**: create switches other homes can watch or toggle (public
+  directory at [sync.vome.io](https://sync.vome.io))
 
 ## Add-on Store install
 

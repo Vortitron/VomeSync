@@ -3,10 +3,10 @@ name: Vome
 version: "0.3.59"
 slug: vome
 description: >
-  Share virtual switches between Home Assistant homes, connect this instance
-  to Vome for remote access without port-forwarding, and manage LAN tunnels
-  from a sidebar panel. Bundles the Vome integration (the same code as the
-  HACS custom component), so you do not need HACS.
+  Reach this Home Assistant from anywhere without port-forwarding, see its
+  health score, give coding agents such as Claude Code a scoped key, keep a
+  standby in sync, and share switches with other homes. Bundles the Vome
+  integration, so you do not need HACS.
 url: https://github.com/Vortitron/VomeSync
 arch:
   - aarch64
