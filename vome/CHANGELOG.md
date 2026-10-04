@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.61 — 4 October 2026
+
+End-to-end remote access gets a new certificate when Vome switches the
+certificate authority it uses, not only when the name changes or the old
+one is about to expire (integration 0.9.46). Found on the test home: it
+kept a Let's Encrypt staging certificate, which a browser refuses on
+vome.io with no way past.
+
 ## 0.3.60 — 4 October 2026
 
 End-to-end remote access no longer reads its certificate on Home

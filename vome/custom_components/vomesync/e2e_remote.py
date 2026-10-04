@@ -296,6 +296,10 @@ class E2ERemote:
 		pem = self._read("cert.pem")
 		if not pem or self._read("cert.host") != (self.host or "").encode():
 			return True
+		# A certificate from another CA (Let's Encrypt staging, say) is not
+		# what Vome asked for: browsers refuse it outright on an HSTS domain.
+		if self._read("cert.directory") != (self.directory or "").encode():
+			return True
 		not_after = _not_after(pem)
 		now = now or datetime.now(timezone.utc)
 		return not_after is None or not_after - now < RENEW_BEFORE
@@ -314,6 +318,9 @@ class E2ERemote:
 		chain = await client.obtain(self.host, cert_key, self.responder)
 		await self.hass.async_add_executor_job(self._write_private, "cert.pem", chain)
 		await self.hass.async_add_executor_job(self._write_private, "cert.host", self.host.encode())
+		await self.hass.async_add_executor_job(
+			self._write_private, "cert.directory", self.directory.encode(),
+		)
 		_LOGGER.info("Vome end-to-end: certificate for %s issued", self.host)
 		return True
 
