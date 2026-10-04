@@ -1,15 +1,62 @@
-# VomeSync: Public Remote Switch for Home Assistant
+<p align="center"><img src="vome/logo.png" alt="Vome" width="250"></p>
 
-**VomeSync** is a Home Assistant add-on and server-based service that enables users to create and share virtual switches, allowing one Home Assistant instance to toggle a switch in another, either publicly or (in future) privately. Designed for the global Home Assistant community (1M+ users in 2025), VomeSync offers a unique, user-friendly way to sync smart home devices or create community-driven events (e.g., "Flash porch lights for a local festival"). This project is hosted under [vome.io](https://vome.io), a brand for innovative IoT solutions.
+# Vome for Home Assistant
 
-**[Get started with the Vome app →](https://vome.io/get-started?mode=connect)**
+Vome is a Home Assistant app that reaches your home from anywhere without
+opening a port, checks how healthy it is, keeps a standby ready to take over,
+and lets coding agents such as Claude Code work on it safely.
 
-> **Warning**: Public mode shares switch state and activity globally via a unique identifier (UID); toggling requires an access key. **Do not use for sensitive devices** (e.g., locks, alarms). Private mode is planned for secure, user-controlled syncing.
+<p align="center">
+  <a href="https://my.home-assistant.io/redirect/supervisor_addon/?addon=b1bff62e_vome&repository_url=https%3A%2F%2Fgithub.com%2FVortitron%2FVomeSync"><img src="https://my.home-assistant.io/badges/supervisor_addon.svg" alt="Add the Vome app to your Home Assistant" height="56"></a>
+</p>
+
+The button opens your own Home Assistant on the Vome app's page, adding this
+repository first. Press **Install**, then **Start**, and open **Vome** in the
+sidebar. No account is needed to start.
+
+## What it does
+
+- **Remote access**: once the app is linked to your vome.io account, open
+  your Home Assistant from anywhere, with no port-forwarding, public IP or
+  Nabu Casa. LAN devices and webhooks can go through the same link.
+- **Health score**: a score out of 100 for your install, with what to fix
+  first: backups, updates, chatty devices, dead entities, disk and more.
+- **Coding agent**: a key for Claude Code, Cursor or VS Code, scoped to what
+  you tick, so an agent can read your home, edit automations and build
+  ESPHome devices. Claude Code also gets
+  [side panes](https://github.com/Vortitron/home-assistant-mcp#claude-code-the-side-panes)
+  that show its work as it happens.
+- **Standby sync**: keeps a second Home Assistant in step with this one, ready
+  to take over if this one fails (the **Vome CHAP** app).
+- **Switches**: share a switch with other homes, or follow one of theirs.
+
+Linking the app to a [vome.io](https://vome.io) account also adds off-site
+backups, a friendly address, and help that can see what is wrong without
+logging in as you. Start at **[vome.io/get-started](https://vome.io/get-started?mode=connect)**.
+
+### Container or Core?
+
+These installs have no app store, so the Vome integration goes in through
+HACS instead:
+
+<a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Vortitron&repository=VomeSync&category=integration"><img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open the Vome integration in HACS" height="40"></a>
+
+Or add the repository yourself: in Home Assistant, **Settings → Add-ons →
+Add-on Store → ⋮ → Repositories**, and paste `https://github.com/Vortitron/VomeSync`.
+
+---
+
+# For developers
+
+The rest of this page is about how VomeSync is built: the integration, the
+app, and the switch service.
 
 Security audit: see `docs/SECURITY_AUDIT.html`.
 Architecture diagrams: see `docs/ARCHITECTURE.md`.
 Integration architecture: `docs/ARCHITECTURE_INTEGRATION.md`.
 The sync.vome.io API, website and Docker stack live in **[Vortitron/VomeSync-server](https://github.com/Vortitron/VomeSync-server)**.
+
+> **Switches in public mode** share their state and activity with anyone who has the switch's UID; toggling needs an access key. **Do not use them for sensitive devices** such as locks or alarms.
 
 ## Project Overview
 

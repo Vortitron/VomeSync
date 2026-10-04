@@ -61,12 +61,27 @@ def test_build_yaml_matches_dockerfile_python_base():
 
 
 def test_store_description_says_what_vome_does():
+	# What the panel offers today, in the order people care about it.
 	description = _folded_description().lower()
-	assert "virtual switch" in description
-	assert "remote access" in description
-	assert "lan tunnel" in description
+	assert "from anywhere" in description
+	assert "port-forwarding" in description
+	assert "health score" in description
+	assert "coding agent" in description
+	assert "standby" in description
+	assert "switches" in description
 	assert "hacs" in description
 	assert not description.startswith("installs the shared"), description
+
+
+def test_each_app_has_a_store_icon_and_logo():
+	# Without these the Store shows a blank tile for the app.
+	from PIL import Image
+
+	for app in ("vome", "vome_chap"):
+		icon = Image.open(ROOT / app / "icon.png")
+		logo = Image.open(ROOT / app / "logo.png")
+		assert icon.size == (128, 128), (app, icon.size)
+		assert logo.size == (250, 100), (app, logo.size)
 
 
 def test_addon_version_is_quoted_semver():
