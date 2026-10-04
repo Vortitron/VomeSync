@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.57 — 4 October 2026
+
+A user marked "Can only log in from the local network" now stays local
+when you reach Home Assistant through your Vome address (integration
+0.9.41). Before, Home Assistant saw every request through Vome as coming
+from inside the house, so such a user could sign in from anywhere if they
+got past the Vome door. That includes the service logins Vome creates for
+add-ons. Vome now refuses them at sign-in, on the live connection and on
+signed camera links, and a refused sign-in leaves no working login behind.
+
 ## 0.3.56 — 4 October 2026
 
 Cameras that stream over WebRTC can get a relay for when your phone and
