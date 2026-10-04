@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.59 — 4 October 2026
+
+Groundwork for end-to-end encrypted remote access (integration 0.9.43),
+dormant until Vome turns it on for a home. When it is on, your home gets
+its own certificate for an address under e2e.vome.io, with a key made in
+and never leaving your Home Assistant, and connections to that address
+are decrypted only here. Vome passes them on without being able to read
+them. Nothing changes until then.
+
 ## 0.3.58 — 4 October 2026
 
 A Vome-hosted home restored from a physical install keeps its add-on linked

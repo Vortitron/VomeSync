@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.42"
+INTEGRATION_VERSION = "0.9.43"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -139,6 +139,9 @@ AGENT_MCP_KEY_PATH = "/api/sync/agent/mcp-key"
 # directly.  Off (with a reason and when to ask again) until Vome turns it
 # on for the home — see ice_servers.py.
 AGENT_ICE_SERVERS_PATH = "/api/sync/agent/ice-servers"
+# Whether end-to-end remote access is on for this home, and its
+# <slug>.e2e.vome.io name — see e2e_remote.py.
+AGENT_E2E_PATH = "/api/sync/agent/e2e"
 # Count recorder writes locally. The portal used to GET /api/history/period
 # for every entity over 24 h, which is why Chatty devices always failed on
 # a busy house. This path returns ``{entity_id: count}`` instead.

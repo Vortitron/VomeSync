@@ -103,6 +103,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	# turns it on for this home.
 	from .ice_servers import async_start_ice_servers
 	await async_start_ice_servers(hass, entry)
+	from .e2e_remote import async_start_e2e
+	await async_start_e2e(hass, entry)
 
 	# Switch sync is best-effort at startup: the coordinator refreshes on its
 	# regular interval, so a failed first fetch degrades switch entities
@@ -326,6 +328,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	await async_stop_relay(hass, entry)
 	from .ice_servers import async_stop_ice_servers
 	await async_stop_ice_servers(hass, entry)
+	from .e2e_remote import async_stop_e2e
+	await async_stop_e2e(hass, entry)
 
 	# Unload platforms
 	unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

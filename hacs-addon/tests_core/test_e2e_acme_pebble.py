@@ -107,8 +107,12 @@ def pebble(socket_enabled, tmp_path):
 	try:
 		_wait_port(dns_port)  # it serves DNS over TCP as well as UDP
 		_wait_port(acme_port)
+		_wait_port(mgmt_port)
 		ca = ssl.create_default_context(cafile=str(cert))
-		yield {"directory": f"https://127.0.0.1:{acme_port}/dir", "ssl": ca, "tls_port": tls_port}
+		yield {
+			"directory": f"https://127.0.0.1:{acme_port}/dir", "ssl": ca, "tls_port": tls_port,
+			"root_url": f"https://127.0.0.1:{mgmt_port}/roots/0",
+		}
 	finally:
 		for p in procs:
 			p.terminate()

@@ -1045,6 +1045,21 @@ class RelayClient:
 		if data.get("target") == RELAY_RPC_TARGET_STATES:
 			await self._handle_states_ws_open(ws, socket_id, data)
 			return
+		if data.get("target") in ("e2e", "e2e-acme"):
+			# End-to-end access: still-encrypted bytes for this home's own TLS
+			# server (or its ACME responder) — see e2e_remote.py.
+			from .e2e_remote import port_for
+			port = port_for(self._hass, data["target"]) if self._hass is not None else None
+			if not port:
+				await self._send(ws, {
+					"type": RELAY_WS_MSG_WS_CLOSE, "socketId": socket_id,
+					"code": 1008, "reason": "End-to-end access is not on for this home.",
+				})
+				return
+			await self._open_bridged_tcp(
+				ws, socket_id, {ROUTE_HOST: "127.0.0.1", ROUTE_PORT: port}, data["target"],
+			)
+			return
 		path = data.get("path") or "/api/websocket"
 		lan = parse_lan_path(path)
 		if lan is not None:
