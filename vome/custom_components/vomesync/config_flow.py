@@ -17,6 +17,7 @@ from .api_client import VomeSyncAPIClient, VomeSyncAPIError
 from .options_flow_links import VomeSyncOptionsFlowLinkEntitiesMixin
 from .options_flow_relay import VomeSyncOptionsFlowRelayMixin
 from .options_flow_lan import VomeSyncOptionsFlowLanMixin
+from .options_flow_agent import VomeSyncOptionsFlowAgentMixin
 from .const import (
 	DOMAIN,
 	CONF_PERSONAL_KEY,
@@ -305,6 +306,7 @@ class VomeSyncOptionsFlow(
 	VomeSyncOptionsFlowLinkEntitiesMixin,
 	VomeSyncOptionsFlowRelayMixin,
 	VomeSyncOptionsFlowLanMixin,
+	VomeSyncOptionsFlowAgentMixin,
 ):
 	"""Handle options flow for VomeSync."""
 
@@ -577,6 +579,9 @@ class VomeSyncOptionsFlow(
 		# setup leader: it works before there is an account, so it sits on
 		# this menu whether or not a link already exists.
 		menu_options.append("get_remote_address")
+		# The free MCP key for Claude Code, Cursor and VS Code: the add-on
+		# panel's Coding agent page, for installs (HACS) that have no panel.
+		menu_options.append("coding_agent")
 		if self._relay_is_linked():
 			menu_options.append("remote_access")
 			menu_options.append("unlink_vome")

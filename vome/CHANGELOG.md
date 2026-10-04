@@ -6,6 +6,11 @@ End-to-end remote access no longer reads its certificate on Home
 Assistant's event loop, which Home Assistant warned about (integration
 0.9.45). It does not change what it does.
 
+The integration's Configure menu has a Coding agent page: the free key
+for Claude Code, Cursor and VS Code, with its permissions and the
+commands to paste (Claude Code's side panes included), for installs
+through HACS that have no Vome panel.
+
 ## 0.3.59 — 4 October 2026
 
 Groundwork for end-to-end encrypted remote access (integration 0.9.43),
