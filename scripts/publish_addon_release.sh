@@ -38,7 +38,9 @@ payload=$(RELEASE_NOTES_FILE="${RELEASE_NOTES_FILE:-}" python3 -c "
 import json, os
 tag = os.environ['RELEASE_TAG_RESOLVED']
 notes_file = os.environ.get('RELEASE_NOTES_FILE') or ''
-release = {'tag_name': tag, 'name': tag, 'target_commitish': 'main'}
+# Never 'Latest': HACS installs whatever GitHub calls the latest release, and
+# that must be the integration's vX.Y.Z, not an add-on's tag.
+release = {'tag_name': tag, 'name': tag, 'target_commitish': 'main', 'make_latest': 'false'}
 if notes_file and os.path.isfile(notes_file):
     release['body'] = open(notes_file, encoding='utf-8').read()
 else:
