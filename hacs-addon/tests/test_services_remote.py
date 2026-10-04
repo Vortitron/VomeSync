@@ -111,6 +111,13 @@ def test_in_app_link_flow(monkeypatch):
 	assert entry.options["relay"]["server_id"] == "rly-9"
 	assert "e1" not in hass.data[sr.DOMAIN][sr._PENDING_LINK_KEY]
 
+	# Asked again once linked, it says which row: a hosted home restored from
+	# a physical install uses that link for its files and ESPHome. The row id
+	# only, never the secret.
+	again = asyncio.run(handlers["link_start"](call))
+	assert again == {"status": "already_linked", "entry_id": "e1", "relay_server_id": "rly-9"}
+	assert "s" not in again.values()
+
 	unlinked = asyncio.run(handlers["unlink"](call))
 	assert unlinked == {"status": "unlinked", "was_linked": True}
 	assert "relay" not in entry.options

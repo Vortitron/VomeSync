@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.58 — 4 October 2026
+
+A Vome-hosted home restored from a physical install keeps its add-on linked
+to the house's original Vome connection. Asked to link again, the add-on now
+says which connection that is (integration 0.9.42), so Vome can use it for
+the hosted home's config files and ESPHome. Before, those tools said "no
+component linked" on such a home. Nothing is re-pointed, and the reply
+carries the connection's id, never its secret.
+
 ## 0.3.57 — 4 October 2026
 
 A user marked "Can only log in from the local network" now stays local
