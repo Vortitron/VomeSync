@@ -99,6 +99,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	# needs the entry options, and async_start_relay is idempotent.
 	await async_start_relay(hass, entry)
 
+	# TURN for WebRTC cameras: never blocks setup, does nothing until Vome
+	# turns it on for this home.
+	from .ice_servers import async_start_ice_servers
+	await async_start_ice_servers(hass, entry)
+
 	# Switch sync is best-effort at startup: the coordinator refreshes on its
 	# regular interval, so a failed first fetch degrades switch entities
 	# until the API recovers instead of killing the whole entry (which would
@@ -319,6 +324,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	
 	# Stop the relay (if any) before tearing down platforms.
 	await async_stop_relay(hass, entry)
+	from .ice_servers import async_stop_ice_servers
+	await async_stop_ice_servers(hass, entry)
 
 	# Unload platforms
 	unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

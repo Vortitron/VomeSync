@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.56 — 4 October 2026
+
+Cameras that stream over WebRTC can get a relay for when your phone and
+Home Assistant cannot reach each other directly, such as on mobile data
+or behind a carrier's NAT (integration 0.9.40). Vome issues this home a
+login for a TURN server that lasts a day and hands it to Home Assistant,
+which passes it to both the browser and go2rtc. Until Vome turns this on
+for your home nothing changes, and cameras stream as before.
+
 ## 0.3.55 — 4 October 2026
 
 Your coding agent can delete a file it no longer needs from the config
