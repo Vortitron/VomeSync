@@ -349,7 +349,7 @@
 			},
 			"remote_access": {
 				"title": "Remote access & LAN tunnels",
-				"description": "With an active friendly domain on vome.io, traffic reaches this home over the outbound relay (no router port-forward).\n\n**Allow full-UI forwarding** exposes this Home Assistant at your friendly domain. Keep it off unless you need browser access to HA itself.\n\n**LAN tunnels** map `https://your-domain/t/<slug>/` to a device on your network (NAS, router, printer UI, Guacamole, …). You currently have **{lan_enabled}** of **{lan_count}** route(s) enabled.",
+				"description": "With an active friendly domain on vome.io, traffic reaches this home over the outbound relay (no router port-forward).\n\n**Allow full-UI forwarding** exposes this Home Assistant at your friendly domain. Keep it off unless you need browser access to HA itself.\n\n**LAN tunnels** map `https://your-domain/t/your-slug/` to a device on your network (NAS, router, printer UI, Guacamole, …). You currently have **{lan_enabled}** of **{lan_count}** route(s) enabled.",
 				"data": {
 					"forward_ui": "Allow full-UI forwarding (Home Assistant on the friendly domain)",
 					"manage_lan": "Manage LAN tunnels next"
@@ -357,7 +357,7 @@
 			},
 			"lan_routes": {
 				"title": "LAN tunnels",
-				"description": "Each route is reachable as `/t/<slug>/` on your friendly domain after you sign in at vome.io.\n\n{routes_summary}\n\nTip: devices that generate absolute URLs (or ignore a reverse-proxy base path) may need their own “base URL” setting pointed at `/t/<slug>/`.",
+				"description": "Each route is reachable as `/t/your-slug/` on your friendly domain after you sign in at vome.io.\n\n{routes_summary}\n\nTip: devices that generate absolute URLs (or ignore a reverse-proxy base path) may need their own “base URL” setting pointed at `/t/your-slug/`.",
 				"data": {
 					"action": "Action",
 					"remove_slug": "Route to remove (when action is Remove)"
@@ -365,7 +365,7 @@
 			},
 			"lan_route_add": {
 				"title": "Add LAN tunnel",
-				"description": "Slug becomes the URL path: `/t/<slug>/`. Host must be reachable from this Home Assistant (LAN IP or hostname).",
+				"description": "Slug becomes the URL path: `/t/your-slug/`. Host must be reachable from this Home Assistant (LAN IP or hostname).",
 				"data": {
 					"slug": "Slug (e.g. nas, router, rdp)",
 					"name": "Display name (optional)",
