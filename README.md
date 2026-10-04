@@ -26,8 +26,8 @@ sidebar. No account is needed to start.
   ESPHome devices. Claude Code also gets
   [side panes](https://github.com/Vortitron/home-assistant-mcp#claude-code-the-side-panes)
   that show its work as it happens.
-- **Standby sync**: keeps a second Home Assistant in step with this one, ready
-  to take over if this one fails (the **Vome CHAP** app).
+- **Standby sync** (early): keeps a second Home Assistant in step with this
+  one, ready to take over if this one fails (the **Vome CHAP** app).
 - **Switches**: share a switch with other homes, or follow one of theirs.
 
 Linking the app to a [vome.io](https://vome.io) account also adds off-site
