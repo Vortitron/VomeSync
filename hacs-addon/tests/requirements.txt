@@ -8,3 +8,5 @@ websockets>=11.0.0
 flake8>=6.0.0
 homeassistant==2023.7.3
 voluptuous>=0.13.0
+# test_addon_packaging reads the Store icon and logo sizes.
+Pillow>=10.0.0
