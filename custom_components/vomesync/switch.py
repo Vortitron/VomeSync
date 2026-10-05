@@ -273,12 +273,10 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 		if ws_base_url:
 			attributes["websocket_url"] = f"{ws_base_url}?uid={self._uid}"
 		
-		# Add webhook URL for remote toggling (owner only)
-		if self._is_owner:
-			server_url = self.coordinator.config_entry.data.get("server_url", "")
-			personal_key = self.coordinator.config_entry.data.get("personal_key", "")
-			if server_url and personal_key:
-				attributes["webhook_url"] = f"{server_url}/api/toggle/{self._uid}?personalKey={personal_key}"
+		# No webhook URL here: it carries the account's personal key, and state
+		# attributes are readable by every user of this Home Assistant (guests
+		# included) and land in the recorder and in backups. The owner gets the
+		# URL from Configure -> the switch, which only an administrator can open.
 
 		# Add available attributes
 		for attr, key in [

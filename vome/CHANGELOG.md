@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.64 — 5 October 2026
+
+A switch you own no longer shows its webhook link among its attributes.
+That link carries your account's personal key, and attributes can be read
+by everyone who uses this Home Assistant, guests included, and are kept in
+its history and backups. The link is still under Configure → the switch,
+which only an administrator can open (integration 0.9.49).
+
 ## 0.3.63 — 5 October 2026
 
 A Chat page: talk to your home with your own OpenRouter key. Ask which
