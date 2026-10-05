@@ -652,6 +652,9 @@ class RelayClient:
 		# Frontend sockets whose first message (the auth) has not been seen;
 		# see remote_auth_guard.
 		self._ws_auth_pending: set[str] = set()
+		# Loopback ports of end-to-end bridges, so their visitor is forgotten
+		# when the bridge closes.
+		self._e2e_ports: dict[str, int] = {}
 		self._ws_pumps: dict[str, asyncio.Task] = {}
 		# Same idea for raw-TCP LAN tunnels (e.g. RDP): a socketId maps to a
 		# local (reader, writer) pair instead of a WebSocket, but rides the
@@ -1059,6 +1062,15 @@ class RelayClient:
 			await self._open_bridged_tcp(
 				ws, socket_id, {ROUTE_HOST: "127.0.0.1", ROUTE_PORT: port}, data["target"],
 			)
+			# Tell the proxy which visitor this loopback connection carries:
+			# its door limits and logs by the address Vome's router saw.
+			tcp = self._tcp_local.get(socket_id)
+			if tcp is not None and data["target"] == "e2e":
+				from .e2e_remote import note_peer
+				with suppress(Exception):
+					local_port = tcp[1].get_extra_info("sockname")[1]
+					note_peer(self._hass, local_port, data.get("peer"))
+					self._e2e_ports[socket_id] = local_port
 			return
 		path = data.get("path") or "/api/websocket"
 		lan = parse_lan_path(path)
@@ -1447,6 +1459,10 @@ class RelayClient:
 		finally:
 			tcp = self._tcp_local.pop(socket_id, None)
 			self._tcp_pumps.pop(socket_id, None)
+			e2e_port = self._e2e_ports.pop(socket_id, None)
+			if e2e_port is not None and self._hass is not None:
+				from .e2e_remote import forget_peer
+				forget_peer(self._hass, e2e_port)
 			if tcp is not None:
 				with suppress(Exception):
 					tcp[1].close()
@@ -1565,6 +1581,10 @@ class RelayClient:
 		if not socket_id:
 			return
 		self._ws_auth_pending.discard(socket_id)
+		e2e_port = self._e2e_ports.pop(socket_id, None)
+		if e2e_port is not None and self._hass is not None:
+			from .e2e_remote import forget_peer
+			forget_peer(self._hass, e2e_port)
 		pump = self._ws_pumps.pop(socket_id, None) or self._tcp_pumps.pop(socket_id, None)
 		if pump is not None:
 			pump.cancel()

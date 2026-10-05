@@ -26,6 +26,12 @@ sidebar. No account is needed to start.
   ESPHome devices. Claude Code also gets
   [side panes](https://github.com/Vortitron/home-assistant-mcp#claude-code-the-side-panes)
   that show its work as it happens.
+- **Chat**: talk to your home with your own
+  [OpenRouter](https://openrouter.ai) key (Claude, GPT, Gemini …): ask what is
+  on and why, control devices, have automations written. A change waits for
+  your Approve, and nothing goes through Vome. The same tools are offered to
+  Home Assistant's own assistants, so Assist, the phone app and voice can use
+  them too.
 - **Standby sync** (early): keeps a second Home Assistant in step with this
   one, ready to take over if this one fails (the **Vome CHAP** app).
 - **Switches**: share a switch with other homes, or follow one of theirs.
@@ -43,6 +49,16 @@ HACS instead:
 
 Or add the repository yourself: in Home Assistant, **Settings → Add-ons →
 Add-on Store → ⋮ → Repositories**, and paste `https://github.com/Vortitron/VomeSync`.
+
+Without the app, the same free coding-agent key is on the integration's own
+menu: **Settings → Devices & services → Vome → Configure → Coding agent**.
+It gives the key and the commands for Claude Code (side panes included),
+Cursor and VS Code.
+
+To chat without the app, use Home Assistant's own Assist: set up an
+assistant (the OpenRouter integration takes your key), then under
+**Settings → Voice assistants → your assistant → Control Home Assistant**
+tick **Vome**. What it may do is on **Configure → AI chat**.
 
 ---
 

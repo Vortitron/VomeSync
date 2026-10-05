@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import sys
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,6 +20,9 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import chat  # noqa: E402 - the Chat page, next to this file
 
 DEFAULT_PORTAL_URL = "https://vome.io"
 RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
@@ -488,6 +492,82 @@ def _unwrap(payload: Any) -> Any:
 	return payload
 
 
+# ── Chat ──────────────────────────────────────────────────────────────────
+#
+# The conversation itself is chat.py; this is its plumbing to Home
+# Assistant (the integration's chat_* actions) and the page's routes.
+
+
+def chat_toolset() -> tuple[int, dict]:
+	status, payload = call_service_ready("chat_tools", {})
+	body = _unwrap(payload)
+	if not isinstance(body, dict):
+		return 502, {"error": "Home Assistant did not list the chat tools."}
+	if body.get("error") or status >= 400:
+		return (status if status >= 400 else 400), {
+			"error": body.get("error") or f"HTTP {status}"}
+	return 200, body
+
+
+def chat_call_tool(name: str, arguments: dict) -> dict:
+	status, payload = call_service("chat_tool_call", {"name": name, "arguments": arguments})
+	body = _unwrap(payload)
+	if not isinstance(body, dict):
+		return {"ok": False, "error": f"Home Assistant answered HTTP {status}"}
+	if body.get("error") and "ok" not in body:
+		return {"ok": False, "error": body["error"]}
+	return body
+
+
+def chat_state() -> tuple[int, dict]:
+	status, toolset = chat_toolset()
+	settings = chat.public_settings(chat.load_settings())
+	if status != 200:
+		return 200, {**settings, "tools_error": toolset.get("error"), "scopes": [],
+		             "configured": [], "tools": []}
+	return 200, {**settings, "scopes": toolset.get("scopes") or [],
+	             "configured": toolset.get("configured") or [],
+	             "tools": [{"name": t.get("name"), "scope": t.get("scope"),
+	                        "confirm": t.get("confirm")} for t in toolset.get("tools") or []]}
+
+
+def chat_save_settings(body: dict) -> tuple[int, dict]:
+	values: dict = {}
+	if body.get("clear_key"):
+		values["api_key"] = ""
+	key = str(body.get("api_key") or "").strip()
+	if key:
+		try:
+			info = chat.check_key(key)
+		except chat.ChatError as err:
+			return 400, {"error": str(err)}
+		values["api_key"] = key
+		LOG.info("Chat: OpenRouter key saved (%s)", info.get("label") or chat.key_hint(key))
+	model = body.get("model")
+	if isinstance(model, str) and model.strip():
+		if not re.match(r"^[a-z0-9._-]+/[A-Za-z0-9._:-]+$", model.strip()):
+			return 400, {"error": "That is not an OpenRouter model id (maker/model)."}
+		values["model"] = model.strip()
+	saved = chat.save_settings(values)
+	return 200, chat.public_settings(saved)
+
+
+def chat_send(body: dict) -> tuple[int, dict]:
+	settings = chat.load_settings()
+	status, toolset = chat_toolset()
+	if status != 200:
+		return status, toolset
+	approve = body.get("approve")
+	try:
+		result = chat.run_turn(
+			body.get("messages"), settings, toolset, chat_call_tool,
+			approve=approve if isinstance(approve, bool) else None,
+		)
+	except chat.ChatError as err:
+		return 400, {"error": str(err)}
+	return 200, result
+
+
 # Only Home Assistant's ingress may talk to the panel (security review, 1 Oct
 # 2026). The port is not published, but every app on the same Home Assistant
 # shares its internal network: any of them could otherwise call this panel
@@ -635,6 +715,15 @@ class PanelHandler(BaseHTTPRequestHandler):
 				status = 400
 			self._send_json(status, body)
 			return
+		if path == "/api/chat":
+			self._send_json(*chat_state())
+			return
+		if path == "/api/chat/models":
+			try:
+				self._send_json(200, {"models": chat.list_models()})
+			except chat.ChatError as err:
+				self._send_json(502, {"error": str(err)})
+			return
 		if path == "/api/switches":
 			status, payload = call_service("list_switches", {})
 			body = _unwrap(payload)
@@ -659,6 +748,12 @@ class PanelHandler(BaseHTTPRequestHandler):
 				return
 			self._send_json(200, {"message": "Handed to the Vome CHAP add-on; it pairs within a few seconds.",
 			                      **chap_status()})
+			return
+		if path == "/api/chat/send":
+			self._send_json(*chat_send(body))
+			return
+		if path == "/api/chat/settings":
+			self._send_json(*chat_save_settings(body))
 			return
 		if path == "/api/link/start":
 			try:
@@ -700,6 +795,9 @@ class PanelHandler(BaseHTTPRequestHandler):
 			"/api/agent_key/scopes": ("agent_key_scopes", body),
 			"/api/agent_key/reissue": ("agent_key_reissue", body),
 			"/api/agent_key/revoke": ("agent_key_revoke", body),
+			# What the AI chat may do: the same choice as the integration's
+			# Configure → AI chat, which Assist's agents work within too.
+			"/api/chat/scopes": ("chat_set_scopes", body),
 		}
 		if path not in mapping:
 			self._send_json(404, {"error": "not found"})

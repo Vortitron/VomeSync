@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.3.63 — 5 October 2026
+
+A Chat page: talk to your home with your own OpenRouter key. Ask which
+lights are on or why something happened, control devices, and have
+automations written. A new or changed automation is shown to you first
+and only saved when you press Approve. Your messages go from this Home
+Assistant to OpenRouter, only to providers that do not store or train on
+them, and not through Vome; the key stays in the app and out of backups.
+Locks, alarms, covers, valves and cameras are never the chat's to operate.
+OpenRouter's free models are in the list too, for trying it without credit.
+
+The same tools are offered to Home Assistant's own assistants as **Vome**
+(integration 0.9.48), so Assist, the phone app and voice can use them:
+tick Vome under your assistant's Control Home Assistant. Configure → AI
+chat (or the Chat page) chooses what they may do: look, control devices,
+change automations. Anyone who is not an administrator can only look.
+
+The panel no longer gets wider than a phone's screen when it shows a long
+line of code.
+
+## 0.3.62 — 5 October 2026
+
+End-to-end remote access now has the Vome door, held by your Home
+Assistant itself (integration 0.9.47). Vome cannot
+see an end-to-end session, so your home checks what Vome checks on your
+usual address: a Vome sign-in, your door password, or the access you
+chose (app access open, webhooks), and sends anyone else to the Vome gate.
+It limits how often a stranger may try, blocks an address after five
+failed logins in 15 minutes, keeps Vome's own sign-in cookie away from
+Home Assistant, and reports all of it to your access log, with the
+visitor's real address. Still off until Vome turns it on for your home.
+
+## 0.3.61 — 4 October 2026
+
+End-to-end remote access gets a new certificate when Vome switches the
+certificate authority it uses, not only when the name changes or the old
+one is about to expire (integration 0.9.46). Found on the test home: it
+kept a Let's Encrypt staging certificate, which a browser refuses on
+vome.io with no way past.
+
+## 0.3.60 — 4 October 2026
+
+End-to-end remote access no longer reads its certificate on Home
+Assistant's event loop, which Home Assistant warned about (integration
+0.9.45). It does not change what it does.
+
+The integration's Configure menu has a Coding agent page: the free key
+for Claude Code, Cursor and VS Code, with its permissions and the
+commands to paste (Claude Code's side panes included), for installs
+through HACS that have no Vome panel.
+
 ## 0.3.59 — 4 October 2026
 
 Groundwork for end-to-end encrypted remote access (integration 0.9.43),

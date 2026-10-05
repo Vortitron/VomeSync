@@ -43,7 +43,9 @@
 					"unlink_vome": "🔌 Disconnect from Vome Home",
 					"get_remote_address": "🌍 Get a remote address",
 					"remote_access": "🌐 Remote access & LAN tunnels",
-					"more": "⋯ More"
+					"more": "⋯ More",
+					"coding_agent": "🤖 Coding agent (Claude Code, Cursor)",
+					"ai_chat": "💬 AI chat (Assist)"
 				}
 			},
 			"more": {
@@ -414,6 +416,53 @@
 				"data_description": {
 					"secret": "The key from vome.io. Leave empty to disconnect."
 				}
+			},
+			"coding_agent": {
+				"title": "Coding agent key",
+				"description": "A free key so Claude Code, Cursor or VS Code can work on this Home Assistant through Vome. No account needed. Tick what an agent may do; you can change it later. The key works for two days unless you sign in to Vome and connect this Home Assistant.",
+				"data": {
+					"scopes": "What an agent may do"
+				}
+			},
+			"coding_agent_issued": {
+				"title": "Your coding agent key",
+				"description": "{info}"
+			},
+			"coding_agent_manage": {
+				"title": "Coding agent key",
+				"description": "{info}",
+				"menu_options": {
+					"coding_agent_scopes": "Change what it may do",
+					"coding_agent_reissue": "Replace a lost key",
+					"coding_agent_revoke": "Revoke it",
+					"back": "Back"
+				}
+			},
+			"coding_agent_elsewhere": {
+				"title": "Coding agent key",
+				"description": "{info}"
+			},
+			"coding_agent_scopes": {
+				"title": "What the key may do",
+				"description": "The key stays the same, so nothing needs pasting again.",
+				"data": {
+					"scopes": "What an agent may do"
+				}
+			},
+			"coding_agent_reissue": {
+				"title": "Replace the key",
+				"description": "Makes a new key and stops the old one, with the same permissions and end date. Use it if the key is lost."
+			},
+			"coding_agent_revoke": {
+				"title": "Revoke the key",
+				"description": "Ends the key now, together with the temporary link it opened. Agents using it stop working."
+			},
+			"ai_chat": {
+				"title": "AI chat",
+				"description": "What an AI assistant may do in this Home Assistant through Vome.\n\n{info}",
+				"data": {
+					"scopes": "What the chat may do"
+				}
 			}
 		},
 		"error": {
@@ -450,7 +499,9 @@
 			"lan_too_many": "You already have the maximum number of LAN routes.",
 			"invalid_backup_key": "That does not look like a Vome connection key — they start with \"vbk_\". Copy the whole value from vome.io.",
 			"remote_address_failed": "Could not get a remote address. Try again in a minute.",
-			"remote_address_unavailable": "Vome could not issue a random address for this Home Assistant. A house already reached at its own URL does not need one."
+			"remote_address_unavailable": "Vome could not issue a random address for this Home Assistant. A house already reached at its own URL does not need one.",
+			"agent_key_refused": "This Home Assistant can't have a key from here right now; open Coding agent again to see why.",
+			"agent_key_failed": "Vome couldn't be reached to do that. Try again in a moment."
 		},
 		"abort": {
 			"no_switches": "No switches to manage. Create or subscribe to switches first.",
@@ -465,4 +516,3 @@
 		}
 	}
 }
-

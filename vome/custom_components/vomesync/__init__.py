@@ -50,8 +50,20 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 	# add-on panel, with no hint of the real problem.
 	_register_services(hass)
 	_register_http_views(hass)
+	_register_chat(hass)
 	_start_hacs_refresh(hass)
 	return True
+
+
+def _register_chat(hass: HomeAssistant) -> None:
+	"""The AI chat tools: Assist's "Vome" LLM API and the panel's actions."""
+	if hass.data.setdefault(DOMAIN, {}).get("_chat_registered"):
+		return
+	hass.data[DOMAIN]["_chat_registered"] = True
+	from .chat_tools import async_register_chat_services
+	from .llm_api import async_register_llm_api
+	async_register_chat_services(hass)
+	async_register_llm_api(hass)
 
 
 def _start_hacs_refresh(hass: HomeAssistant) -> None:

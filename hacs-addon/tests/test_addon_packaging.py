@@ -73,15 +73,22 @@ def test_store_description_says_what_vome_does():
 	assert not description.startswith("installs the shared"), description
 
 
+def _png_size(path):
+	"""Width and height from a PNG's header: no Pillow for one check."""
+	import struct
+
+	head = path.read_bytes()[:24]
+	assert head[:8] == b"\x89PNG\r\n\x1a\n" and head[12:16] == b"IHDR", f"{path} is not a PNG"
+	return struct.unpack(">II", head[16:24])
+
+
 def test_each_app_has_a_store_icon_and_logo():
 	# Without these the Store shows a blank tile for the app.
-	from PIL import Image
-
 	for app in ("vome", "vome_chap"):
-		icon = Image.open(ROOT / app / "icon.png")
-		logo = Image.open(ROOT / app / "logo.png")
-		assert icon.size == (128, 128), (app, icon.size)
-		assert logo.size == (250, 100), (app, logo.size)
+		icon = _png_size(ROOT / app / "icon.png")
+		logo = _png_size(ROOT / app / "logo.png")
+		assert icon == (128, 128), (app, icon)
+		assert logo == (250, 100), (app, logo)
 
 
 def test_addon_version_is_quoted_semver():

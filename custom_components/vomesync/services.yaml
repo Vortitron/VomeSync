@@ -582,3 +582,47 @@ agent_key_revoke:
       required: false
       selector:
         text:
+
+chat_tools:
+  name: AI chat tools
+  description: >-
+    The tools an AI chat may use on this Home Assistant, as allowed under
+    Vome → Configure → AI chat. Anyone who is not an administrator gets
+    the read tools only. Used by the Vome app's Chat page.
+
+chat_tool_call:
+  name: Run an AI chat tool
+  description: >-
+    Run one of the AI chat tools, as the person calling, within what the
+    chat is allowed to do. Locks, alarms, covers, valves and cameras are
+    always refused.
+  fields:
+    name:
+      name: Tool
+      description: The tool's name, as listed by chat_tools.
+      required: true
+      selector:
+        text:
+    arguments:
+      name: Arguments
+      description: The tool's arguments.
+      required: false
+      selector:
+        object:
+
+chat_set_scopes:
+  name: Set what the AI chat may do
+  description: >-
+    Read the home, control devices, and change automations. Administrators
+    only.
+  fields:
+    scopes:
+      name: Allowed
+      required: true
+      selector:
+        select:
+          multiple: true
+          options:
+            - read
+            - control
+            - configure

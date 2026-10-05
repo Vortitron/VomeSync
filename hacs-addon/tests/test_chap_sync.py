@@ -1348,3 +1348,33 @@ class TestAutoUpdate:
 		call = lambda method, path, body=None, timeout=60: calls.append(method) or (200, {"data": {"auto_update": True}})
 		assert cs.ensure_auto_update({}, tmp_path / "s.json", call) is None
 		assert calls == ["GET"]
+
+
+class TestSaysWhichVersionItIs:
+	"""GamlaBio, 4 Oct 2026: the house fallback ran a Vome CHAP too old to
+	update its own Home Assistant, and Vome could not tell the owner so."""
+
+	def test_every_request_carries_the_version(self, monkeypatch):
+		monkeypatch.setattr(cs, "ADDON_VERSION", "0.2.3")
+		seen = []
+
+		def opener(req, timeout=None):
+			seen.append(req.get_header("X-vome-chap-version"))
+			return FakeResponse(200, b'{"role": "none"}')
+		portal = cs.Portal({"portal_url": "https://vome.example", "server_id": "s", "token": "t"}, opener=opener)
+		portal.role(True, True)
+		assert seen == ["0.2.3"]
+
+	def test_no_version_no_header(self, monkeypatch):
+		monkeypatch.setattr(cs, "ADDON_VERSION", "")
+		seen = []
+
+		def opener(req, timeout=None):
+			seen.append(req.has_header("X-vome-chap-version"))
+			return FakeResponse(200, b'{"role": "none"}')
+		cs.Portal({"portal_url": "https://vome.example", "server_id": "s", "token": "t"}, opener=opener).role()
+		assert seen == [False]
+
+	def test_the_image_is_built_with_it(self):
+		dockerfile = (ROOT / "vome_chap" / "Dockerfile").read_text()
+		assert "ARG BUILD_VERSION" in dockerfile and "VOME_CHAP_VERSION=${BUILD_VERSION}" in dockerfile

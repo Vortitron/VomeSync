@@ -54,7 +54,18 @@ async def fake_ha(socket_enabled):
 
 	async def states(request):
 		seen.append(("states", request.headers.get("Authorization")))
-		return web.json_response({"auth": request.headers.get("Authorization"), "host": request.host})
+		return web.json_response({
+			"auth": request.headers.get("Authorization"), "host": request.host,
+			"cookie": request.headers.get("Cookie"),
+		})
+
+	async def login_flow(request):
+		seen.append(("login", None))
+		return web.json_response({"type": "form", "errors": {"base": "invalid_auth"}})
+
+	async def webhook(request):
+		seen.append(("webhook", request.match_info["hook"]))
+		return web.json_response({})
 
 	async def token(request):
 		seen.append(("token", None))
@@ -79,6 +90,8 @@ async def fake_ha(socket_enabled):
 	app.router.add_post("/auth/token", token)
 	app.router.add_get("/gz", gz)
 	app.router.add_get("/api/websocket", websocket)
+	app.router.add_post("/auth/login_flow/{flow}", login_flow)
+	app.router.add_post("/api/webhook/{hook}", webhook)
 	runner = web.AppRunner(app)
 	await runner.setup()
 	site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -88,14 +101,35 @@ async def fake_ha(socket_enabled):
 	await runner.cleanup()
 
 
+DOOR_KEY = b"d" * 32
+GATE = "https://staging.vome.io/remote/gate"
+
+
+def _door_token(key=DOOR_KEY, **over):
+	import time
+	import jwt
+	claims = {"sub": "u1", "sid": "rly-1", "host": NAME, "scope": "ha-forward",
+	          "iat": int(time.time()), "exp": int(time.time()) + 600}
+	claims.update(over)
+	return jwt.encode(claims, key, algorithm="HS256")
+
+
 @pytest.fixture
 async def proxy(hass, fake_ha, tmp_path):
-	p = e2e_remote.E2EProxy(hass, fake_ha.url)
+	policy = {"ok": True, "open": False, "webhooks": False, "gate": True}
+	reports = []
+
+	async def fetch_policy(host):
+		return dict(policy) if host == NAME else {"ok": False}
+
+	p = e2e_remote.E2EProxy(hass, fake_ha.url, policy=fetch_policy, report=reports.extend)
+	p.door = {"key": DOOR_KEY, "host": NAME, "server_id": "rly-1", "cookie": "vome_e2e",
+	          "ttl": 600, "gate_url": GATE}
 	cert, key = _self_signed(tmp_path)
 	p.load_certificate(cert, key)
 	await p.start()
 	ctx = ssl.create_default_context(cafile=cert)
-	yield SimpleNamespace(port=p.port, ctx=ctx)
+	yield SimpleNamespace(port=p.port, ctx=ctx, p=p, policy=policy, reports=reports)
 	await p.stop()
 
 
@@ -109,9 +143,10 @@ def _url(proxy, path):
 	return f"https://{NAME}:{proxy.port}{path}"
 
 
-def _session(proxy):
+def _session(proxy, *, signed_in=True, local_port=None, peer=None):
 	# Resolve the e2e name to loopback, as the router would deliver it.
-	resolver = aiohttp.resolver.ThreadedResolver()
+	if local_port is not None:
+		proxy.p.peers[local_port] = peer
 
 	class Loopback(aiohttp.abc.AbstractResolver):
 		async def resolve(self, host, port=0, family=0):
@@ -121,7 +156,12 @@ def _session(proxy):
 		async def close(self):
 			pass
 
-	return aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=proxy.ctx, resolver=Loopback()))
+	connector = aiohttp.TCPConnector(
+		ssl=proxy.ctx, resolver=Loopback(),
+		local_addr=("127.0.0.1", local_port) if local_port else None,
+	)
+	headers = {"Cookie": f"vome_e2e={_door_token()}; theme=dark"} if signed_in else {}
+	return aiohttp.ClientSession(connector=connector, headers=headers)
 
 
 async def test_a_request_goes_through_with_its_auth(hass, proxy, fake_ha):
@@ -203,7 +243,9 @@ async def test_certificate_issued_kept_and_trusted(hass, pebble, fake_ha, tmp_pa
 		assert remote.port("e2e-acme") == pebble["tls_port"]
 
 		trust = ssl.create_default_context(cadata=root)
-		proxy = SimpleNamespace(port=remote.proxy.port, ctx=trust)
+		remote.proxy.door = {"key": DOOR_KEY, "host": NAME, "server_id": "rly-1",
+		                     "cookie": "vome_e2e", "ttl": 600, "gate_url": GATE}
+		proxy = SimpleNamespace(port=remote.proxy.port, ctx=trust, p=remote.proxy)
 		async with _session(proxy) as s:
 			async with s.get(_url(proxy, "/api/states")) as r:
 				assert r.status == 200
@@ -212,3 +254,101 @@ async def test_certificate_issued_kept_and_trusted(hass, pebble, fake_ha, tmp_pa
 		assert remote.certificate_due()
 	finally:
 		await remote._servers_down()
+
+
+
+# ── the door ────────────────────────────────────────────────────────────────
+
+async def test_a_visitor_without_a_sign_in_is_sent_to_the_gate(hass, proxy, fake_ha):
+	async with _session(proxy, signed_in=False) as s:
+		async with s.get(_url(proxy, "/lovelace/0"), allow_redirects=False,
+		                 headers={"Accept": "text/html"}) as r:
+			assert r.status == 302
+			assert r.headers["Location"] == f"{GATE}?host={NAME}"
+		async with s.ws_connect(_url(proxy, "/api/websocket")) if False else s.get(
+			_url(proxy, "/api/websocket"), headers={"Upgrade": "websocket", "Connection": "Upgrade",
+			"Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Version": "13"},
+			allow_redirects=False) as r:
+			assert r.status == 401
+	assert fake_ha.seen == []
+	assert [e["event"] for e in proxy.reports] == ["gate_shown"]
+
+
+async def test_the_pass_becomes_a_cookie_on_this_name_and_leaves_the_address(hass, proxy):
+	from urllib.parse import quote
+	async with _session(proxy, signed_in=False) as s:
+		async with s.get(_url(proxy, f"/?vome_pass={quote(_door_token())}&tab=2"), allow_redirects=False) as r:
+			assert r.status == 302 and r.headers["Location"] == "/?tab=2"
+			assert r.headers["Cache-Control"] == "no-store"
+			cookie = r.headers["Set-Cookie"]
+			assert cookie.startswith("vome_e2e=") and "Secure" in cookie and "HttpOnly" in cookie
+			assert "Domain" not in cookie
+		bad = _door_token(key=b"x" * 32)
+		async with s.get(_url(proxy, f"/?vome_pass={quote(bad)}"), allow_redirects=False) as r:
+			assert r.status == 302 and "Set-Cookie" not in r.headers
+
+
+@pytest.mark.parametrize("token", [
+	lambda: _door_token(key=b"x" * 32),        # another home's key / the shared secret
+	lambda: _door_token(host="other.e2e.vome.io"),
+	lambda: _door_token(sid="rly-2"),
+])
+async def test_tokens_that_are_not_this_homes_get_the_gate(hass, proxy, fake_ha, token):
+	async with _session(proxy, signed_in=False) as s:
+		async with s.get(_url(proxy, "/api/states"), allow_redirects=False,
+		                 headers={"Cookie": f"vome_e2e={token()}"}) as r:
+			assert r.status == 302
+	assert fake_ha.seen == []
+
+
+async def test_our_cookie_never_reaches_home_assistant(hass, proxy):
+	async with _session(proxy) as s:
+		async with s.get(_url(proxy, "/api/states")) as r:
+			assert (await r.json())["cookie"] == "theme=dark"
+
+
+async def test_app_access_open_and_webhooks(hass, proxy, fake_ha):
+	proxy.policy["webhooks"] = True
+	async with _session(proxy, signed_in=False) as s:
+		async with s.post(_url(proxy, "/api/webhook/abc"), json={}) as r:
+			assert r.status == 200
+		async with s.get(_url(proxy, "/api/states"), allow_redirects=False) as r:
+			assert r.status == 302  # webhooks only, nothing else
+	proxy.p._policy_cache.clear()
+	proxy.policy["open"] = True
+	async with _session(proxy, signed_in=False) as s:
+		async with s.get(_url(proxy, "/api/states")) as r:
+			assert r.status == 200
+	assert ("webhook", "abc") in fake_ha.seen
+
+
+async def test_repeated_failed_logins_block_that_visitor_only(hass, proxy, fake_ha, unused_tcp_port_factory):
+	proxy.policy["open"] = True
+	attacker, owner = unused_tcp_port_factory(), unused_tcp_port_factory()
+	statuses = []
+	# One kept-alive connection per visitor: the router hands the home one
+	# address per connection, and a client port cannot be rebound at once.
+	async with _session(proxy, signed_in=False, local_port=attacker, peer="203.0.113.9") as s:
+		for _ in range(6):
+			async with s.post(_url(proxy, "/auth/login_flow/f1"), json={"username": "a", "password": "b"}) as r:
+				statuses.append(r.status)
+	assert statuses == [200] * 5 + [429]
+	async with _session(proxy, signed_in=False, local_port=owner, peer="198.51.100.7") as s:
+		async with s.post(_url(proxy, "/auth/login_flow/f1"), json={}) as r:
+			assert r.status == 200
+	events = [(e["event"], e["client_ip"]) for e in proxy.reports]
+	assert ("login_blocked", "203.0.113.9") in events
+	assert sum(1 for e in events if e == ("login_failed", "203.0.113.9")) == 5
+
+
+async def test_another_name_is_misdirected(hass, proxy):
+	async with _session(proxy) as s:
+		async with s.get(_url(proxy, "/api/states"), headers={"Host": "other.e2e.vome.io"}) as r:
+			assert r.status == 421
+
+
+async def test_no_door_no_service(hass, proxy):
+	proxy.p.door = None
+	async with _session(proxy) as s:
+		async with s.get(_url(proxy, "/api/states")) as r:
+			assert r.status == 503
