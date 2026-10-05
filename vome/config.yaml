@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration
 name: Vome
-version: "0.3.62"
+version: "0.3.63"
 slug: vome
 description: >
   Reach this Home Assistant from anywhere without port-forwarding, see its
@@ -30,6 +30,10 @@ ingress_port: 8099
 ingress_stream: true
 panel_icon: mdi:home-analytics
 panel_title: Vome
+# The Chat page's OpenRouter key (panel/chat.py). Backups go to cloud
+# storage; a key that spends money stays out of them.
+backup_exclude:
+  - chat.json
 options:
   portal_url: "https://vome.io"
 schema:

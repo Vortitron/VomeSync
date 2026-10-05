@@ -44,7 +44,8 @@
 					"get_remote_address": "🌍 Get a remote address",
 					"remote_access": "🌐 Remote access & LAN tunnels",
 					"more": "⋯ More",
-					"coding_agent": "🤖 Coding agent (Claude Code, Cursor)"
+					"coding_agent": "🤖 Coding agent (Claude Code, Cursor)",
+					"ai_chat": "💬 AI chat (Assist)"
 				}
 			},
 			"more": {
@@ -455,6 +456,13 @@
 			"coding_agent_revoke": {
 				"title": "Revoke the key",
 				"description": "Ends the key now, together with the temporary link it opened. Agents using it stop working."
+			},
+			"ai_chat": {
+				"title": "AI chat",
+				"description": "What an AI assistant may do in this Home Assistant through Vome.\n\n{info}",
+				"data": {
+					"scopes": "What the chat may do"
+				}
 			}
 		},
 		"error": {

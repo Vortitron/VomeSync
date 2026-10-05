@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.63 — 5 October 2026
+
+A Chat page: talk to your home with your own OpenRouter key. Ask which
+lights are on or why something happened, control devices, and have
+automations written. A new or changed automation is shown to you first
+and only saved when you press Approve. Your messages go from this Home
+Assistant to OpenRouter, only to providers that do not store or train on
+them, and not through Vome; the key stays in the app and out of backups.
+Locks, alarms, covers, valves and cameras are never the chat's to operate.
+OpenRouter's free models are in the list too, for trying it without credit.
+
+The same tools are offered to Home Assistant's own assistants as **Vome**
+(integration 0.9.48), so Assist, the phone app and voice can use them:
+tick Vome under your assistant's Control Home Assistant. Configure → AI
+chat (or the Chat page) chooses what they may do: look, control devices,
+change automations. Anyone who is not an administrator can only look.
+
+The panel no longer gets wider than a phone's screen when it shows a long
+line of code.
+
 ## 0.3.62 — 5 October 2026
 
 End-to-end remote access now has the Vome door, held by your Home

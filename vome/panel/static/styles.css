@@ -125,7 +125,9 @@ body {
 	color: var(--text);
 	border-color: var(--accent);
 }
-main { padding: 1.4rem 1.6rem 2.5rem; }
+/* A grid item sizes to its widest content unless told otherwise: one long
+   line in a <pre> (an mcp.json, a chat's YAML) widened the page on phones. */
+main { padding: 1.4rem 1.6rem 2.5rem; min-width: 0; }
 .top {
 	display: flex;
 	align-items: center;
@@ -421,4 +423,67 @@ a.link {
 	line-height: 1.5;
 	-webkit-user-select: all;
 	user-select: all;
+}
+
+/* Chat: a conversation, a change waiting for Approve, and the box to type in. */
+.chat-card { display: flex; flex-direction: column; gap: 0.75rem; }
+/* Flex children size to their content by default: one long YAML line
+   would widen the whole page on a phone. */
+.chat-card > *, .chat-log > * { min-width: 0; }
+.chat-card .card { margin-bottom: 0; }
+#chat-settings { margin-top: 0; }
+.chat-setup a.link { font-size: inherit; }
+.chat-log {
+	display: flex;
+	flex-direction: column;
+	gap: 0.55rem;
+	max-height: min(62vh, 640px);
+	min-height: 8rem;
+	overflow-y: auto;
+	padding-right: 0.25rem;
+}
+.chat-msg {
+	max-width: min(46rem, 88%);
+	padding: 0.6rem 0.8rem;
+	border-radius: 12px;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+.chat-msg.user {
+	align-self: flex-end;
+	background: color-mix(in srgb, var(--accent) 20%, var(--panel-2));
+	border: 1px solid var(--accent-dim);
+}
+.chat-msg.bot { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line); }
+.chat-msg code { font-family: var(--mono); font-size: 0.88em; }
+.chat-code { user-select: text; -webkit-user-select: text; }
+.chat-empty { margin: 0.5rem 0; }
+.chat-tool { align-self: flex-start; max-width: 100%; font-size: 0.86rem; }
+.chat-tool summary { cursor: pointer; color: var(--muted); list-style: none; }
+.chat-tool summary::-webkit-details-marker { display: none; }
+.chat-tool summary::before { content: "⚙ "; }
+.chat-tool.failed summary { color: var(--warn); }
+.chat-tool pre { max-height: 14rem; overflow: auto; user-select: text; -webkit-user-select: text; }
+.chat-pending-title { font-size: 0.95rem; margin: 0.8rem 0 0; }
+.chat-compose { display: flex; gap: 0.5rem; align-items: flex-end; }
+.chat-compose textarea {
+	flex: 1;
+	min-width: 0;
+	resize: vertical;
+	min-height: 2.8rem;
+	max-height: 12rem;
+	background: var(--bg);
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	color: var(--text);
+	padding: 0.55rem 0.65rem;
+	font: inherit;
+}
+.chat-compose textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chat-foot { justify-content: space-between; align-items: center; }
+#chat-settings h3 { font-size: 0.95rem; margin: 1.1rem 0 0.2rem; }
+#chat-settings select { width: 100%; margin-top: 0.3rem; }
+@media (max-width: 560px) {
+	.chat-msg { max-width: 100%; }
+	.chat-compose { flex-direction: column; align-items: stretch; }
 }

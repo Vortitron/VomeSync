@@ -117,6 +117,8 @@ def test_panel_only_calls_services_the_integration_registers():
 	hass = MagicMock()
 	hass.data = {}
 	async_register_remote_services(hass)
+	from custom_components.vomesync.chat_tools import async_register_chat_services
+	async_register_chat_services(hass)
 	remote = {c.args[1] for c in hass.services.async_register.call_args_list}
 
 	# Switch services come from services.py rather than services_remote.py.

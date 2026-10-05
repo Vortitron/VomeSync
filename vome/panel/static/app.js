@@ -13,6 +13,7 @@
 		link: "Vome account",
 		health: "Health score",
 		agent: "Coding agent",
+		chat: "Chat",
 		standby: "Standby sync",
 		switches: "Switches",
 		about: "About",
@@ -266,6 +267,7 @@
 		if (name === "switches" && switchesData === null) loadSwitches();
 		if (name === "health" && healthData === null) loadHealth(true);
 		if (name === "agent" && agentData === null) loadAgentKey(true);
+		if (name === "chat" && chatData === null) loadChat(true);
 		if (name === "standby") loadChap();
 		render();
 	}
@@ -2004,6 +2006,404 @@ const cu = document.getElementById("copy-url");
 		};
 	}
 
+	// ── Chat ────────────────────────────────────────────────────────────
+	//
+	// The owner's OpenRouter key, talking to this house through the
+	// integration's chat tools (panel/chat.py runs the turn). The page holds
+	// the conversation — in memory and sessionStorage, never on the add-on —
+	// and a change to an automation waits here for Approve.
+
+	const CHAT_STORE = "vome-chat-v1";
+	const CHAT_SCOPES = [
+		{ id: "read", label: "Look", detail: "States, history, areas, automations and the error log." },
+		{ id: "control", label: "Control devices", detail: "Lights, switches, climate, media … never locks, alarms, covers, valves or cameras." },
+		{ id: "configure", label: "Change automations", detail: "Create, edit and delete automations — each one waits for your Approve." },
+	];
+	const TOOL_WORDS = {
+		find_entities: "Looked for devices",
+		get_state: "Read states",
+		get_history: "Read history",
+		list_areas: "Listed areas",
+		list_automations: "Listed automations",
+		get_automation: "Read an automation",
+		get_error_log: "Read the error log",
+		render_template: "Worked something out",
+		call_service: "Ran an action",
+		save_automation: "Saved an automation",
+		delete_automation: "Deleted an automation",
+	};
+	// The approval card asks before the fact; the log reports after it.
+	const TOOL_ASKS = {
+		save_automation: "Save this automation",
+		delete_automation: "Delete this automation",
+	};
+
+	let chatData = null;
+	let chatModels = null;
+	let chatBusy = false;
+	let chatDraft = "";
+	let chatSettingsOpen = false;
+	let chatLog = chatRestore();
+
+	function chatRestore() {
+		try {
+			const saved = JSON.parse(sessionStorage.getItem(CHAT_STORE) || "null");
+			if (saved && Array.isArray(saved.messages)) {
+				return { messages: saved.messages, pending: saved.pending || [], cost: Number(saved.cost) || 0 };
+			}
+		} catch (_err) { /* private window or blocked storage: start fresh */ }
+		return { messages: [], pending: [], cost: 0 };
+	}
+
+	function chatPersist() {
+		try {
+			sessionStorage.setItem(CHAT_STORE, JSON.stringify(chatLog));
+		} catch (_err) { /* the conversation still works, it just will not survive a reload */ }
+	}
+
+	async function loadChat(quiet) {
+		try {
+			chatData = await api("/api/chat");
+		} catch (err) {
+			if (!quiet) showBanner(err.message || "Could not open the chat", true);
+			chatData = chatData || { has_key: false, tools: [], scopes: [], configured: [] };
+		}
+		if (current === "chat") render();
+	}
+
+	async function loadChatModels() {
+		if (chatModels) return;
+		try {
+			chatModels = (await api("/api/chat/models")).models || [];
+		} catch (err) {
+			chatModels = [];
+			showBanner(err.message || "Could not list OpenRouter's models", true);
+		}
+		if (current === "chat") render();
+	}
+
+	// Enough markdown for a chat answer: code blocks, inline code, bold.
+	// Everything is escaped first, so a model cannot write HTML into the page.
+	function chatMarkdown(text) {
+		const parts = String(text || "").split(/```(?:[a-zA-Z]*)\n?/);
+		return parts.map((part, i) => {
+			if (i % 2) return `<pre class="pre-scroll chat-code">${escapeHtml(part.replace(/\n$/, ""))}</pre>`;
+			return escapeHtml(part)
+				.replace(/`([^`\n]+)`/g, "<code>$1</code>")
+				.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+				.replace(/\n/g, "<br>");
+		}).join("");
+	}
+
+	function chatCallName(call) {
+		return (call && call.function && call.function.name) || "tool";
+	}
+
+	function chatCallArgs(call) {
+		try {
+			const raw = call && call.function && call.function.arguments;
+			return typeof raw === "string" ? JSON.parse(raw || "{}") : (raw || {});
+		} catch (_err) {
+			return {};
+		}
+	}
+
+	function chatCallSummary(call) {
+		const args = chatCallArgs(call);
+		if (chatCallName(call) === "call_service") {
+			const who = (args.entity_ids || []).join(", ");
+			return `${args.domain || "?"}.${args.service || "?"}${who ? " → " + who : ""}`;
+		}
+		const bits = Object.entries(args)
+			.filter(([k]) => k !== "yaml" && k !== "template")
+			.map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : (typeof v === "object" ? JSON.stringify(v) : v)}`);
+		return bits.join(" · ");
+	}
+
+	function chatResultOf(id) {
+		const hit = chatLog.messages.find((m) => m.role === "tool" && m.tool_call_id === id);
+		if (!hit) return null;
+		try {
+			return JSON.parse(hit.content);
+		} catch (_err) {
+			return { raw: hit.content };
+		}
+	}
+
+	function chatMessagesHtml() {
+		if (!chatLog.messages.length) {
+			return `<p class="muted chat-empty">Ask about your home, or for a change. For example: <em>“Which lights are on?”</em>, <em>“Why did the hall light come on at 3 am?”</em>, <em>“Turn the porch light on at sunset.”</em></p>`;
+		}
+		const pendingIds = new Set(chatLog.pending.map((c) => c.id));
+		return chatLog.messages.map((m) => {
+			if (m.role === "user") return `<div class="chat-msg user">${chatMarkdown(m.content)}</div>`;
+			if (m.role !== "assistant") return "";
+			const text = m.content ? `<div class="chat-msg bot">${chatMarkdown(m.content)}</div>` : "";
+			const calls = (m.tool_calls || []).filter((c) => !pendingIds.has(c.id)).map((c) => {
+				const result = chatResultOf(c.id);
+				const failed = result && (result.ok === false || result.error);
+				const label = TOOL_WORDS[chatCallName(c)] || chatCallName(c);
+				const status = !result ? "" : (result.declined ? " — declined" : (failed ? " — failed" : ""));
+				return `
+					<details class="chat-tool${failed ? " failed" : ""}">
+						<summary>${escapeHtml(label)}${escapeHtml(status)} <span class="muted">${escapeHtml(chatCallSummary(c))}</span></summary>
+						<pre class="pre-scroll">${escapeHtml(JSON.stringify(chatCallArgs(c), null, 2))}</pre>
+						${result ? `<pre class="pre-scroll">${escapeHtml(JSON.stringify(result, null, 2))}</pre>` : ""}
+					</details>`;
+			}).join("");
+			return text + calls;
+		}).join("");
+	}
+
+	function chatPendingHtml() {
+		if (!chatLog.pending.length) return "";
+		const items = chatLog.pending.map((c) => {
+			const args = chatCallArgs(c);
+			const name = chatCallName(c);
+			const body = args.yaml
+				? `<pre class="pre-scroll">${escapeHtml(args.yaml)}</pre>`
+				: `<pre class="pre-scroll">${escapeHtml(JSON.stringify(args, null, 2))}</pre>`;
+			const target = args.automation_id ? ` <code>${escapeHtml(args.automation_id)}</code>` : "";
+			return `<h3 class="chat-pending-title">${escapeHtml(TOOL_ASKS[name] || TOOL_WORDS[name] || name)}${target}</h3>${body}`;
+		}).join("");
+		return `
+			<div class="card info-card" id="chat-pending">
+				<h2>Approve this change?</h2>
+				<p class="muted">Nothing has been changed yet. Approve writes it to Home Assistant now.</p>
+				${items}
+				<div class="row">
+					<button type="button" class="primary" id="chat-approve"${chatBusy ? " disabled" : ""}>Approve</button>
+					<button type="button" class="ghost" id="chat-decline"${chatBusy ? " disabled" : ""}>Decline</button>
+				</div>
+			</div>`;
+	}
+
+	function chatScopeList(selected) {
+		const chosen = new Set(selected || []);
+		return CHAT_SCOPES.map((scope) => `
+			<label class="inline scope-row">
+				<input type="checkbox" id="chat-scope-${scope.id}" value="${scope.id}"${chosen.has(scope.id) ? " checked" : ""}>
+				<span><strong>${escapeHtml(scope.label)}</strong><br><span class="muted">${escapeHtml(scope.detail)}</span></span>
+			</label>`).join("");
+	}
+
+	function chatModelOptions(selectedId) {
+		const models = chatModels || [];
+		const known = models.some((m) => m.id === selectedId);
+		const opts = models.map((m) => {
+			const price = m.in || m.out ? ` — $${m.in}/$${m.out} per M tokens` : " — free";
+			return `<option value="${escapeHtml(m.id)}"${m.id === selectedId ? " selected" : ""}>${escapeHtml(m.name + price)}</option>`;
+		});
+		if (!known) opts.unshift(`<option value="${escapeHtml(selectedId)}" selected>${escapeHtml(selectedId)}</option>`);
+		return opts.join("");
+	}
+
+	function chatPrivacyNote() {
+		return `
+			<p class="muted small">Your messages, and what the tools read from your home, go from this
+			Home Assistant to OpenRouter and the model's provider — not through Vome. Only providers that
+			promise not to store or train on them are used. The key stays in this app and is left out
+			of backups.</p>`;
+	}
+
+	function renderChatSetup() {
+		viewEl.innerHTML = `
+			<div class="card chat-setup">
+				<h2>Chat with your home</h2>
+				<p class="muted">Ask questions about your Home Assistant, control devices and have automations
+				written, using your own <a class="link" href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a>
+				account — Claude, GPT, Gemini and others, paid for by the token.</p>
+				<ol class="steps">
+					<li>Make a key at <a class="link" href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a> (add a few dollars of credit, or set a limit on the key).</li>
+					<li>Paste it here.</li>
+				</ol>
+				<div class="cmd-row">
+					<input type="password" id="chat-key" class="cmd" placeholder="sk-or-…" autocomplete="off" spellcheck="false">
+					<button type="button" class="primary" id="chat-key-save"${chatBusy ? " disabled" : ""}>${chatBusy ? "Checking…" : "Save key"}</button>
+				</div>
+				${chatPrivacyNote()}
+			</div>
+			<div class="card">
+				<h2>Prefer Home Assistant's own Assist?</h2>
+				<p class="muted">The same tools are offered to any assistant you set up in Home Assistant:
+				Settings → Voice assistants → your assistant → <strong>Control Home Assistant</strong> → tick <strong>Vome</strong>.
+				That works from the phone app and by voice too.</p>
+			</div>`;
+		const save = document.getElementById("chat-key-save");
+		const input = document.getElementById("chat-key");
+		const submit = () => chatSaveSettings({ api_key: input.value.trim() }, "Checking the key with OpenRouter…");
+		save.onclick = submit;
+		input.onkeydown = (ev) => { if (ev.key === "Enter") submit(); };
+	}
+
+	function renderChat() {
+		const data = chatData;
+		if (!data) {
+			viewEl.innerHTML = `<div class="card"><p class="muted">Opening the chat…</p></div>`;
+			return;
+		}
+		if (!data.has_key) {
+			renderChatSetup();
+			return;
+		}
+		const toolsNote = data.tools_error
+			? `<div class="card warn-card"><h2>Home Assistant is not answering</h2><p class="muted">${escapeHtml(data.tools_error)}</p></div>`
+			: "";
+		const readOnly = (data.scopes || []).length === 1;
+		const cost = chatLog.cost ? `This conversation: $${chatLog.cost.toFixed(chatLog.cost < 0.1 ? 4 : 2)}` : "";
+		viewEl.innerHTML = `
+			${toolsNote}
+			<div class="card chat-card">
+				<div class="chat-log" id="chat-log" aria-live="polite">${chatMessagesHtml()}${chatBusy ? `<div class="chat-msg bot muted">Thinking…</div>` : ""}</div>
+				${chatPendingHtml()}
+				<div class="chat-compose">
+					<textarea id="chat-input" rows="2" placeholder="${chatLog.pending.length ? "Approve or decline the change first" : "Ask about your home…"}"${chatBusy || chatLog.pending.length ? " disabled" : ""}>${escapeHtml(chatDraft)}</textarea>
+					<button type="button" class="primary" id="chat-send"${chatBusy || chatLog.pending.length ? " disabled" : ""}>Send</button>
+				</div>
+				<div class="row chat-foot">
+					<span class="muted small">${escapeHtml(data.model)}${cost ? " · " + escapeHtml(cost) : ""}${readOnly ? " · look only" : ""}</span>
+					<button type="button" class="ghost" id="chat-new"${chatBusy ? " disabled" : ""}>New conversation</button>
+				</div>
+			</div>
+			<div class="card">
+				<details id="chat-settings">
+					<summary>Model, key and what the chat may do</summary>
+					<label class="field">Model
+						<select id="chat-model">${chatModelOptions(data.model)}</select>
+					</label>
+					<p class="muted small">${chatModels === null ? "Loading OpenRouter's models…" : "Prices are OpenRouter's, per million tokens in / out."}</p>
+					<div class="row"><button type="button" class="primary" id="chat-model-save">Use this model</button></div>
+					<h3>What the chat may do</h3>
+					${chatScopeList(data.configured)}
+					<p class="muted small">The same choice applies to Home Assistant's own assistants. Anyone who is not an administrator only ever gets “Look”.</p>
+					<div class="row"><button type="button" class="primary" id="chat-scopes-save">Save</button></div>
+					<h3>OpenRouter key</h3>
+					<p class="muted small">Using <code>${escapeHtml(data.key_hint)}</code>.</p>
+					<div class="cmd-row">
+						<input type="password" id="chat-key" class="cmd" placeholder="A new key, sk-or-…" autocomplete="off" spellcheck="false">
+						<button type="button" class="ghost" id="chat-key-save">Replace</button>
+						<button type="button" class="danger" id="chat-key-clear">Remove</button>
+					</div>
+					${chatPrivacyNote()}
+				</details>
+			</div>`;
+		chatWire();
+	}
+
+	function chatWire() {
+		const log = document.getElementById("chat-log");
+		if (log) log.scrollTop = log.scrollHeight;
+		const input = document.getElementById("chat-input");
+		if (input) {
+			input.oninput = () => { chatDraft = input.value; };
+			input.onkeydown = (ev) => {
+				if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+					ev.preventDefault();
+					chatSend();
+				}
+			};
+			if (!chatBusy && !chatLog.pending.length) input.focus();
+		}
+		const send = document.getElementById("chat-send");
+		if (send) send.onclick = () => chatSend();
+		const approve = document.getElementById("chat-approve");
+		if (approve) approve.onclick = () => chatTurn(true);
+		const decline = document.getElementById("chat-decline");
+		if (decline) decline.onclick = () => chatTurn(false);
+		const fresh = document.getElementById("chat-new");
+		if (fresh) fresh.onclick = () => {
+			chatLog = { messages: [], pending: [], cost: 0 };
+			chatPersist();
+			render();
+		};
+		// The fold stays open across re-renders (saving a model re-renders).
+		const settings = document.getElementById("chat-settings");
+		if (settings) {
+			settings.open = chatSettingsOpen;
+			settings.ontoggle = () => {
+				chatSettingsOpen = settings.open;
+				if (settings.open) loadChatModels();
+			};
+		}
+		const modelSave = document.getElementById("chat-model-save");
+		if (modelSave) modelSave.onclick = () => chatSaveSettings(
+			{ model: document.getElementById("chat-model").value }, "Saving…");
+		const scopesSave = document.getElementById("chat-scopes-save");
+		if (scopesSave) scopesSave.onclick = async () => {
+			const scopes = CHAT_SCOPES.map((s) => s.id).filter((id) => {
+				const el = document.getElementById("chat-scope-" + id);
+				return el && el.checked;
+			});
+			try {
+				await api("/api/chat/scopes", { method: "POST", body: JSON.stringify({ scopes }) });
+				showBanner("Saved.", "info");
+				await loadChat(true);
+			} catch (err) {
+				showBanner(err.message || "Could not save that", true);
+			}
+		};
+		const keySave = document.getElementById("chat-key-save");
+		const keyInput = document.getElementById("chat-key");
+		if (keySave && keyInput && chatData && chatData.has_key) keySave.onclick = () =>
+			chatSaveSettings({ api_key: keyInput.value.trim() }, "Checking the key with OpenRouter…");
+		const keyClear = document.getElementById("chat-key-clear");
+		if (keyClear) keyClear.onclick = () => chatSaveSettings({ clear_key: true }, "Removing the key…");
+	}
+
+	async function chatSaveSettings(body, busyMessage) {
+		if (body.api_key === "") {
+			showBanner("Paste the key first.", true);
+			return;
+		}
+		chatBusy = true;
+		render();
+		showBanner(busyMessage, "info");
+		try {
+			const saved = await api("/api/chat/settings", { method: "POST", body: JSON.stringify(body) });
+			chatData = { ...(chatData || {}), ...saved };
+			showBanner(body.clear_key ? "Key removed." : "Saved.", "info");
+		} catch (err) {
+			showBanner(err.message || "That did not work", true);
+		} finally {
+			chatBusy = false;
+			render();
+		}
+	}
+
+	function chatSend() {
+		const text = chatDraft.trim();
+		if (!text || chatBusy || chatLog.pending.length) return;
+		chatLog.messages.push({ role: "user", content: text });
+		chatDraft = "";
+		chatPersist();
+		chatTurn(undefined);
+	}
+
+	async function chatTurn(approve) {
+		chatBusy = true;
+		const pendingBefore = chatLog.pending;
+		chatLog.pending = [];
+		showBanner("");
+		render();
+		try {
+			const body = { messages: chatLog.messages };
+			if (approve !== undefined) body.approve = approve;
+			const res = await api("/api/chat/send", { method: "POST", body: JSON.stringify(body) });
+			chatLog = {
+				messages: res.messages || chatLog.messages,
+				pending: res.pending || [],
+				cost: chatLog.cost + (Number(res.cost) || 0),
+			};
+		} catch (err) {
+			chatLog.pending = pendingBefore;
+			showBanner(err.message || "The chat did not answer", true);
+		} finally {
+			chatBusy = false;
+			chatPersist();
+			render();
+		}
+	}
+
 	function render() {
 		if (current === "overview") renderOverview();
 		else if (current === "forward") renderForward();
@@ -2012,6 +2412,7 @@ const cu = document.getElementById("copy-url");
 		else if (current === "link") renderLink();
 		else if (current === "health") renderHealth();
 		else if (current === "agent") renderAgent();
+		else if (current === "chat") renderChat();
 		else if (current === "standby") renderStandby();
 		else if (current === "switches") renderSwitches();
 		else renderAbout();

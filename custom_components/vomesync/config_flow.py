@@ -18,6 +18,7 @@ from .options_flow_links import VomeSyncOptionsFlowLinkEntitiesMixin
 from .options_flow_relay import VomeSyncOptionsFlowRelayMixin
 from .options_flow_lan import VomeSyncOptionsFlowLanMixin
 from .options_flow_agent import VomeSyncOptionsFlowAgentMixin
+from .options_flow_chat import VomeSyncOptionsFlowChatMixin
 from .const import (
 	DOMAIN,
 	CONF_PERSONAL_KEY,
@@ -307,6 +308,7 @@ class VomeSyncOptionsFlow(
 	VomeSyncOptionsFlowRelayMixin,
 	VomeSyncOptionsFlowLanMixin,
 	VomeSyncOptionsFlowAgentMixin,
+	VomeSyncOptionsFlowChatMixin,
 ):
 	"""Handle options flow for VomeSync."""
 
@@ -582,6 +584,8 @@ class VomeSyncOptionsFlow(
 		# The free MCP key for Claude Code, Cursor and VS Code: the add-on
 		# panel's Coding agent page, for installs (HACS) that have no panel.
 		menu_options.append("coding_agent")
+		# Which tools Home Assistant's assistants get from Vome (Assist chat).
+		menu_options.append("ai_chat")
 		if self._relay_is_linked():
 			menu_options.append("remote_access")
 			menu_options.append("unlink_vome")
