@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.62 — 5 October 2026
+
+End-to-end remote access now has the Vome door, held by your Home
+Assistant itself (integration 0.9.47). Vome cannot
+see an end-to-end session, so your home checks what Vome checks on your
+usual address: a Vome sign-in, your door password, or the access you
+chose (app access open, webhooks), and sends anyone else to the Vome gate.
+It limits how often a stranger may try, blocks an address after five
+failed logins in 15 minutes, keeps Vome's own sign-in cookie away from
+Home Assistant, and reports all of it to your access log, with the
+visitor's real address. Still off until Vome turns it on for your home.
+
 ## 0.3.61 — 4 October 2026
 
 End-to-end remote access gets a new certificate when Vome switches the
