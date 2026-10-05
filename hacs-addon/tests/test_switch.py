@@ -340,3 +340,35 @@ async def test_switch_displays_owner_vs_subscribed_icon(hass, config_entry):
 	# Icons should be different for owner vs subscriber
 	assert owned_switch.icon != subscribed_switch.icon
 
+
+
+@pytest.mark.asyncio
+async def test_owned_switch_attributes_never_carry_the_personal_key(hass, config_entry):
+	"""State attributes are readable by every Home Assistant user (guests
+	included) and are recorded: the account's personal key must not be in
+	them, not even inside a webhook URL."""
+	config_entry.data = {
+		**dict(config_entry.data or {}),
+		"server_url": "https://sync.vome.io",
+		"personal_key": "pk-secret-123",
+		"websocket_url": "wss://sync.vome.io/ws",
+	}
+	switch_data = {"state": True, "name": "Porch", "description": "Porch light"}
+	mock_coordinator = MagicMock()
+	mock_coordinator.switches = {"test-uid": switch_data}
+	mock_coordinator.subscriptions = {}
+	mock_coordinator.last_update_success = True
+	mock_coordinator.get_switch_data = MagicMock(return_value=switch_data)
+	mock_coordinator.config_entry = config_entry
+
+	switch = VomeSyncSwitch(
+		coordinator=mock_coordinator,
+		uid="test-uid",
+		name="Porch",
+		is_owner=True,
+		config_entry=config_entry,
+	)
+
+	attributes = switch.extra_state_attributes
+	assert "webhook_url" not in attributes
+	assert "pk-secret-123" not in repr(attributes)
