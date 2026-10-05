@@ -3,6 +3,10 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/base-python:3.13-alpine3.22
 FROM ${BUILD_FROM}
 
+# The Supervisor passes the add-on's version; the worker tells Vome which it is.
+ARG BUILD_VERSION=""
+ENV VOME_CHAP_VERSION=${BUILD_VERSION}
+
 COPY rootfs /
 COPY chap_sync.py local_pair.py /usr/share/vome_chap/
 

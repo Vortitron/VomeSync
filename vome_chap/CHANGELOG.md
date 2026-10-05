@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3 — 5 October 2026
+
+**Vome knows which version of this app each install runs.** If your standby
+stops taking your changes because its Home Assistant is behind, Vome's
+warning now says whether this app can catch it up by itself (it can, from
+0.1.18) or needs updating first, instead of only "update Core first".
+
 ## 0.2.2 — 1 October 2026
 
 **Your apps' own data follows too** -- a Zigbee2MQTT database, a Matter

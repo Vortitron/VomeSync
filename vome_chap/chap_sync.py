@@ -75,6 +75,12 @@ API_PAIR = "/api/sync/chap/config/pair"
 API_SEED = "/api/sync/chap/config/seed"
 API_ADDONS = "/api/sync/chap/config/addons"
 
+# This add-on's own version, baked in at build (Dockerfile). Sent on every
+# request, so Vome can tell an owner that the fix is to update Vome CHAP: the
+# house fallback for GamlaBio ran a version too old to update its own Home
+# Assistant, refused every change for six days, and nothing could say why.
+ADDON_VERSION = os.environ.get("VOME_CHAP_VERSION", "")
+
 DEFAULT_INTERVAL = 300
 # Files Core rewrites on a timer whatever anyone does. They travel in every
 # snapshot but do not count as a change, or the active side would re-send the
@@ -1261,6 +1267,8 @@ class Portal:
 	def _request(self, method: str, path: str, body: Optional[bytes] = None,
 	             headers: Optional[dict] = None, timeout: int = 60):
 		h = {"Authorization": f"Bearer {self.token}", "X-Server-ID": self.server_id}
+		if ADDON_VERSION:
+			h["X-Vome-CHAP-Version"] = ADDON_VERSION
 		h.update(headers or {})
 		req = urllib.request.Request(self.base + path, data=body, headers=h, method=method)
 		return self.opener(req, timeout=timeout)
