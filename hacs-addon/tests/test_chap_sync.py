@@ -1002,7 +1002,7 @@ class TestSeedRestore:
 				return 0, None
 			return 200, {"data": {"state": "stopped"}}
 		held = [f"a{i}" for i in range(11)]
-		state = {"held_addons": held, "held_addons_running": None}
+		state = {"held_addons": held, "held_addons_running": None, "held_addons_role": "standby"}
 		note = cs.enforce_addons("active", state, tmp_path / "s.json", call, clock=lambda: now[0])
 		assert "will retry" in note and state["held_addons_running"] is None
 		assert all(t == cs.ADDON_ASK_SECONDS for _p, t in asked)
@@ -1017,7 +1017,7 @@ class TestSeedRestore:
 		def call(method, path, body=None, timeout=60):
 			calls.append((method, path))
 			return 200, {"data": {"state": "unknown"}}
-		state = {"held_addons": ["5c53de3b_esphome", "a0d7b954_nodered", "x_jellyfin"]}
+		state = {"held_addons": ["5c53de3b_esphome", "a0d7b954_nodered", "x_jellyfin"], "held_addons_role": "standby"}
 		note = cs.enforce_addons("active", state, tmp_path / "s.json", call, allowed=["*_esphome"])
 		assert note.startswith("running 1 of 3")
 		assert ("POST", "/addons/5c53de3b_esphome/start") in calls
@@ -1124,8 +1124,11 @@ class TestSeedRestore:
 		sent = lambda portal, rid, data_dir: ("seed sent (3 bytes)", ["core_matter_server"])
 		cs.maybe_send_seed(None, {"seed": {"request": "r1"}}, state, tmp_path / "s.json", 1000, tmp_path, sent)
 		assert state["held_addons"] == ["core_matter_server"] and "held_addons_target" not in state
-		ok = lambda method, path, body=None, timeout=60: (200, {})
-		assert cs.enforce_addons("active", state, tmp_path / "s.json", ok).startswith("running")
+		# They were running here already; a seed is no reason to start them.
+		calls = []
+		ok = lambda method, path, body=None, timeout=60: calls.append(path) or (200, {})
+		cs.enforce_addons("active", state, tmp_path / "s.json", ok)
+		assert not any(p.endswith("/start") for p in calls)
 
 	def test_our_own_add_ons_are_never_held(self, tmp_path):
 		restored = lambda p, sid: ("seed restored", ["b1bff62e_vome", "core_mosquitto"])
@@ -1141,7 +1144,7 @@ class TestSeedRestore:
 			if path.endswith("/info"):
 				return 200, {"data": {"state": "started"}}
 			return 400, None  # Supervisor: already running
-		state = {"held_addons": ["a"], "held_addons_running": None}
+		state = {"held_addons": ["a"], "held_addons_running": None, "held_addons_role": "standby"}
 		assert cs.enforce_addons("active", state, tmp_path / "s.json", call).startswith("running")
 		assert ("POST", "/addons/a/start") not in calls
 
@@ -1378,3 +1381,67 @@ class TestSaysWhichVersionItIs:
 	def test_the_image_is_built_with_it(self):
 		dockerfile = (ROOT / "vome_chap" / "Dockerfile").read_text()
 		assert "ARG BUILD_VERSION" in dockerfile and "VOME_CHAP_VERSION=${BUILD_VERSION}" in dockerfile
+
+
+class TestTheRunningInstallsAddOnsAreTheOwners:
+	"""GamlaBio, 7 Oct 2026: the owner moved Matter Server off the hosted
+	install (stopped it there), and every hourly seed started it again."""
+
+	def _call(self, calls, states):
+		def call(method, path, body=None, timeout=60):
+			calls.append((method, path, body))
+			slug = path.split("/")[2] if path.startswith("/addons/") else ""
+			if path.endswith("/info"):
+				return 200, {"data": {"state": states.get(slug, "stopped")}}
+			if path.endswith("/start"):
+				states[slug] = "started"
+			return 200, {"result": "ok"}
+		return call
+
+	def test_an_hourly_seed_does_not_restart_what_the_owner_stopped(self, tmp_path):
+		state, path, calls = {}, tmp_path / "s.json", []
+		states = {"core_matter_server": "started", "core_mosquitto": "started"}
+		call = self._call(calls, states)
+		cs.enforce_addons("active", state, path, call)  # this install runs the home
+		sent = lambda portal, rid, data_dir: ("seed sent", ["core_matter_server", "core_mosquitto"])
+		cs.maybe_send_seed(None, {"seed": {"request": "r1"}}, state, path, 1000, tmp_path, sent)
+		cs.enforce_addons("active", state, path, call)
+		states["core_matter_server"] = "stopped"  # the owner stops it
+		for n in range(2, 5):  # hour after hour
+			cs.maybe_send_seed(None, {"seed": {"request": f"r{n}"}}, state, path, 1000 + n * 3600, tmp_path, sent)
+			cs.enforce_addons("active", state, path, call)
+		assert ("POST", "/addons/core_matter_server/start", None) not in calls
+		assert ("POST", "/addons/core_matter_server/options", {"boot": "auto"}) not in calls
+		assert states["core_matter_server"] == "stopped"
+
+	def test_taking_the_home_over_still_starts_them(self, tmp_path):
+		state, path, calls = {"held_addons": ["core_matter_server"]}, tmp_path / "s.json", []
+		call = self._call(calls, {})
+		cs.enforce_addons("standby", state, path, call)
+		assert cs.enforce_addons("active", state, path, call).startswith("running 1 of 1")
+		assert ("POST", "/addons/core_matter_server/start", None) in calls
+
+	def test_a_start_that_did_not_take_after_a_takeover_is_retried(self, tmp_path):
+		state, path = {"held_addons": ["a"]}, tmp_path / "s.json"
+		ok = lambda method, path, body=None, timeout=60: (200, {"data": {"state": "stopped"}})
+		cs.enforce_addons("standby", state, path, ok)
+		refuse = lambda method, p, body=None, timeout=60: ((500, None) if p.endswith("/start")
+		                                                     else (200, {"data": {"state": "stopped"}}))
+		assert "will retry" in cs.enforce_addons("active", state, path, refuse)
+		calls = []
+		later = lambda method, p, body=None, timeout=60: calls.append(p) or (200, {"data": {"state": "stopped"}})
+		assert cs.enforce_addons("active", state, path, later).startswith("running")
+		assert "/addons/a/start" in calls
+
+	def test_vome_can_ask_for_a_start_once(self, tmp_path):
+		state, path, calls = {}, tmp_path / "s.json", []
+		call = self._call(calls, {})
+		info = {"role": "active", "start_addons": {"id": "k1", "slugs": ["core_matter_server", "../etc"]}}
+		assert cs.maybe_start_addons(info, state, path, call) == "started core_matter_server, as asked from Vome"
+		assert cs.maybe_start_addons(info, state, path, call) is None
+		assert [p for _m, p, _b in calls if p.endswith("/start")] == ["/addons/core_matter_server/start"]
+
+	def test_only_the_install_running_the_home_starts_on_request(self, tmp_path):
+		boom = lambda *a, **k: pytest.fail("a standby starts nothing on request")
+		info = {"role": "standby", "start_addons": {"id": "k1", "slugs": ["core_matter_server"]}}
+		assert cs.maybe_start_addons(info, {}, tmp_path / "s.json", boom) is None
