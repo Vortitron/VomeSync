@@ -558,24 +558,70 @@ def enforce_addons(role: Optional[str], state: dict, state_path: Path,
 	a held add-on outside it stays stopped even here, so a small fallback is
 	not starved by services it does not need (GamlaBio, 25 Sept 2026: a 2 GB
 	fallback started all eleven and the OOM killer took Home Assistant).
+
+	Started only when this install has just become the active one (and until
+	they are all up), or when the owner has just added one to the list. Not
+	otherwise: the install running the home is the owner's to run, and an
+	add-on stopped there may be stopped on purpose. GamlaBio, 7 Oct 2026:
+	the owner moved Matter Server off the hosted install, and every hourly
+	seed started it again (Vome asks the owner instead).
 	"""
 	held = list(state.get("held_addons") or [])
 	if not held or role not in (ROLE_ACTIVE, ROLE_STANDBY):
 		return None
+	previous_role = state.get("held_addons_role")
+	if previous_role != role:
+		state["held_addons_role"] = role
+		if role == ROLE_ACTIVE and previous_role == ROLE_STANDBY:
+			state["held_start_pending"] = True  # it has just taken the home over
+		else:
+			state.pop("held_start_pending", None)
+		state.pop("held_addons_target", None)
+		save_json(state_path, state)
 	run = sorted(s for s in held if role == ROLE_ACTIVE and addon_allowed(s, allowed))
 	if state.get("held_addons_target") == run:
 		return None
 	stop = [s for s in held if s not in run]
+	if role == ROLE_ACTIVE and not state.get("held_start_pending"):
+		before = state.get("held_addons_last_run")
+		start = [s for s in run if before is not None and s not in before]
+	else:
+		start = run
 	# Stop first: it frees what the ones to start will need.
-	failed = set_addons_running(stop, False, call, clock) + set_addons_running(run, True, call, clock)
+	failed = set_addons_running(stop, False, call, clock) + set_addons_running(start, True, call, clock)
 	if failed:
 		return f"not yet as they should be: {', '.join(failed)}; will retry"
 	state["held_addons_target"] = run
+	state["held_addons_last_run"] = run
+	state.pop("held_start_pending", None)
 	state.pop("held_addons_running", None)
 	save_json(state_path, state)
 	if role == ROLE_ACTIVE:
+		if not start and not stop:
+			return None
 		return f"running {len(run)} of {len(held)} held add-on(s): this install is the active one"
 	return f"stopped {len(held)} add-on(s): this install is the standby one"
+
+
+def maybe_start_addons(info: dict, state: dict, state_path: Path, call=None,
+                       clock: Callable[[], float] = time.monotonic) -> Optional[str]:
+	"""Start the add-ons the owner asked Vome to start here, once per ask.
+
+	Vome warns when an add-on the standby is to run is stopped on the install
+	running the home, and offers to start it (it may have crashed). Only on
+	that install, and only add-ons it has.
+	"""
+	ask = info.get("start_addons") or {}
+	ask_id = str(ask.get("id") or "")
+	if info.get("role") != ROLE_ACTIVE or not ask_id or state.get("start_addons_done") == ask_id:
+		return None
+	slugs = [s for s in ask.get("slugs") or [] if isinstance(s, str) and re.match(r"^[a-z0-9_-]{1,64}$", s)]
+	failed = set_addons_running(slugs, True, call, clock) if slugs else []
+	if failed:
+		return f"could not start yet: {', '.join(failed)}; will retry"
+	state["start_addons_done"] = ask_id
+	save_json(state_path, state)
+	return f"started {', '.join(slugs)}, as asked from Vome" if slugs else None
 
 
 ANNOUNCE_ID = "vome_chap_running_here"
@@ -1533,6 +1579,9 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	addons_note = enforce_addons(role, state, state_path, allowed=info.get("standby_addons"))
 	if addons_note:
 		LOG.info("%s", addons_note)
+	started_note = maybe_start_addons(info, state, state_path)
+	if started_note:
+		LOG.info("%s", started_note)
 	announce_note = maybe_announce(info, state, state_path, now)
 	if announce_note:
 		LOG.info("%s", announce_note)

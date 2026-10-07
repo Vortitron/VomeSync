@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.4 — 7 October 2026
+
+**An app you stop on the install running your home stays stopped.** The apps
+your standby runs were started again on the running install every hour, when
+their data was copied: stop Matter Server there on purpose and it came back.
+Now they are started only when an install takes your home over (and kept
+trying until they are up), or when you add one to the standby's list. If one
+on the list is stopped where your home runs, Vome tells you and offers to take
+it off the list or start it again; this app starts it when you say so.
+
 ## 0.2.3 — 5 October 2026
 
 **Vome knows which version of this app each install runs.** If your standby
