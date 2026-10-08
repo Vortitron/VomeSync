@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.65 — 8 October 2026
+
+Vome's tools now say what they do. From Home Assistant 2026.10, its own
+MCP server offers them to the AI apps you connect, and an app takes a tool
+that says nothing about itself to be one that can change and delete things
+and reach outside your home, so a careful app asked before every lookup.
+Looking is now marked as only reading; changing automations as staying
+inside your home; controlling devices is still treated with the most
+caution. The tools also stop writing a deprecation warning to your log on
+2026.10 (integration 0.9.50).
+
 ## 0.3.64 — 5 October 2026
 
 A switch you own no longer shows its webhook link among its attributes.

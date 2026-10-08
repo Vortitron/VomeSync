@@ -13,6 +13,17 @@ from homeassistant.setup import async_setup_component
 from custom_components.vomesync import chat_tools as ct
 from custom_components.vomesync.llm_api import API_ID, async_register_llm_api
 
+# 2026.10 added typed tool results and self-described tools; earlier Cores
+# get the plain dict the tools have always returned.
+TYPED = hasattr(llm, "ToolResult")
+
+
+def _data(result):
+	if TYPED:
+		assert isinstance(result, llm.ToolResult)
+		return result.data
+	return result
+
 
 def _context(user):
 	return llm.LLMContext(
@@ -60,8 +71,8 @@ async def test_tools_find_and_switch_through_the_llm_api(hass, house, hass_admin
 	async def call(name, args):
 		# What APIInstance.async_call_tool does, minus its conversation
 		# trace (that import needs hassil, which this venv lacks).
-		return await tools[name].async_call(
-			hass, llm.ToolInput(tool_name=name, tool_args=args), llm_context)
+		return _data(await tools[name].async_call(
+			hass, llm.ToolInput(tool_name=name, tool_args=args), llm_context))
 
 	found = await call("find_entities", {"area": "hall"})
 	(row,) = found["result"]["entities"]
@@ -80,6 +91,30 @@ async def test_tools_find_and_switch_through_the_llm_api(hass, house, hass_admin
 	counted = await call("render_template",
 		{"template": "{{ states.input_boolean | selectattr('state','eq','on') | list | count }}"})
 	assert counted["result"]["result"] == "1"
+
+
+@pytest.mark.skipif(not TYPED, reason="ToolResult and ToolAnnotations arrived in 2026.10")
+async def test_the_tools_describe_themselves_to_mcp_clients(hass, house, hass_admin_user, caplog):
+	"""2026.10's MCP server hands every LLM API to AI apps, which read a
+	tool's annotations at face value; an undeclared tool is taken to write,
+	destroy and reach outside the house."""
+	llm_context = _context(hass_admin_user)
+	instance = await llm.async_get_api(hass, API_ID, llm_context)
+	tools = {t.name: t for t in instance.tools}
+	assert all(t.integration == "vomesync" for t in tools.values())
+	assert "without an integration" not in caplog.text
+
+	looks = tools["get_state"].annotations
+	assert looks.read_only and not looks.destructive and not looks.open_world
+	edits = tools["delete_automation"].annotations
+	assert not edits.read_only and edits.destructive and not edits.open_world
+	assert tools["call_service"].annotations == llm.ToolAnnotations()
+	assert tools["find_entities"].title == "Find entities"
+
+	refused = await tools["call_service"].async_call(
+		hass, llm.ToolInput(tool_name="call_service",
+		                    tool_args={"domain": "lock", "service": "unlock"}), llm_context)
+	assert refused.error and "not available" in refused.data["error"]
 
 
 AUTOMATION = """
