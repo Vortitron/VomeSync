@@ -26,6 +26,9 @@ sidebar. No account is needed to start.
   ESPHome devices. Claude Code also gets
   [side panes](https://github.com/Vortitron/home-assistant-mcp#claude-code-the-side-panes)
   that show its work as it happens.
+  Its tools are reviewed in HOL Guard: with Guard installed, you are asked
+  before any of them changes your home.
+  [![Reviewed by HOL Guard](https://img.shields.io/badge/HOL_Guard%20|%20Home_Assistant_MCP_Vome-2E5AAC?logo=shield&logoColor=white)](https://hol.org/guard/extensions/mcp.vome-home-assistant)
 - **Chat**: talk to your home with your own
   [OpenRouter](https://openrouter.ai) key (Claude, GPT, Gemini …): ask what is
   on and why, control devices, have automations written. A change waits for
