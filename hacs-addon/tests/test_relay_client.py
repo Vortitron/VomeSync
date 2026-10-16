@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
+import custom_components.vomesync.esphome_ws as esphome_ws
 import custom_components.vomesync.relay_client as rc
 from custom_components.vomesync.relay_client import (
 	RELAY_TOKEN_CLIENT_NAME,
@@ -36,6 +37,9 @@ from custom_components.vomesync.relay_client import (
 )
 from custom_components.vomesync.const import (
 	DEFAULT_LOCAL_CORE_URL,
+	FILES_MAX_ENTRIES,
+	FILES_MAX_MEDIA_READ_BYTES,
+	RELAY_RPC_MAX_BINARY_BYTES,
 	SUPERVISOR_TOKEN_ENV,
 )
 
@@ -903,9 +907,13 @@ class _FakeWsDashboard:
 	to see translated.
 	"""
 
-	def __init__(self, *, requires_auth=False, responder=None):
+	def __init__(self, *, requires_auth=False, responder=None, hang_when_empty=False):
 		self.sent: list[dict] = []
 		self.closed = False
+		# The real socket waits for the next frame; the default here reports a
+		# close instead, which is quicker for tests that never expect a wait.
+		self._hang = hang_when_empty
+		self._more = asyncio.Event()
 		self._queue: list[dict] = [{
 			"server_version": "1.13.1",
 			"esphome_version": "2026.8.2",
@@ -920,8 +928,12 @@ class _FakeWsDashboard:
 		self._queue.extend(
 			self._responder(obj.get("command"), obj.get("message_id"), obj.get("args") or {})
 		)
+		self._more.set()
 
 	async def receive(self):
+		while not self._queue and self._hang:
+			self._more.clear()
+			await self._more.wait()
 		if not self._queue:
 			return _FakeMsg(aiohttp.WSMsgType.CLOSED, None)
 		return _FakeMsg(aiohttp.WSMsgType.TEXT, json.dumps(self._queue.pop(0)))
@@ -1923,6 +1935,187 @@ class TestEsphomeStream:
 		closed = _sent_payloads(ws)[-1]
 		assert closed["type"] == "ws_close" and "authentication" in closed["reason"]
 
+	async def _run_job(self, responder, *, command="compile", hang=False):
+		dash = _FakeWsDashboard(responder=responder, hang_when_empty=hang)
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		ws = AsyncMock()
+		await client._handle_esphome_ws_open(
+			ws, "s1", {"command": command, "configuration": "lr.yaml"}
+		)
+		await asyncio.wait_for(client._ws_pumps["s1"], 5)
+		return dash, _ws_frames(ws)
+
+	@pytest.mark.asyncio
+	async def test_a_plain_result_carrying_a_failure_is_a_failure(self):
+		# A config that fails validation ends its job at once. Reading a plain
+		# reply as exit 0 whatever it said turned a failed build into a success.
+		def responder(command, mid, args):
+			if command == "firmware/compile":
+				return [{"message_id": mid, "result": {"job_id": "j1", "status": "queued"}}]
+			if command == "firmware/follow_job":
+				return [{"message_id": mid, "result": {
+					"status": "failed", "exit_code": 2, "error": "Configuration is invalid"}}]
+			return []
+
+		_dash, frames = await self._run_job(responder)
+		assert frames == [
+			{"event": "line", "data": "Configuration is invalid\n"},
+			{"event": "exit", "code": 2},
+		]
+
+	@pytest.mark.asyncio
+	async def test_a_silent_follow_asks_the_job_instead_of_waiting_the_ceiling(self, monkeypatch):
+		# The follow says nothing at all. Before, that waited the 30-minute build
+		# ceiling and the agent reported "timeout" with no error to show.
+		monkeypatch.setattr(esphome_ws, "FOLLOW_FIRST_FRAME_TIMEOUT", 0.05)
+
+		def responder(command, mid, args):
+			if command == "firmware/compile":
+				return [{"message_id": mid, "result": {"job_id": "j2", "status": "running"}}]
+			if command == "firmware/get_job":
+				assert args == {"job_id": "j2"}
+				return [{"message_id": mid, "result": {
+					"job_id": "j2", "status": "failed", "exit_code": 2,
+					"output": ["Failed config\n", "Platform not found: 'sensor.nope'\n"],
+				}}]
+			return []
+
+		dash, frames = await self._run_job(responder, hang=True)
+		assert [f["command"] for f in dash.sent] == [
+			"firmware/compile", "firmware/follow_job", "firmware/get_job",
+		]
+		# The validation error reaches the output, then the real exit status.
+		assert frames == [
+			{"event": "line", "data": "Failed config\n"},
+			{"event": "line", "data": "Platform not found: 'sensor.nope'\n"},
+			{"event": "exit", "code": 2},
+		]
+
+	@pytest.mark.asyncio
+	async def test_a_job_still_queued_keeps_being_followed(self, monkeypatch):
+		# Silence from a job queued behind another build is not a failure: the
+		# follow carries on and reports the build when it comes.
+		monkeypatch.setattr(esphome_ws, "FOLLOW_FIRST_FRAME_TIMEOUT", 0.05)
+		follow = {}
+
+		def responder(command, mid, args):
+			if command == "firmware/compile":
+				return [{"message_id": mid, "result": {"job_id": "j3", "status": "queued"}}]
+			if command == "firmware/follow_job":
+				follow["mid"] = mid
+				return []
+			if command == "firmware/get_job":
+				# Now it starts: the queued answer, then the build on the follow.
+				return [
+					{"message_id": mid, "result": {"job_id": "j3", "status": "queued"}},
+					{"message_id": follow["mid"], "event": "output", "data": "Compiling app..."},
+					{"message_id": follow["mid"], "event": "result",
+					 "data": {"status": "completed", "exit_code": 0}},
+				]
+			return []
+
+		_dash, frames = await self._run_job(responder, hang=True)
+		assert frames == [
+			{"event": "line", "data": "Compiling app...\n"},
+			{"event": "exit", "code": 0},
+		]
+
+	@pytest.mark.asyncio
+	async def test_asking_the_job_does_not_lift_the_ceiling(self, monkeypatch):
+		# A job that never starts is asked again and again, but only until the
+		# overall silence limit, after which the follow gives up as before.
+		monkeypatch.setattr(esphome_ws, "FOLLOW_FIRST_FRAME_TIMEOUT", 0.02)
+
+		def responder(command, mid, args):
+			if command == "firmware/get_job":
+				return [{"message_id": mid, "result": {"job_id": "j4", "status": "queued"}}]
+			return []
+
+		dash = _FakeWsDashboard(responder=responder, hang_when_empty=True)
+		session = esphome_ws.EsphomeWsSession(dash)
+		message_id = await session._send("firmware/follow_job", {"job_id": "j4"})
+		with pytest.raises(asyncio.TimeoutError):
+			await session._pump(message_id, AsyncMock(), 0.2, job_id="j4")
+		asked = [f for f in dash.sent if f["command"] == "firmware/get_job"]
+		assert len(asked) > 1
+
+	@pytest.mark.asyncio
+	async def test_a_failed_status_event_is_terminal(self):
+		# A lifecycle frame that says the job failed ends the follow, even
+		# with no exit code and no ``result`` event behind it.
+		def responder(command, mid, args):
+			if command == "firmware/compile":
+				return [{"message_id": mid, "result": {"job_id": "j5", "status": "running"}}]
+			return [
+				{"message_id": mid, "event": "output", "data": "INFO Reading configuration lr.yaml..."},
+				{"message_id": mid, "event": "job_failed", "data": {
+					"status": "failed", "exit_code": None, "error": "Invalid YAML syntax"}},
+			]
+
+		_dash, frames = await self._run_job(responder)
+		assert frames == [
+			{"event": "line", "data": "INFO Reading configuration lr.yaml...\n"},
+			{"event": "line", "data": "Invalid YAML syntax\n"},
+			{"event": "exit", "code": 1},
+		]
+
+	@pytest.mark.asyncio
+	async def test_a_result_event_with_a_failed_status_never_reads_as_success(self):
+		for data in ({"status": "failed", "exit_code": None, "error": None},
+					 {"status": "cancelled"},
+					 {"status": "failed", "exit_code": 0}):
+			def responder(command, mid, args, d=data):
+				if command == "firmware/upload":
+					return [{"message_id": mid, "result": {"job_id": "j6"}}]
+				return [{"message_id": mid, "event": "result", "data": d}]
+
+			_dash, frames = await self._run_job(responder, command="upload")
+			assert frames[-1] == {"event": "exit", "code": 1}, data
+
+	@pytest.mark.asyncio
+	async def test_a_job_already_over_when_queued_is_reported_without_a_follow(self):
+		def responder(command, mid, args):
+			return [{"message_id": mid, "result": {
+				"job_id": "j7", "status": "failed", "exit_code": 2,
+				"output": ["ERROR Error while reading config: Invalid YAML syntax:\n"],
+			}}]
+
+		dash, frames = await self._run_job(responder)
+		assert [f["command"] for f in dash.sent] == ["firmware/compile"]
+		assert frames == [
+			{"event": "line", "data": "ERROR Error while reading config: Invalid YAML syntax:\n"},
+			{"event": "exit", "code": 2},
+		]
+
+	@pytest.mark.asyncio
+	async def test_a_follow_that_ends_without_a_verdict_asks_the_job(self):
+		# A bare ``result: null`` on a follow is the stream ending, not the job
+		# succeeding. The job says how it went.
+		def responder(command, mid, args):
+			if command == "firmware/compile":
+				return [{"message_id": mid, "result": {"job_id": "j8", "status": "running"}}]
+			if command == "firmware/follow_job":
+				return [{"message_id": mid, "result": None}]
+			return [{"message_id": mid, "result": {"job_id": "j8", "status": "completed", "exit_code": 0}}]
+
+		dash, frames = await self._run_job(responder)
+		assert dash.sent[-1]["command"] == "firmware/get_job"
+		assert frames == [{"event": "exit", "code": 0}]
+
+	@pytest.mark.asyncio
+	async def test_job_output_lines_are_not_double_spaced(self):
+		# Device Builder's job output keeps each line's own newline.
+		def responder(command, mid, args):
+			if command == "firmware/compile":
+				return [{"message_id": mid, "result": {"job_id": "j9", "status": "running"}}]
+			return [
+				{"message_id": mid, "event": "output", "data": "INFO ESPHome 2026.9.1\n"},
+				{"message_id": mid, "event": "result", "data": {"status": "completed", "exit_code": 0}},
+			]
+
+		_dash, frames = await self._run_job(responder)
+		assert frames[0] == {"event": "line", "data": "INFO ESPHome 2026.9.1\n"}
+
 	@pytest.mark.asyncio
 	async def test_routed_from_ws_open_even_when_ui_forwarding_is_off(self):
 		# ESPHome streaming is its own target and must not depend on the
@@ -2183,6 +2376,294 @@ class TestConfigFiles:
 		assert json.loads(body)["bytes"] == len(raw)
 
 
+class TestMoveAndMediaFiles:
+	"""``/move`` renames one config file under delete's rules; ``/media_list``
+	and ``/media_read`` are read-only views of Home Assistant's media folder."""
+
+	def _client(self, config_dir, media_dirs=None):
+		config_dir.mkdir(exist_ok=True)
+		config = SimpleNamespace(path=lambda *a: str(config_dir.joinpath(*a)))
+		if media_dirs is not None:
+			config.media_dirs = media_dirs
+		hass = SimpleNamespace(config=config)
+
+		async def _executor(fn, *args):
+			return fn(*args)
+
+		hass.async_add_executor_job = _executor
+		return RelayClient(hass, server_id="rly-1", secret="sek", session=AsyncMock())
+
+	async def _move(self, client, src, dst, overwrite=None, method="POST"):
+		path = f"/move?path={src}&to={dst}"
+		if overwrite is not None:
+			path += f"&overwrite={overwrite}"
+		return await client.execute(method, path, None, "files")
+
+	# ── /move ───────────────────────────────────────────────────────────────
+
+	@pytest.mark.asyncio
+	async def test_moves_a_file_and_creates_missing_folders(self, tmp_path):
+		cfg = tmp_path / "config"
+		cfg.mkdir()
+		(cfg / "old.yaml").write_text("a: 1\n", encoding="utf-8")
+		client = self._client(cfg)
+
+		status, body, error = await self._move(client, "old.yaml", "packages/new/kept.yaml")
+		assert status == 200 and error is None
+		assert json.loads(body) == {
+			"path": "old.yaml", "to": "packages/new/kept.yaml", "moved": True,
+		}
+		assert not (cfg / "old.yaml").exists()
+		assert (cfg / "packages" / "new" / "kept.yaml").read_text() == "a: 1\n"
+
+	@pytest.mark.asyncio
+	async def test_move_must_be_a_post(self, tmp_path):
+		cfg = tmp_path / "config"
+		cfg.mkdir()
+		(cfg / "a.yaml").write_text("a", encoding="utf-8")
+		client = self._client(cfg)
+		status, _body, error = await self._move(client, "a.yaml", "b.yaml", method="GET")
+		assert status == 0 and "POST" in error
+		assert (cfg / "a.yaml").exists() and not (cfg / "b.yaml").exists()
+
+	@pytest.mark.asyncio
+	async def test_move_needs_a_destination(self, tmp_path):
+		cfg = tmp_path / "config"
+		cfg.mkdir()
+		(cfg / "a.yaml").write_text("a", encoding="utf-8")
+		client = self._client(cfg)
+		for path in ("/move?path=a.yaml", "/move?path=a.yaml&to=", "/move?path=a.yaml&to=/"):
+			status, _body, error = await client.execute("POST", path, None, "files")
+			assert status == 0 and "destination" in error, path
+		assert (cfg / "a.yaml").exists()
+
+	@pytest.mark.asyncio
+	async def test_move_refuses_to_replace_unless_told_to(self, tmp_path):
+		cfg = tmp_path / "config"
+		cfg.mkdir()
+		(cfg / "a.yaml").write_text("new", encoding="utf-8")
+		(cfg / "b.yaml").write_text("old", encoding="utf-8")
+		client = self._client(cfg)
+
+		for overwrite in (None, "0"):
+			status, _body, error = await self._move(client, "a.yaml", "b.yaml", overwrite)
+			assert status == 0 and "overwrite=1" in error
+			assert (cfg / "b.yaml").read_text() == "old"
+
+		status, _body, error = await self._move(client, "a.yaml", "b.yaml", "1")
+		assert status == 200 and error is None
+		assert (cfg / "b.yaml").read_text() == "new" and not (cfg / "a.yaml").exists()
+
+	@pytest.mark.asyncio
+	async def test_move_never_takes_or_replaces_a_directory(self, tmp_path):
+		cfg = tmp_path / "config"
+		cfg.mkdir()
+		(cfg / "packages").mkdir()
+		(cfg / "packages" / "p.yaml").write_text("p", encoding="utf-8")
+		(cfg / "a.yaml").write_text("a", encoding="utf-8")
+		client = self._client(cfg)
+
+		status, _body, error = await self._move(client, "packages", "elsewhere")
+		assert status == 0 and "directory" in error
+		status, _body, error = await self._move(client, "", "elsewhere")
+		assert status == 0 and "directory" in error
+		# Not even with overwrite: a directory is never the thing replaced.
+		status, _body, error = await self._move(client, "a.yaml", "packages", "1")
+		assert status == 0 and "directory" in error
+		assert (cfg / "packages" / "p.yaml").exists() and (cfg / "a.yaml").exists()
+
+	@pytest.mark.asyncio
+	async def test_move_refuses_what_home_assistant_needs_either_way(self, tmp_path):
+		cfg = tmp_path / "config"
+		cfg.mkdir()
+		(cfg / "configuration.yaml").write_text("homeassistant:\n", encoding="utf-8")
+		(cfg / "draft.yaml").write_text("broken: [", encoding="utf-8")
+		client = self._client(cfg)
+
+		status, _body, error = await self._move(client, "configuration.yaml", "old.yaml")
+		assert status == 0 and "Refusing to move configuration.yaml" in error
+		status, _body, error = await self._move(client, "draft.yaml", "configuration.yaml", "1")
+		assert status == 0 and "Refusing to replace configuration.yaml" in error
+		# Not existing yet is no way round it: secrets.yaml is never created by a move.
+		status, _body, error = await self._move(client, "draft.yaml", "secrets.yaml")
+		assert status == 0 and "secrets.yaml" in error
+		assert (cfg / "configuration.yaml").read_text() == "homeassistant:\n"
+		assert (cfg / "draft.yaml").exists() and not (cfg / "secrets.yaml").exists()
+
+	@pytest.mark.asyncio
+	async def test_a_symlink_cannot_smuggle_a_protected_file_through_a_move(self, tmp_path):
+		cfg = tmp_path / "config"
+		cfg.mkdir()
+		real = cfg / "configuration.yaml"
+		real.write_text("homeassistant:\n", encoding="utf-8")
+		(cfg / "harmless.yaml").symlink_to(real)
+		(cfg / "draft.yaml").write_text("x", encoding="utf-8")
+		(cfg / "pointer.yaml").symlink_to(real)
+		client = self._client(cfg)
+
+		status, _body, error = await self._move(client, "harmless.yaml", "gone.yaml")
+		assert status == 0 and "configuration.yaml" in error
+		status, _body, error = await self._move(client, "draft.yaml", "pointer.yaml", "1")
+		assert status == 0 and "configuration.yaml" in error
+		assert real.read_text() == "homeassistant:\n"
+
+	@pytest.mark.asyncio
+	async def test_move_stays_inside_the_config_directory(self, tmp_path):
+		cfg = tmp_path / "config"
+		cfg.mkdir()
+		(cfg / "a.yaml").write_text("a", encoding="utf-8")
+		(cfg / ".storage").mkdir()
+		(cfg / ".storage" / "auth").write_text("{}", encoding="utf-8")
+		outside = tmp_path / "outside.txt"
+		outside.write_text("keep", encoding="utf-8")
+		(cfg / "out-link").symlink_to(tmp_path)
+		client = self._client(cfg)
+
+		for src, dst, why in (
+			("a.yaml", "../stolen.yaml", "outside"),
+			("a.yaml", "out-link/stolen.yaml", "outside"),
+			("../outside.txt", "in.txt", "outside"),
+			("a.yaml", ".storage/auth", "internal storage"),
+			(".storage/auth", "auth.json", "internal storage"),
+		):
+			status, _body, error = await self._move(client, src, dst, "1")
+			assert status == 0 and why in error, (src, dst)
+		assert (cfg / "a.yaml").exists() and outside.read_text() == "keep"
+		assert not (tmp_path / "stolen.yaml").exists()
+		assert (cfg / ".storage" / "auth").read_text() == "{}"
+
+	@pytest.mark.asyncio
+	async def test_moving_a_missing_file_says_so(self, tmp_path):
+		client = self._client(tmp_path / "config")
+		status, _body, error = await self._move(client, "nope.yaml", "b.yaml")
+		assert status == 0 and "does not exist" in error
+
+	@pytest.mark.asyncio
+	async def test_moving_a_file_onto_itself_is_refused(self, tmp_path):
+		cfg = tmp_path / "config"
+		cfg.mkdir()
+		(cfg / "a.yaml").write_text("a", encoding="utf-8")
+		client = self._client(cfg)
+		status, _body, error = await self._move(client, "a.yaml", "./a.yaml", "1")
+		assert status == 0 and "same file" in error
+		assert (cfg / "a.yaml").read_text() == "a"
+
+	# ── /media_list, /media_read ────────────────────────────────────────────
+
+	def _media_client(self, tmp_path):
+		media = tmp_path / "media"
+		media.mkdir()
+		return self._client(tmp_path / "config", {"local": str(media)}), media
+
+	@pytest.mark.asyncio
+	async def test_lists_and_reads_the_media_folder(self, tmp_path):
+		client, media = self._media_client(tmp_path)
+		(media / "snapshots").mkdir()
+		(media / "snapshots" / "door.jpg").write_bytes(b"\xff\xd8jpeg")
+		(media / "notes.txt").write_text("hello", encoding="utf-8")
+
+		status, body, error = await client.execute("GET", "/media_list?path=", None, "files")
+		assert status == 200 and error is None
+		listing = json.loads(body)
+		assert listing["path"] == "" and listing["truncated"] is False
+		assert [(e["name"], e["is_dir"]) for e in listing["entries"]] == [
+			("snapshots", True), ("notes.txt", False),
+		]
+
+		status, body, error = await client.execute(
+			"GET", "/media_list?path=snapshots", None, "files"
+		)
+		assert json.loads(body)["entries"][0]["path"] == "snapshots/door.jpg"
+
+		status, body, error = await client.execute(
+			"GET", "/media_read?path=snapshots/door.jpg&encoding=base64", None, "files"
+		)
+		assert status == 200 and error is None
+		read = json.loads(body)
+		assert read["encoding"] == "base64" and base64.b64decode(read["content"]) == b"\xff\xd8jpeg"
+
+		status, body, error = await client.execute("GET", "/media_read?path=notes.txt", None, "files")
+		assert json.loads(body) == {"path": "notes.txt", "content": "hello", "encoding": "utf8"}
+
+	@pytest.mark.asyncio
+	async def test_media_is_read_only(self, tmp_path):
+		client, media = self._media_client(tmp_path)
+		(media / "a.txt").write_text("a", encoding="utf-8")
+		for path in ("/media_list?path=", "/media_read?path=a.txt"):
+			status, _body, error = await client.execute("POST", path, {"content": "x"}, "files")
+			assert status == 0 and "read-only" in error, path
+		assert (media / "a.txt").read_text() == "a"
+
+	@pytest.mark.asyncio
+	async def test_media_stays_inside_the_media_folder(self, tmp_path):
+		client, media = self._media_client(tmp_path)
+		cfg = tmp_path / "config"
+		(cfg / "secrets.yaml").write_text("api: sk-1\n", encoding="utf-8")
+		(media / "link.yaml").symlink_to(cfg / "secrets.yaml")
+		(media / "up").symlink_to(tmp_path)
+
+		for path in (
+			"/media_read?path=../config/secrets.yaml",
+			"/media_read?path=link.yaml",
+			"/media_read?path=up/config/secrets.yaml",
+			"/media_list?path=..",
+			"/media_list?path=up",
+			"/media_read?path=/etc/passwd",
+		):
+			status, _body, error = await client.execute("GET", path, None, "files")
+			assert status == 0, path
+			assert "outside the Home Assistant media folder" in error or "not exist" in error, path
+
+	@pytest.mark.asyncio
+	async def test_media_read_has_its_own_size_cap(self, tmp_path):
+		client, media = self._media_client(tmp_path)
+		# Above the 2 MiB config cap but under the media one: fine.
+		(media / "ok.bin").write_bytes(b"x" * (3 * 1024 * 1024))
+		(media / "big.bin").write_bytes(b"x" * (FILES_MAX_MEDIA_READ_BYTES + 1))
+
+		status, _body, error = await client.execute(
+			"GET", "/media_read?path=ok.bin&encoding=base64", None, "files"
+		)
+		assert status == 200 and error is None
+		status, _body, error = await client.execute(
+			"GET", "/media_read?path=big.bin&encoding=base64", None, "files"
+		)
+		assert status == 0 and str(FILES_MAX_MEDIA_READ_BYTES) in error and "one message" in error
+
+	@pytest.mark.asyncio
+	async def test_media_cap_fits_a_relay_frame_after_base64_and_json(self):
+		# The whole read crosses the relay as one message, like a camera still.
+		assert FILES_MAX_MEDIA_READ_BYTES * 4 / 3 + 1024 < RELAY_RPC_MAX_BINARY_BYTES
+
+	@pytest.mark.asyncio
+	async def test_no_media_folder_is_a_clear_error(self, tmp_path):
+		client = self._client(tmp_path / "config", {"local": str(tmp_path / "missing")})
+		status, _body, error = await client.execute("GET", "/media_list?path=", None, "files")
+		assert status == 0 and "no media folder" in error
+
+	@pytest.mark.asyncio
+	async def test_media_folder_defaults_like_home_assistant(self, tmp_path):
+		# No media_dirs at all (an older or stub config): <config>/media, which
+		# is Home Assistant's own default outside a container.
+		cfg = tmp_path / "config"
+		(cfg / "media").mkdir(parents=True)
+		(cfg / "media" / "a.mp3").write_bytes(b"ID3")
+		client = self._client(cfg)
+		status, body, error = await client.execute("GET", "/media_list?path=", None, "files")
+		assert status == 200 and error is None
+		assert [e["name"] for e in json.loads(body)["entries"]] == ["a.mp3"]
+
+	@pytest.mark.asyncio
+	async def test_media_listing_is_capped(self, tmp_path):
+		client, media = self._media_client(tmp_path)
+		for i in range(FILES_MAX_ENTRIES + 5):
+			(media / f"f{i:04d}.jpg").write_bytes(b"")
+		status, body, _error = await client.execute("GET", "/media_list?path=", None, "files")
+		listing = json.loads(body)
+		assert status == 200 and listing["truncated"] is True
+		assert len(listing["entries"]) == FILES_MAX_ENTRIES
+
+
 # ── Access-event reporting (the home's own failed-login notifications) ──────
 
 class TestSendAccessEvents:
@@ -2398,3 +2879,20 @@ class TestStatesWatch:
 
 		await client._teardown_tunnel("w1")
 		assert subscribed["stopped"] is True
+
+
+class TestWsReplyTimeout:
+	"""A supervisor/api command's own timeout is waited for (gap notes, 16 Oct)."""
+
+	def test_plain_command_waits_the_usual_time(self):
+		assert rc._ws_reply_timeout({"type": "config/area_registry/list"}) == rc.RELAY_RPC_TIMEOUT
+
+	def test_add_on_stop_waits_what_it_asked_plus_a_margin(self):
+		command = {"type": "supervisor/api", "endpoint": "/addons/x/stop", "method": "post", "timeout": 50}
+		assert rc._ws_reply_timeout(command) == 55
+
+	def test_never_past_the_relay_ceiling_and_ignores_nonsense(self):
+		assert rc._ws_reply_timeout({"type": "x", "timeout": 600}) == rc.RELAY_WS_MAX_REPLY_TIMEOUT
+		assert rc._ws_reply_timeout({"type": "x", "timeout": 1}) == rc.RELAY_RPC_TIMEOUT
+		assert rc._ws_reply_timeout({"type": "x", "timeout": True}) == rc.RELAY_RPC_TIMEOUT
+		assert rc._ws_reply_timeout({"type": "x", "timeout": "50"}) == rc.RELAY_RPC_TIMEOUT

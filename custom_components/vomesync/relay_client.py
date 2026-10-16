@@ -96,13 +96,17 @@ from .const import (
 	FILES_DELETE_PROTECTED,
 	FILES_DENIED_DIRS,
 	FILES_MAX_ENTRIES,
+	FILES_MAX_MEDIA_READ_BYTES,
 	FILES_MAX_READ_BYTES,
 	FILES_MAX_WRITE_BYTES,
+	FILES_MEDIA_PATHS,
+	FILES_POST_ONLY_PATHS,
 	RELAY_RPC_TARGET_ESPHOME,
 	RELAY_RPC_TARGET_FILES,
 	RELAY_RPC_TARGET_WEBSOCKET,
 	RELAY_RPC_MAX_BINARY_BYTES,
 	RELAY_RPC_TIMEOUT,
+	RELAY_WS_MAX_REPLY_TIMEOUT,
 	RELAY_WS_MAX_COMMAND_BYTES,
 	WS_COMMAND_TYPE_RE,
 	WS_ERROR_STATUS,
@@ -603,6 +607,21 @@ async def async_ensure_local_access_token(hass: HomeAssistant) -> Optional[str]:
 		)
 		_LOGGER.info("Relay: created the '%s' long-lived token for %s", RELAY_TOKEN_CLIENT_NAME, user.name)
 	return hass.auth.async_create_access_token(refresh)
+
+
+def _ws_reply_timeout(command: dict) -> float:
+	"""How long to wait for a command's reply.
+
+	``supervisor/api`` carries its own ``timeout`` for Home Assistant to give
+	the Supervisor (10 s unless told; the MCP asks 50 for an add-on stop or
+	start). Waiting only RELAY_RPC_TIMEOUT here would give up on a call
+	Home Assistant is still running, so wait that long plus a margin, up to
+	the relay backend's own one-minute ceiling.
+	"""
+	asked = command.get("timeout")
+	if isinstance(asked, bool) or not isinstance(asked, (int, float)) or asked <= 0:
+		return RELAY_RPC_TIMEOUT
+	return min(max(RELAY_RPC_TIMEOUT, asked + 5), RELAY_WS_MAX_REPLY_TIMEOUT)
 
 
 class RelayClient:
@@ -1656,16 +1675,55 @@ class RelayClient:
 			return None
 
 	def _resolve_config_path(self, raw: Any) -> tuple[Optional[Path], Optional[str]]:
-		"""Resolve ``raw`` inside the config directory, or explain the refusal.
+		"""Resolve ``raw`` inside the config directory, or explain the refusal."""
+		base = self._config_dir()
+		if base is None:
+			return None, "Home Assistant config directory is not available."
+		return self._resolve_under(
+			base, raw, "the Home Assistant config directory", FILES_DENIED_DIRS
+		)
+
+	def _media_dir(self) -> tuple[Optional[Path], Optional[str]]:
+		"""Home Assistant's own media folder, resolved, or why there is none.
+
+		Home Assistant decides where that is (``hass.config.media_dirs``):
+		``/media`` in a container, which is every HAOS and Supervised install,
+		otherwise ``<config>/media``, unless ``media_dirs:`` in the YAML names
+		others. ``local`` is the one its Media panel shows as "My media".
+		"""
+		if self._hass is None:
+			return None, "Home Assistant is not available."
+		dirs = getattr(self._hass.config, "media_dirs", None)
+		raw = None
+		if isinstance(dirs, dict) and dirs:
+			raw = dirs.get("local") or next(iter(dirs.values()))
+		if not raw:
+			try:
+				raw = self._hass.config.path("media")
+			except Exception:  # pragma: no cover - defensive
+				raw = None
+		if not raw:
+			return None, "Home Assistant has no media folder."
+		try:
+			base = Path(raw).resolve()
+		except (OSError, ValueError) as err:
+			return None, f"Home Assistant's media folder is not available: {err}"
+		if not base.is_dir():
+			return None, f"Home Assistant has no media folder ({raw} does not exist)."
+		return base, None
+
+	@staticmethod
+	def _resolve_under(
+		base: Path, raw: Any, where: str, denied: tuple[str, ...] = ()
+	) -> tuple[Optional[Path], Optional[str]]:
+		"""Resolve ``raw`` inside ``base``, or explain the refusal.
 
 		Resolution happens *before* the containment check, so a symlink pointing
 		out of the directory is caught as well as ``..`` — checking the string
 		would only stop the obvious half.  An empty path means the directory
-		itself, which is how listing works.
+		itself, which is how listing works.  ``denied`` names directories that
+		are never served from anywhere under ``base``.
 		"""
-		base = self._config_dir()
-		if base is None:
-			return None, "Home Assistant config directory is not available."
 		rel = (raw or "").strip() if isinstance(raw, str) else ""
 		rel = rel.lstrip("/")
 		try:
@@ -1673,9 +1731,9 @@ class RelayClient:
 		except (OSError, ValueError) as err:
 			return None, f"Invalid path: {err}"
 		if target != base and base not in target.parents:
-			return None, "Path is outside the Home Assistant config directory."
+			return None, f"Path is outside {where}."
 		parts = target.relative_to(base).parts if target != base else ()
-		if any(part in FILES_DENIED_DIRS for part in parts):
+		if any(part in denied for part in parts):
 			return None, (
 				"Refusing to touch Home Assistant's internal storage. It holds the "
 				"registries and every credential the UI has saved, and hand-editing "
@@ -1686,12 +1744,12 @@ class RelayClient:
 	async def _execute_files(
 		self, method: Optional[str], path: Optional[str], body: Any
 	) -> tuple[int, Optional[str], Optional[str]]:
-		"""Serve one file call under the config directory.
+		"""Serve one file call under the config directory, or the media folder.
 
 		The whole point of this target: a hosted home has no SSH and no host
 		shell, so a file with no UI equivalent — configuration.yaml above all —
 		could only be edited through a browser add-on. Every call is confined to
-		the config directory and gated on ``ha:files`` upstream.
+		its directory and gated on ``ha:files`` upstream.
 		"""
 		portion = _safe_path_portion(path)
 		if portion is None or portion not in FILES_ALLOWED_PATHS:
@@ -1699,29 +1757,164 @@ class RelayClient:
 		method = (method or "GET").upper()
 		if method not in FILES_ALLOWED_METHODS:
 			return 0, None, f"Unsupported file method: {method}"
-		if portion == "/delete" and method != "POST":
-			return 0, None, "Delete must be a POST."
+		if portion in FILES_POST_ONLY_PATHS and method != "POST":
+			return 0, None, f"{portion[1:].capitalize()} must be a POST."
+		if portion in FILES_MEDIA_PATHS and method != "GET":
+			return 0, None, "The media folder is read-only here; use GET."
 
-		rel = ""
-		read_encoding = "utf8"
+		query: dict[str, str] = {}
 		if "?" in (path or ""):
 			for part in path.split("?", 1)[1].split("&"):
 				key, _, value = part.partition("=")
-				if key == "path":
-					rel = unquote(value)
-				elif key == "encoding":
-					read_encoding = unquote(value)
-		target, problem = self._resolve_config_path(rel)
-		if target is None:
-			return 0, None, problem
+				query[key] = unquote(value)
+		rel = query.get("path", "")
+		read_encoding = query.get("encoding", "utf8")
+
+		if portion in FILES_MEDIA_PATHS:
+			base, problem = self._media_dir()
+			if base is None:
+				return 0, None, problem
+			target, problem = self._resolve_under(base, rel, "the Home Assistant media folder")
+			if target is None:
+				return 0, None, problem
+			job: tuple = (self._media_op, portion, base, target, read_encoding)
+		else:
+			target, problem = self._resolve_config_path(rel)
+			if target is None:
+				return 0, None, problem
+			if portion == "/move":
+				to = query.get("to", "")
+				if not to.strip().lstrip("/"):
+					return 0, None, "Move needs a destination: ?to=<path>."
+				dest, problem = self._resolve_config_path(to)
+				if dest is None:
+					return 0, None, problem
+				overwrite = query.get("overwrite", "0").strip().lower() in ("1", "true")
+				job = (self._move_file, target, dest, overwrite)
+			else:
+				job = (self._files_op, portion, target, body, read_encoding)
 
 		try:
-			return await self._hass.async_add_executor_job(
-				self._files_op, portion, target, body, read_encoding
-			)
+			return await self._hass.async_add_executor_job(*job)
 		except Exception as err:  # pragma: no cover - defensive
 			_LOGGER.debug("Relay (%s) file op failed: %s", self._server_id, err)
 			return 0, None, f"File operation failed: {err}"
+
+	@staticmethod
+	def _list_dir(
+		base: Path, target: Path, denied: tuple[str, ...] = ()
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""One directory's entries, relative to ``base``, capped."""
+		if not target.is_dir():
+			return 0, None, "Not a directory."
+		entries = []
+		for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name)):
+			if child.name in denied:
+				continue
+			try:
+				stat = child.stat()
+			except OSError:
+				continue
+			entries.append({
+				"name": child.name,
+				"path": str(child.relative_to(base)),
+				"is_dir": child.is_dir(),
+				"size": stat.st_size if child.is_file() else None,
+			})
+			if len(entries) >= FILES_MAX_ENTRIES:
+				break
+		return 200, json.dumps({
+			"path": "" if target == base else str(target.relative_to(base)),
+			"entries": entries,
+			"truncated": len(entries) >= FILES_MAX_ENTRIES,
+		}), None
+
+	@staticmethod
+	def _read_file(
+		base: Path, target: Path, read_encoding: str, limit: int, too_big: str
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""One file's content as UTF-8 text or base64, refused above ``limit``."""
+		if not target.is_file():
+			return 0, None, "Not a file, or it does not exist."
+		size = target.stat().st_size
+		if size > limit:
+			return 0, None, f"File is {size} bytes; the limit is {limit}. {too_big}"
+		if read_encoding == "base64":
+			try:
+				data = target.read_bytes()
+			except OSError as err:
+				return 0, None, f"Could not read the file: {err}"
+			return 200, json.dumps({
+				"path": str(target.relative_to(base)),
+				"content": base64.b64encode(data).decode("ascii"),
+				"encoding": "base64",
+			}), None
+		try:
+			text = target.read_text(encoding="utf-8")
+		except (UnicodeDecodeError, ValueError):
+			return 0, None, (
+				"File is not UTF-8 text. Pass ?encoding=base64 to read it as binary."
+			)
+		except OSError as err:
+			return 0, None, f"Could not read the file: {err}"
+		return 200, json.dumps({
+			"path": str(target.relative_to(base)), "content": text, "encoding": "utf8"
+		}), None
+
+	def _media_op(
+		self, portion: str, base: Path, target: Path, read_encoding: str = "utf8"
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""Blocking half of a media-folder call: list or read, never write."""
+		if portion == "/media_list":
+			return self._list_dir(base, target)
+		return self._read_file(
+			base, target, read_encoding, FILES_MAX_MEDIA_READ_BYTES,
+			"A media file crosses the relay as one message, so larger ones "
+			"cannot be fetched this way.",
+		)
+
+	def _move_file(
+		self, source: Path, dest: Path, overwrite: bool
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""Blocking half of ``/move``: rename one file inside the config directory.
+
+		Same rules as delete, because a move is a delete of the source: one file,
+		never a directory, and none of the files Home Assistant needs, checked on
+		the resolved paths. Those are refused as the destination too, since
+		replacing configuration.yaml is as fatal as taking it away. An existing
+		destination is only replaced when the caller says so.
+		"""
+		base = self._config_dir()
+		if source == base:
+			return 0, None, "Refusing to move the config directory."
+		if source.is_dir():
+			return 0, None, "Path is a directory; only single files can be moved."
+		if not source.is_file():
+			return 0, None, "Not a file, or it does not exist."
+		for verb, candidate in (("move", source), ("replace", dest)):
+			if candidate.parent == base and candidate.name in FILES_DELETE_PROTECTED:
+				return 0, None, (
+					f"Refusing to {verb} {candidate.name}: Home Assistant needs it to "
+					"start or to keep its history."
+				)
+		if dest == base or dest.is_dir():
+			return 0, None, (
+				"Destination is a directory; give the full path of the file to create."
+			)
+		if dest == source:
+			return 0, None, "Source and destination are the same file."
+		if dest.exists() and not overwrite:
+			return 0, None, "Destination exists; pass overwrite=1 to replace it."
+		try:
+			dest.parent.mkdir(parents=True, exist_ok=True)
+			os.replace(source, dest)
+		except OSError as err:
+			return 0, None, f"Could not move the file: {err}"
+		return 200, json.dumps({
+			"path": str(source.relative_to(base)),
+			"to": str(dest.relative_to(base)),
+			"moved": True,
+		}), None
 
 	def _files_op(
 		self, portion: str, target: Path, body: Any, read_encoding: str = "utf8"
@@ -1729,61 +1922,14 @@ class RelayClient:
 		"""Blocking half of :meth:`_execute_files`, run in an executor."""
 		base = self._config_dir()
 		if portion == "/list":
-			if not target.is_dir():
-				return 0, None, "Not a directory."
-			entries = []
-			for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name)):
-				if child.name in FILES_DENIED_DIRS:
-					continue
-				try:
-					stat = child.stat()
-				except OSError:
-					continue
-				entries.append({
-					"name": child.name,
-					"path": str(child.relative_to(base)),
-					"is_dir": child.is_dir(),
-					"size": stat.st_size if child.is_file() else None,
-				})
-				if len(entries) >= FILES_MAX_ENTRIES:
-					break
-			return 200, json.dumps({
-				"path": "" if target == base else str(target.relative_to(base)),
-				"entries": entries,
-				"truncated": len(entries) >= FILES_MAX_ENTRIES,
-			}), None
+			return self._list_dir(base, target, FILES_DENIED_DIRS)
 
 		if portion == "/read":
-			if not target.is_file():
-				return 0, None, "Not a file, or it does not exist."
-			size = target.stat().st_size
-			if size > FILES_MAX_READ_BYTES:
-				return 0, None, (
-					f"File is {size} bytes; the limit is {FILES_MAX_READ_BYTES}. "
-					"This target is for configuration files and small packaged "
-					"assets, not a media library."
-				)
-			if read_encoding == "base64":
-				try:
-					data = target.read_bytes()
-				except OSError as err:
-					return 0, None, f"Could not read the file: {err}"
-				return 200, json.dumps({
-					"path": str(target.relative_to(base)),
-					"content": base64.b64encode(data).decode("ascii"),
-					"encoding": "base64",
-				}), None
-			try:
-				text = target.read_text(encoding="utf-8")
-			except (UnicodeDecodeError, ValueError):
-				return 0, None, (
-					"File is not UTF-8 text. Pass ?encoding=base64 to read it as binary."
-				)
-			except OSError as err:
-				return 0, None, f"Could not read the file: {err}"
-			return 200, json.dumps({
-				"path": str(target.relative_to(base)), "content": text, "encoding": "utf8"
-			}), None
+			return self._read_file(
+				base, target, read_encoding, FILES_MAX_READ_BYTES,
+				"This target is for configuration files and small packaged "
+				"assets, not a media library.",
+			)
 
 		if portion == "/delete":
 			# One file at a time and never a directory: a tidy-up that names the
@@ -1867,6 +2013,7 @@ class RelayClient:
 		session = self._get_session()
 		payload = {k: v for k, v in command.items() if k != "id"}
 		payload["id"] = 1
+		reply_timeout = _ws_reply_timeout(command)
 		try:
 			async with session.ws_connect(
 				ws_url, heartbeat=30, timeout=aiohttp.ClientTimeout(total=RELAY_RPC_TIMEOUT),
@@ -1883,7 +2030,7 @@ class RelayClient:
 						return 0, None, "Local Home Assistant rejected the access token."
 				await ws.send_json(payload)
 				while True:
-					result = await ws.receive_json(timeout=RELAY_RPC_TIMEOUT)
+					result = await ws.receive_json(timeout=reply_timeout)
 					if result.get("type") == "result" and result.get("id") == 1:
 						if result.get("success"):
 							return 200, json.dumps(result.get("result")), None

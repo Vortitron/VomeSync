@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.49"
+INTEGRATION_VERSION = "0.9.51"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -206,6 +206,9 @@ RELAY_WS_MSG_PONG = "pong"
 RELAY_RECONNECT_DELAY = 5
 RELAY_RECONNECT_MAX_DELAY = 60
 RELAY_RPC_TIMEOUT = 30
+# The longest a WebSocket command that names its own timeout is waited for
+# (the relay backend clamps a dispatch to 60 s).
+RELAY_WS_MAX_REPLY_TIMEOUT = 58
 # Largest body a relayed call returns base64-encoded (expect="base64", e.g. a
 # camera still). It crosses the tunnel as one WebSocket message, a third
 # bigger than the bytes; a still asked for at a sensible width is well under.
@@ -332,12 +335,20 @@ RELAY_STATES_ENTITY_RE = r"^[a-z0-9_]+\.[a-z0-9_]+$"
 RELAY_RPC_TARGET_FILES = "files"
 # Exact path portions of the file API.  ``/read`` and ``/list`` take
 # ``?path=``; ``/write`` takes the same plus a JSON body; ``/delete`` (POST
-# only) removes one file.
-FILES_ALLOWED_PATHS = ("/list", "/read", "/write", "/delete")
-# Files at the top of the config directory that ``/delete`` refuses: Home
-# Assistant will not start without the first two, and the rest are its
-# database and version marker.  An agent tidying up must not be able to take
-# any of them with it.
+# only) removes one file; ``/move`` (POST only) renames one file,
+# ``?path=<from>&to=<to>&overwrite=0|1``.  ``/media_list`` and ``/media_read``
+# (GET only) are the same as ``/list`` and ``/read`` but rooted at Home
+# Assistant's media folder, and read-only: nothing writes there.  A component
+# older than an op refuses it as non-allowlisted, which is the version guard.
+FILES_ALLOWED_PATHS = (
+	"/list", "/read", "/write", "/delete", "/move", "/media_list", "/media_read",
+)
+FILES_POST_ONLY_PATHS = ("/delete", "/move")
+FILES_MEDIA_PATHS = ("/media_list", "/media_read")
+# Files at the top of the config directory that ``/delete`` refuses, and that
+# ``/move`` will neither take away nor replace: Home Assistant will not start
+# without the first two, and the rest are its database and version marker.  An
+# agent tidying up must not be able to take any of them with it.
 FILES_DELETE_PROTECTED = (
 	"configuration.yaml",
 	"secrets.yaml",
@@ -356,6 +367,11 @@ FILES_DENIED_DIRS = (".storage", ".cloud")
 # relay frame carries the whole body.
 FILES_MAX_READ_BYTES = 2 * 1024 * 1024
 FILES_MAX_WRITE_BYTES = 2 * 1024 * 1024
+# A media file (a snapshot, a sound, a recording) is bigger than a config file,
+# but it still crosses the relay as one frame: base64 makes it a third bigger
+# and JSON wraps that, so 5 MiB arrives at about 6.7 MB, under the 8 MiB the
+# relay already carries for a camera still (RELAY_RPC_MAX_BINARY_BYTES).
+FILES_MAX_MEDIA_READ_BYTES = 5 * 1024 * 1024
 # Listing is for finding a file to edit, not for walking a media library.
 FILES_MAX_ENTRIES = 500
 RELAY_RPC_TARGET_WEBSOCKET = "websocket"
