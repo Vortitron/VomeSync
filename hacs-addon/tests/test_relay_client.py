@@ -2879,3 +2879,20 @@ class TestStatesWatch:
 
 		await client._teardown_tunnel("w1")
 		assert subscribed["stopped"] is True
+
+
+class TestWsReplyTimeout:
+	"""A supervisor/api command's own timeout is waited for (gap notes, 16 Oct)."""
+
+	def test_plain_command_waits_the_usual_time(self):
+		assert rc._ws_reply_timeout({"type": "config/area_registry/list"}) == rc.RELAY_RPC_TIMEOUT
+
+	def test_add_on_stop_waits_what_it_asked_plus_a_margin(self):
+		command = {"type": "supervisor/api", "endpoint": "/addons/x/stop", "method": "post", "timeout": 50}
+		assert rc._ws_reply_timeout(command) == 55
+
+	def test_never_past_the_relay_ceiling_and_ignores_nonsense(self):
+		assert rc._ws_reply_timeout({"type": "x", "timeout": 600}) == rc.RELAY_WS_MAX_REPLY_TIMEOUT
+		assert rc._ws_reply_timeout({"type": "x", "timeout": 1}) == rc.RELAY_RPC_TIMEOUT
+		assert rc._ws_reply_timeout({"type": "x", "timeout": True}) == rc.RELAY_RPC_TIMEOUT
+		assert rc._ws_reply_timeout({"type": "x", "timeout": "50"}) == rc.RELAY_RPC_TIMEOUT

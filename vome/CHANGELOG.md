@@ -9,7 +9,9 @@ a success. Build output is no longer double-spaced. An agent can also
 rename a file in your configuration folder (never configuration.yaml,
 secrets.yaml or the database, and an existing file is only replaced when
 asked), and look at, but not change, what is in Home Assistant's media
-folder (integration 0.9.51).
+folder (integration 0.9.51). Stopping or starting an add-on through Vome
+no longer gives up after 30 seconds while Home Assistant is still waiting
+for it.
 
 ## 0.3.65 — 8 October 2026
 

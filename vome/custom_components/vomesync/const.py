@@ -206,6 +206,9 @@ RELAY_WS_MSG_PONG = "pong"
 RELAY_RECONNECT_DELAY = 5
 RELAY_RECONNECT_MAX_DELAY = 60
 RELAY_RPC_TIMEOUT = 30
+# The longest a WebSocket command that names its own timeout is waited for
+# (the relay backend clamps a dispatch to 60 s).
+RELAY_WS_MAX_REPLY_TIMEOUT = 58
 # Largest body a relayed call returns base64-encoded (expect="base64", e.g. a
 # camera still). It crosses the tunnel as one WebSocket message, a third
 # bigger than the bytes; a still asked for at a sensible width is well under.

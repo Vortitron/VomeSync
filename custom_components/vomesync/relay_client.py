@@ -106,6 +106,7 @@ from .const import (
 	RELAY_RPC_TARGET_WEBSOCKET,
 	RELAY_RPC_MAX_BINARY_BYTES,
 	RELAY_RPC_TIMEOUT,
+	RELAY_WS_MAX_REPLY_TIMEOUT,
 	RELAY_WS_MAX_COMMAND_BYTES,
 	WS_COMMAND_TYPE_RE,
 	WS_ERROR_STATUS,
@@ -606,6 +607,21 @@ async def async_ensure_local_access_token(hass: HomeAssistant) -> Optional[str]:
 		)
 		_LOGGER.info("Relay: created the '%s' long-lived token for %s", RELAY_TOKEN_CLIENT_NAME, user.name)
 	return hass.auth.async_create_access_token(refresh)
+
+
+def _ws_reply_timeout(command: dict) -> float:
+	"""How long to wait for a command's reply.
+
+	``supervisor/api`` carries its own ``timeout`` for Home Assistant to give
+	the Supervisor (10 s unless told; the MCP asks 50 for an add-on stop or
+	start). Waiting only RELAY_RPC_TIMEOUT here would give up on a call
+	Home Assistant is still running, so wait that long plus a margin, up to
+	the relay backend's own one-minute ceiling.
+	"""
+	asked = command.get("timeout")
+	if isinstance(asked, bool) or not isinstance(asked, (int, float)) or asked <= 0:
+		return RELAY_RPC_TIMEOUT
+	return min(max(RELAY_RPC_TIMEOUT, asked + 5), RELAY_WS_MAX_REPLY_TIMEOUT)
 
 
 class RelayClient:
@@ -1997,6 +2013,7 @@ class RelayClient:
 		session = self._get_session()
 		payload = {k: v for k, v in command.items() if k != "id"}
 		payload["id"] = 1
+		reply_timeout = _ws_reply_timeout(command)
 		try:
 			async with session.ws_connect(
 				ws_url, heartbeat=30, timeout=aiohttp.ClientTimeout(total=RELAY_RPC_TIMEOUT),
@@ -2013,7 +2030,7 @@ class RelayClient:
 						return 0, None, "Local Home Assistant rejected the access token."
 				await ws.send_json(payload)
 				while True:
-					result = await ws.receive_json(timeout=RELAY_RPC_TIMEOUT)
+					result = await ws.receive_json(timeout=reply_timeout)
 					if result.get("type") == "result" and result.get("id") == 1:
 						if result.get("success"):
 							return 200, json.dumps(result.get("result")), None
