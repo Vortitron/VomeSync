@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.66 — 16 October 2026
+
+An ESPHome build that fails, for instance because the YAML does not
+validate, now comes back with ESPHome's error and a failed result instead
+of running into a timeout, and a failed build can no longer be reported as
+a success. Build output is no longer double-spaced. An agent can also
+rename a file in your configuration folder (never configuration.yaml,
+secrets.yaml or the database, and an existing file is only replaced when
+asked), and look at, but not change, what is in Home Assistant's media
+folder (integration 0.9.51).
+
 ## 0.3.65 — 8 October 2026
 
 Vome's tools now say what they do. From Home Assistant 2026.10, its own
