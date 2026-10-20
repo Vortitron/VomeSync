@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.5 — 20 October 2026
+
+**Your home's end-to-end key stays in your home.** A home with end-to-end
+remote access keeps the private key for its own name under `.storage`, and a
+snapshot took that directory with the rest, so a standby through Vome handed
+Vome the one key that access exists to keep from it. The directory is no
+longer copied, in either kind of pair; a standby that takes over issues a
+certificate of its own.
+
 ## 0.2.4 — 7 October 2026
 
 **An app you stop on the install running your home stays stopped.** The apps

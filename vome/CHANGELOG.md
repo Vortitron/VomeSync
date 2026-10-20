@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.67 — 20 October 2026
+
+**No key can mint a Home Assistant token through Vome.** A coding-agent key
+with only read access could have asked your home, through Vome, for a
+long-lived Home Assistant token in your name, and then used it without Vome
+in the middle: the command carried none of the words that mark a change.
+Vome now refuses every credential-issuing command to every key, and so does
+your home, so a mistake on our side could not reopen it. Unfamiliar commands
+need the configuration permission rather than the read one (integration
+0.9.52).
+
+If you updated from a version before 0.3.64 (5 October), your personal key
+was for a time in an owner switch's attributes, which Home Assistant's
+history keeps for ten days by default and backups keep for good. Make a new
+key on vome.io if anyone other than you can read your history or backups.
 ## 0.3.66 — 16 October 2026
 
 An ESPHome build that fails, for instance because the YAML does not

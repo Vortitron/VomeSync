@@ -108,6 +108,7 @@ from .const import (
 	RELAY_RPC_TIMEOUT,
 	RELAY_WS_MAX_REPLY_TIMEOUT,
 	RELAY_WS_MAX_COMMAND_BYTES,
+	WS_COMMAND_DENIED_PREFIXES,
 	WS_COMMAND_TYPE_RE,
 	WS_ERROR_STATUS,
 	RELAY_WS_MSG_HA_RPC,
@@ -1997,6 +1998,11 @@ class RelayClient:
 		cmd_type = command.get("type")
 		if not isinstance(cmd_type, str) or not WS_COMMAND_TYPE_RE.match(cmd_type):
 			return 0, None, "Refusing to execute a malformed WebSocket command."
+		if cmd_type.startswith(WS_COMMAND_DENIED_PREFIXES):
+			return 0, None, (
+				f"Refusing {cmd_type!r}: it would issue a Home Assistant credential "
+				"that works without Vome."
+			)
 		try:
 			raw = json.dumps(command)
 		except (TypeError, ValueError):
