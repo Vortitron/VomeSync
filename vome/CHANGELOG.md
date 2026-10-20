@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.68 — 20 October 2026
+
+**Your health score survives a restart.** Home Assistant kept the last
+health report only in memory, so every restart emptied the Vome health
+score sensor until someone ran a new check — and a coding agent asking for
+the score through Vome was told the home had none. The integration now
+fetches the last finished report back from Vome when it starts (integration
+0.9.53).
+
 ## 0.3.67 — 20 October 2026
 
 **No key can mint a Home Assistant token through Vome.** A coding-agent key

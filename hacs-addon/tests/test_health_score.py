@@ -498,3 +498,50 @@ class TestSayingWhichHouseThisIs:
 				patch.object(hs.persistent_notification, "async_create"):
 			await hs.async_run_check(hass, entry)
 		assert sent["instance_id"] == "uuid-9"
+
+
+class TestTheReportSurvivesARestart:
+	"""Home Assistant forgets the report on restart; Vome does not.
+
+	GamlaBio, 20 Oct 2026: the sensor sat on "unavailable" for three days
+	after a restart and the MCP said the home had no score, while Vome
+	held a finished report the whole time.
+	"""
+
+	@pytest.mark.asyncio
+	async def test_a_linked_house_asks_for_its_last_report_at_start_up(self, linked_entry):
+		hass = _hass(linked_entry)
+		payload = {"status": "done", "guest": False, "report": {"score": 71, "findings": []}}
+		with patch.object(hs, "async_get_clientsession", return_value=MagicMock()), \
+				patch.object(hs, "async_fetch_health_report", AsyncMock(return_value=payload)), \
+				patch.object(hs, "async_dispatcher_send"):
+			report = await hs.async_restore_report(hass, linked_entry)
+		assert report["score"] == 71
+		assert hs.stored_report(hass, linked_entry.entry_id)["score"] == 71
+
+	@pytest.mark.asyncio
+	async def test_an_unlinked_house_asks_nothing(self):
+		entry = _Entry()
+		with patch.object(hs, "async_fetch_health_report", AsyncMock()) as fetch:
+			assert await hs.async_restore_report(_hass(entry), entry) is None
+		fetch.assert_not_awaited()
+
+	@pytest.mark.asyncio
+	async def test_a_vome_that_is_down_costs_the_entry_nothing(self, linked_entry):
+		hass = _hass(linked_entry)
+		with patch.object(hs, "async_get_clientsession", return_value=MagicMock()), \
+				patch.object(hs, "async_fetch_health_report",
+				             AsyncMock(side_effect=RuntimeError("502 from Vome"))):
+			assert await hs.async_restore_report(hass, linked_entry) is None
+		assert hs.stored_report(hass, linked_entry.entry_id) is None
+
+	def test_set_up_schedules_it_off_the_setup_path(self):
+		"""The call sits in async_setup_entry as a background task, after the
+		platforms exist to receive the signal."""
+		import inspect
+		import custom_components.vomesync as init_module
+		source = inspect.getsource(init_module.async_setup_entry)
+		platforms = source.index("async_forward_entry_setups(entry, PLATFORMS)")
+		restore = source.index("health_score.async_restore_report(hass, entry)")
+		assert platforms < restore
+		assert "async_create_background_task" in source[platforms:restore + 80]

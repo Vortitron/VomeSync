@@ -343,6 +343,29 @@ async def async_refresh_report(
 	return report
 
 
+async def async_restore_report(hass: HomeAssistant, entry: ConfigEntry) -> Optional[dict]:
+	"""Bring the last finished report back after a restart.
+
+	The report lives in ``hass.data`` for the sensor's sake, so every
+	restart of Home Assistant emptied it: the health score sensor sat on
+	"unavailable" until somebody pressed the button again, and anything
+	reading the sensor (the MCP's vome_health_report, a dashboard card)
+	said the home had no score. GamlaBio, 20 Oct 2026: three days of a
+	score it had paid for showing as nothing.
+
+	Vome keeps the report, so the fix is to ask for it once at start-up.
+	Best effort and quiet: an unlinked home has nothing to ask for, and a
+	Vome that is down must not fail the entry or wake anyone.
+	"""
+	if not is_linked(entry):
+		return None
+	try:
+		return await async_refresh_report(hass, entry)
+	except Exception as err:  # noqa: BLE001 - never the entry's problem
+		_LOGGER.debug("Vome health score: could not restore the last report: %s", err)
+		return None
+
+
 async def async_watch_for_report(
 	hass: HomeAssistant, entry: ConfigEntry, *, timeout: int = POLL_TIMEOUT_SECONDS,
 ) -> Optional[dict]:
