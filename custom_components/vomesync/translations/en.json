@@ -514,5 +514,11 @@
 			"api_error": "Failed to fetch switches from API. Check your connection and try again.",
 			"no_orphaned_devices": "No orphaned devices found."
 		}
+	},
+	"issues": {
+		"relay_down": {
+			"title": "Remote access through Vome has been down for {minutes} minutes",
+			"description": "This home ({server_id}) has not been reachable through Vome for {minutes} minutes. Home Assistant keeps trying to reconnect on its own.\n\nCheck that this Home Assistant has an internet connection, and that nothing blocks outbound connections to Vome. If the home is up and this keeps happening, open the Vome panel for the relay's status and the log for the reason each attempt gives.\n\nThis issue clears itself when the connection returns."
+		}
 	}
 }

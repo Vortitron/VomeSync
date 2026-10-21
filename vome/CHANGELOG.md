@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.69 — 21 October 2026
+
+**A Remote access sensor.** The Vome device in Home Assistant now has a
+binary sensor, **Remote access**, that is on while this home's tunnel to
+Vome is open and off while it is not, with when it last opened and closed
+as attributes. An automation can now tell you when the house drops off
+Vome, and a dashboard can show it as a plain dot. It is unavailable, not
+off, in a home that has never been linked (integration 0.9.54).
+
+**Settings → Repairs says when remote access has been down too long.**
+Short drops (a router reboot, a Vome deploy) are reconnected quietly as
+before. If the tunnel stays closed for ten minutes, a Repairs issue tells
+you so and what to check; it clears itself when the connection returns.
+Unlinking or restarting never raises it.
+
+**Download diagnostics.** Settings → Devices & services → Vome → ⋮ →
+Download diagnostics gives a file to attach to a bug report: the entry's
+settings, the relay's state, the health score's headline and the switch
+counts, with every key, token and secret already blanked.
+
 ## 0.3.68 — 20 October 2026
 
 **Your health score survives a restart.** Home Assistant kept the last

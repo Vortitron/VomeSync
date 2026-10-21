@@ -17,7 +17,7 @@ from .relay_client import async_start_relay, async_stop_relay
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.SENSOR, Platform.BINARY_SENSOR]
 
 # Option keys whose values are secrets and must never be logged verbatim.
 _SENSITIVE_OPTION_KEYS = frozenset({"secret", "local_token", "token", "password"})
