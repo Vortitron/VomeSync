@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.54"
+INTEGRATION_VERSION = "0.9.55"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -205,6 +205,12 @@ RELAY_WS_MSG_PING = "ping"
 RELAY_WS_MSG_PONG = "pong"
 RELAY_RECONNECT_DELAY = 5
 RELAY_RECONNECT_MAX_DELAY = 60
+# After Vome refuses the link outright (HTTP 401 on the upgrade, or close
+# code 4001 on a live socket) there is no point dialling every minute: the
+# secret is dead until someone links again.  Keep trying, slowly, in case
+# the refusal was Vome's mistake.
+RELAY_REJECTED_RETRY_DELAY = 900
+RELAY_CLOSE_REVOKED = 4001
 RELAY_RPC_TIMEOUT = 30
 # The longest a WebSocket command that names its own timeout is waited for
 # (the relay backend clamps a dispatch to 60 s).

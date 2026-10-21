@@ -59,6 +59,8 @@ from .const import (
 	DEFAULT_PORTAL_URL,
 	DEFAULT_RELAY_WS_URL,
 	DOMAIN,
+	RELAY_CLOSE_REVOKED,
+	RELAY_REJECTED_RETRY_DELAY,
 	ESPHOME_ADDON_STATE_STARTED,
 	ESPHOME_ALLOWED_METHODS,
 	ESPHOME_ALLOWED_PATHS,
@@ -658,6 +660,10 @@ class RelayClient:
 		# sensor's attributes and for diagnostics.  None until it happens.
 		self.connected_since: Optional[float] = None
 		self.disconnected_since: Optional[float] = None
+		# Vome refused this link's secret (401 on the upgrade, or 4001 on a
+		# live socket): an ended trial, an unclaimed guest run, or a link
+		# deleted on vome.io.  Not an outage, and not fixed by waiting.
+		self.rejected = False
 		self._secret = secret
 		self._ws_url = ws_url or DEFAULT_RELAY_WS_URL
 		self._local_token = local_token
@@ -720,7 +726,7 @@ class RelayClient:
 	def ws_url(self) -> str:
 		return self._ws_url
 
-	def _note_state(self, connected: bool) -> None:
+	def _note_state(self, connected: bool, *, rejected: bool = False) -> None:
 		"""Tell the rest of the integration the tunnel opened or closed.
 
 		Both listeners are optional: a bare client (no hass, no entry) just
@@ -728,9 +734,11 @@ class RelayClient:
 		function so an import error there can never take the relay down.
 		"""
 		now = time.time()
+		self.rejected = bool(rejected) and not connected
 		if connected:
 			self.connected_since = now
-		else:
+		elif not rejected or self.disconnected_since is None:
+			# A refusal repeats every retry; the outage began at the first.
 			self.disconnected_since = now
 		if self._hass is None or not self._entry_id:
 			return
@@ -743,7 +751,7 @@ class RelayClient:
 		try:
 			from .relay_health import note_relay_state
 
-			note_relay_state(self._hass, self._entry_id, connected)
+			note_relay_state(self._hass, self._entry_id, connected, rejected=self.rejected)
 		except Exception as err:  # noqa: BLE001
 			_LOGGER.debug("Relay (%s): repairs hook failed: %s", self._server_id, err)
 
@@ -795,10 +803,17 @@ class RelayClient:
 		delay = RELAY_RECONNECT_DELAY
 		while not self._closing:
 			try:
-				await self._connect_once()
+				revoked = await self._connect_once()
 				delay = RELAY_RECONNECT_DELAY  # a clean session resets backoff
+				if revoked:
+					delay = self._refused("closed the link (revoked)")
 			except asyncio.CancelledError:
 				raise
+			except aiohttp.WSServerHandshakeError as err:
+				if err.status in (401, 403):
+					delay = self._refused(f"refused the link (HTTP {err.status})")
+				else:
+					_LOGGER.warning("Relay (%s) connection error: %s", self._server_id, err)
 			except Exception as err:  # noqa: BLE001 - keep the loop alive
 				_LOGGER.warning("Relay (%s) connection error: %s", self._server_id, err)
 			if self._closing:
@@ -806,7 +821,19 @@ class RelayClient:
 			await asyncio.sleep(delay)
 			delay = min(delay * 2, RELAY_RECONNECT_MAX_DELAY)
 
-	async def _connect_once(self) -> None:
+	def _refused(self, what: str) -> int:
+		"""Vome said no to this secret: say so once, then retry slowly."""
+		if not self.rejected:
+			_LOGGER.warning(
+				"Relay (%s): Vome %s. Link this home again from the Vome panel; "
+				"retrying every %d minutes meanwhile",
+				self._server_id, what, RELAY_REJECTED_RETRY_DELAY // 60,
+			)
+		self._note_state(False, rejected=True)
+		return RELAY_REJECTED_RETRY_DELAY
+
+	async def _connect_once(self) -> bool:
+		"""One session.  True when Vome closed it as revoked."""
 		session = self._get_session()
 		headers = {"Authorization": f"Bearer {self._secret}"}
 		async with session.ws_connect(self._ws_url, headers=headers, heartbeat=30) as ws:
@@ -826,6 +853,7 @@ class RelayClient:
 				# them down so a reconnect starts from a clean slate.
 				await self._close_all_tunnels()
 		_LOGGER.info("Relay disconnected from Vome (%s)", self._server_id)
+		return ws.close_code == RELAY_CLOSE_REVOKED
 
 	async def _send(self, ws: aiohttp.ClientWebSocketResponse, payload: dict) -> None:
 		"""Serialise one JSON write to the shared relay socket."""

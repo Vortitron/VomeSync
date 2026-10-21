@@ -101,5 +101,7 @@ class VomeRemoteAccessSensor(BinarySensorEntity):
 			"relay": urlparse(client.ws_url or "").hostname or "",
 			"connected_since": _iso(client.connected_since),
 			"disconnected_since": _iso(client.disconnected_since),
+			# Off because Vome refused the link, not because it is unreachable.
+			"rejected": bool(getattr(client, "rejected", False)),
 		}
 		return attributes

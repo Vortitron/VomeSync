@@ -519,6 +519,18 @@
 		"relay_down": {
 			"title": "Remote access through Vome has been down for {minutes} minutes",
 			"description": "This home ({server_id}) has not been reachable through Vome for {minutes} minutes. Home Assistant keeps trying to reconnect on its own.\n\nCheck that this Home Assistant has an internet connection, and that nothing blocks outbound connections to Vome. If the home is up and this keeps happening, open the Vome panel for the relay's status and the log for the reason each attempt gives.\n\nThis issue clears itself when the connection returns."
+		},
+		"relay_rejected_trial": {
+			"title": "The coding agent key's trial has ended",
+			"description": "Vome no longer accepts this home's link ({server_id}): the two-day trial of the coding agent key has ended, so the key and remote access through Vome have stopped working.\n\nTo carry on, open the Vome panel and link this home to a vome.io account, or revoke the key there and issue a new one. Nothing in your home has been changed.\n\nThis issue clears itself when the link works again."
+		},
+		"relay_rejected_guest": {
+			"title": "The temporary Vome link has ended",
+			"description": "Vome no longer accepts this home's temporary link ({server_id}): the health-score run was not kept, so Vome has deleted it. Your last report is still on the Vome health score sensor.\n\nRun another check from the Vome panel any time, and sign in during that run to keep the link.\n\nThis issue clears itself when the link works again."
+		},
+		"relay_rejected": {
+			"title": "Vome no longer accepts this home's link",
+			"description": "Vome refused this home's link ({server_id}). This happens when the link was removed on vome.io, or its secret was replaced by linking the home again elsewhere.\n\nOpen the Vome panel and press Connect to Vome to link this home again. Remote access, backups to Vome and coding agent keys are off until then.\n\nThis issue clears itself when the link works again."
 		}
 	}
 }

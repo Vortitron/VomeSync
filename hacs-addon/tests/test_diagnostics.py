@@ -52,6 +52,7 @@ async def test_diagnostics_shape_and_no_secret_survives(hass, config_entry):
 	client.ws_url = "wss://dev.sync.vome.io/ws/relay"
 	client.connected_since = 1_700_000_000
 	client.disconnected_since = None
+	client.rejected = False
 	coordinator = MagicMock()
 	coordinator.switches = {"u1": {}}
 	coordinator.subscriptions = {"u2": {}}
@@ -63,7 +64,8 @@ async def test_diagnostics_shape_and_no_secret_survives(hass, config_entry):
 	}}
 	with patch("custom_components.vomesync.health_score.stored_report",
 			return_value={"score": 72, "generated_at": "2026-10-20T10:00:00Z", "findings": [1, 2, 3]}), \
-		patch("custom_components.vomesync.relay_health.is_down_too_long", return_value=False):
+		patch("custom_components.vomesync.relay_health.is_down_too_long", return_value=False), \
+		patch("custom_components.vomesync.relay_health.is_rejected_raised", return_value=False):
 		out = await diag.async_get_config_entry_diagnostics(hass, config_entry)
 
 	dumped = json.dumps(out)
@@ -74,7 +76,7 @@ async def test_diagnostics_shape_and_no_secret_survives(hass, config_entry):
 	assert out["relay"] == {
 		"linked": True, "server_id": "srv-1", "client_running": True, "connected": True,
 		"connected_since": "2023-11-14T22:13:20+00:00", "disconnected_since": None,
-		"down_too_long": False, "forward_ui": True, "lan_routes": 1, "webhooks": 1,
+		"rejected": False, "down_too_long": False, "rejected_issue": False, "forward_ui": True, "lan_routes": 1, "webhooks": 1,
 		"local_url_override": "", "remote_url": "https://a.home.vome.io", "guest": True,
 		"agent_trial": False, "relay_host": "wss://dev.sync.vome.io/ws/relay",
 	}
@@ -88,7 +90,8 @@ async def test_diagnostics_for_an_unlinked_entry_with_nothing_running(hass, conf
 	config_entry.title = "Vome"
 	hass.data = {DOMAIN: {}}
 	with patch("custom_components.vomesync.health_score.stored_report", return_value=None), \
-		patch("custom_components.vomesync.relay_health.is_down_too_long", return_value=None):
+		patch("custom_components.vomesync.relay_health.is_down_too_long", return_value=None), \
+		patch("custom_components.vomesync.relay_health.is_rejected_raised", return_value=None):
 		out = await diag.async_get_config_entry_diagnostics(hass, config_entry)
 	assert out["relay"]["linked"] is False
 	assert out["relay"]["client_running"] is False
