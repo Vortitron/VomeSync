@@ -9,6 +9,10 @@ the score through Vome was told the home had none. The integration now
 fetches the last finished report back from Vome when it starts (integration
 0.9.53).
 
+**A subscription whose switch is gone can be forgotten.** The integration
+warned every half hour to remove such a subscription, and its own forget
+action then refused it as unknown. It is accepted now.
+
 ## 0.3.67 — 20 October 2026
 
 **No key can mint a Home Assistant token through Vome.** A coding-agent key

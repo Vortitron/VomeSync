@@ -206,6 +206,29 @@ async def test_coordinator_forget_switch_is_local_only(hass, config_entry):
 
 
 @pytest.mark.asyncio
+async def test_coordinator_forget_switch_forgets_a_dead_subscription(hass, config_entry):
+	"""A subscription whose switch is gone from the server never reaches
+	coordinator.subscriptions (every status call fails), yet it is the one
+	the coordinator's own warning says to remove. GamlaBio, "Čuovga"."""
+	config_entry.options = {
+		"imported_switches": {
+			"uid-dead": {"name": "Čuovga", "is_owner": False, "cached_data": {}},
+		}
+	}
+	mock_api = AsyncMock()
+	with patch("custom_components.vomesync.coordinator.VomeSyncAPIClient", return_value=mock_api):
+		coordinator = VomeSyncCoordinator(hass, config_entry)
+		coordinator.websocket_client = MagicMock()
+		coordinator.websocket_client.unsubscribe = AsyncMock()
+		assert coordinator.subscriptions == {}
+		ok = await coordinator.forget_switch("uid-dead")
+	assert ok is True
+	mock_api.delete_switch.assert_not_called()
+	updated_options = hass.config_entries.async_update_entry.call_args[1]["options"]
+	assert "uid-dead" not in updated_options["imported_switches"]
+
+
+@pytest.mark.asyncio
 async def test_coordinator_forget_switch_unknown_uid(hass, config_entry):
 	"""forget_switch on a uid we don't track returns False and touches nothing."""
 	mock_api = AsyncMock()
