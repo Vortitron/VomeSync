@@ -40,7 +40,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import aiohttp
 
@@ -189,6 +189,21 @@ async def _emit_exit(
 
 class EsphomeWsError(Exception):
 	"""The dashboard refused a command, or its ``/ws`` API is unreachable."""
+
+
+# A job outlives the socket that follows it, so a dropped socket is followed
+# again, a few times, after a short pause for a dashboard that is busy compiling.
+FOLLOW_REATTACH_ATTEMPTS = 3
+FOLLOW_REATTACH_DELAY = 2.0
+
+_DROPPED = "closed the /ws connection"
+
+
+def _socket_dropped(err: BaseException) -> bool:
+	"""Whether ``err`` is the socket going away, not the dashboard saying no."""
+	if isinstance(err, (aiohttp.ClientError, ConnectionError)):
+		return True
+	return _DROPPED in str(err)
 
 
 def _args_for(command: str, configuration: str, port: Optional[str]) -> dict[str, Any]:
@@ -482,8 +497,17 @@ class EsphomeWsSession:
 		port: Optional[str],
 		emit: Callable[[dict[str, Any]], Any],
 		timeout: float,
+		*,
+		reconnect: Optional[Callable[[], Awaitable["EsphomeWsSession"]]] = None,
 	) -> None:
-		"""Run one of the ESPHome commands Vome exposes, streaming its output."""
+		"""Run one of the ESPHome commands Vome exposes, streaming its output.
+
+		``reconnect`` opens a fresh session. A build is a job on the dashboard,
+		not on this socket: when the socket drops mid-build (GamlaBio, 21 Oct
+		2026: eight minutes into an esp-idf rebuild, at ninja step 94/125, while
+		the build carried on and the next try found it done), the same job is
+		followed again on a new one rather than reported as a failure.
+		"""
 		args = _args_for(command, configuration, port)
 		if command in _STREAM_COMMANDS:
 			await self.stream(_STREAM_COMMANDS[command], args, emit, timeout)
@@ -501,5 +525,24 @@ class EsphomeWsSession:
 			return
 		# Following the job (rather than the deprecated per-command socket) is
 		# what puts an agent-triggered build in the dashboard's own task list.
-		message_id = await self._send(_FOLLOW_JOB, {"job_id": job_id})
-		await self._pump(message_id, emit, timeout, job_id=job_id)
+		session: EsphomeWsSession = self
+		reattached = 0
+		while True:
+			message_id = await session._send(_FOLLOW_JOB, {"job_id": job_id})
+			try:
+				await session._pump(message_id, emit, timeout, job_id=job_id)
+				return
+			except (EsphomeWsError, aiohttp.ClientError, ConnectionError) as err:
+				if reconnect is None or reattached >= FOLLOW_REATTACH_ATTEMPTS or not _socket_dropped(err):
+					raise
+				reattached += 1
+				_LOGGER.info(
+					"ESPHome /ws dropped while following job %s (%s); following it again (%d/%d)",
+					job_id, err, reattached, FOLLOW_REATTACH_ATTEMPTS,
+				)
+				await emit({"event": "line", "data": (
+					"[Vome] The ESPHome dashboard dropped the connection; the build "
+					"carries on there, so Vome is following the same job again.\n"
+				)})
+				await asyncio.sleep(FOLLOW_REATTACH_DELAY)
+				session = await reconnect()

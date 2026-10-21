@@ -616,6 +616,25 @@ async def async_ensure_local_access_token(hass: HomeAssistant) -> Optional[str]:
 	return hass.auth.async_create_access_token(refresh)
 
 
+# The dashboard's /ws during a build: a full esp-idf compile pegs the add-on,
+# and aiohttp closes a socket whose pong is more than half a heartbeat late.
+# A minute keeps a busy dashboard's socket open; a dead one is still noticed.
+ESPHOME_WS_HEARTBEAT = 60
+
+
+def _core_call_timeout(asked: Any) -> float:
+	"""How long to wait for Home Assistant on one relayed REST call.
+
+	The portal sends the wait it is prepared to give (15 s, or up to 50 when
+	a caller asks: ai_task.generate_data with an image takes 5–20 s). Never
+	less than RELAY_RPC_TIMEOUT, as before, and never past the relay
+	backend's own one-minute ceiling.
+	"""
+	if isinstance(asked, bool) or not isinstance(asked, (int, float)) or asked <= 0:
+		return RELAY_RPC_TIMEOUT
+	return min(max(RELAY_RPC_TIMEOUT, asked), RELAY_WS_MAX_REPLY_TIMEOUT)
+
+
 def _ws_reply_timeout(command: dict) -> float:
 	"""How long to wait for a command's reply.
 
@@ -905,7 +924,7 @@ class RelayClient:
 		try:
 			status, body, error = await self.execute(
 				data.get("method"), data.get("path"), data.get("body"), data.get("target"),
-				expect=data.get("expect"),
+				expect=data.get("expect"), timeout=data.get("timeout"),
 			)
 		except asyncio.CancelledError:
 			raise
@@ -1366,7 +1385,7 @@ class RelayClient:
 		port = port if isinstance(port, str) and port else None
 		try:
 			local = await self._get_session().ws_connect(
-				_to_ws_url(base, WS_PATH), heartbeat=30
+				_to_ws_url(base, WS_PATH), heartbeat=ESPHOME_WS_HEARTBEAT
 			)
 		except (aiohttp.ClientError, asyncio.TimeoutError) as err:
 			# A cached address may be stale (add-on restarted since discovery),
@@ -1406,11 +1425,28 @@ class RelayClient:
 				"text": json.dumps(frame),
 			})
 
+		async def reconnect() -> EsphomeWsSession:
+			# The job survives its socket; a fresh one follows it again.
+			nonlocal local
+			with suppress(Exception):
+				await local.close()
+			base, problem = await self._resolve_esphome_base()
+			if not base:
+				raise EsphomeWsError(problem or "ESPHome dashboard not found.")
+			local = await self._get_session().ws_connect(
+				_to_ws_url(base, WS_PATH), heartbeat=ESPHOME_WS_HEARTBEAT
+			)
+			self._ws_local[socket_id] = local
+			fresh = EsphomeWsSession(local)
+			await fresh.handshake(RELAY_RPC_TIMEOUT)
+			return fresh
+
 		try:
 			session = EsphomeWsSession(local)
 			await session.handshake(RELAY_RPC_TIMEOUT)
 			await session.run_build_command(
-				command, configuration, port, emit, ESPHOME_STREAM_TIMEOUT
+				command, configuration, port, emit, ESPHOME_STREAM_TIMEOUT,
+				reconnect=reconnect,
 			)
 		except EsphomeWsError as err:
 			close_code, close_reason = 1011, str(err)
@@ -1730,6 +1766,7 @@ class RelayClient:
 		target: Optional[str] = None,
 		*,
 		expect: Optional[str] = None,
+		timeout: Any = None,
 	) -> tuple[int, Optional[str], Optional[str]]:
 		"""Execute one relayed call locally; return ``(status, body_text, error)``.
 
@@ -1747,7 +1784,7 @@ class RelayClient:
 			return await self._execute_files(method, path, body)
 		if target == RELAY_RPC_TARGET_WEBSOCKET:
 			return await self._execute_websocket(body)
-		return await self._execute_core(method, path, body, expect=expect)
+		return await self._execute_core(method, path, body, expect=expect, timeout=timeout)
 
 	def _config_dir(self) -> Optional[Path]:
 		"""Home Assistant's config directory, resolved."""
@@ -1795,6 +1832,54 @@ class RelayClient:
 		if not base.is_dir():
 			return None, f"Home Assistant has no media folder ({raw} does not exist)."
 		return base, None
+
+	def _named_media_dirs(self, base: Optional[Path]) -> dict[str, Path]:
+		"""The other folders ``media_dirs:`` names, keyed as Home Assistant keys them.
+
+		Home Assistant shows each as its own media source next to "My media"
+		(GamlaBio's ``frontpath: /config/frontpath_snapshots``), so a caller
+		naturally asks for ``frontpath/<file>``. The main folder is excluded,
+		and so is any entry that does not exist on disk.
+		"""
+		dirs = getattr(getattr(self._hass, "config", None), "media_dirs", None)
+		if not isinstance(dirs, dict):
+			return {}
+		named: dict[str, Path] = {}
+		for key, raw in dirs.items():
+			if not isinstance(key, str) or not key or "/" in key or not raw:
+				continue
+			try:
+				folder = Path(raw).resolve()
+			except (OSError, ValueError):
+				continue
+			if folder == base or not folder.is_dir():
+				continue
+			named[key] = folder
+		return named
+
+	def _media_target(
+		self, rel: str
+	) -> tuple[Optional[Path], Optional[Path], str, Optional[str]]:
+		"""``(base, target, prefix, problem)`` for one media path.
+
+		A path whose first segment names a ``media_dirs`` folder is served from
+		that folder, unless the main media folder has a real subfolder of the
+		same name, which keeps every path that worked before working the same.
+		``prefix`` is that segment, put back on every path in the answer so a
+		listing's paths can be read straight back.
+		"""
+		base, problem = self._media_dir()
+		named = self._named_media_dirs(base)
+		clean = (rel or "").strip().lstrip("/")
+		head, _, rest = clean.partition("/")
+		if head in named and not (base is not None and (base / head).is_dir()):
+			folder = named[head]
+			target, problem = self._resolve_under(folder, rest, f"the {head} media folder")
+			return folder, target, head, problem
+		if base is None:
+			return None, None, "", problem
+		target, problem = self._resolve_under(base, clean, "the Home Assistant media folder")
+		return base, target, "", problem
 
 	@staticmethod
 	def _resolve_under(
@@ -1855,13 +1940,14 @@ class RelayClient:
 		read_encoding = query.get("encoding", "utf8")
 
 		if portion in FILES_MEDIA_PATHS:
-			base, problem = self._media_dir()
-			if base is None:
+			base, target, prefix, problem = self._media_target(rel)
+			if base is None or target is None:
 				return 0, None, problem
-			target, problem = self._resolve_under(base, rel, "the Home Assistant media folder")
-			if target is None:
-				return 0, None, problem
-			job: tuple = (self._media_op, portion, base, target, read_encoding)
+			extra = (
+				sorted(self._named_media_dirs(base))
+				if portion == "/media_list" and not prefix and target == base else []
+			)
+			job: tuple = (self._media_op, portion, base, target, read_encoding, prefix, extra)
 		else:
 			target, problem = self._resolve_config_path(rel)
 			if target is None:
@@ -1946,16 +2032,44 @@ class RelayClient:
 		}), None
 
 	def _media_op(
-		self, portion: str, base: Path, target: Path, read_encoding: str = "utf8"
+		self, portion: str, base: Path, target: Path, read_encoding: str = "utf8",
+		prefix: str = "", extra_dirs: Optional[list] = None,
 	) -> tuple[int, Optional[str], Optional[str]]:
-		"""Blocking half of a media-folder call: list or read, never write."""
+		"""Blocking half of a media-folder call: list or read, never write.
+
+		``prefix`` names the ``media_dirs`` folder the call was served from and
+		goes back on every path in the answer; ``extra_dirs`` are those folders,
+		shown as entries of the root listing so a caller can find them.
+		"""
 		if portion == "/media_list":
-			return self._list_dir(base, target)
-		return self._read_file(
-			base, target, read_encoding, FILES_MAX_MEDIA_READ_BYTES,
-			"A media file crosses the relay as one message, so larger ones "
-			"cannot be fetched this way.",
-		)
+			status, body, error = self._list_dir(base, target)
+		else:
+			status, body, error = self._read_file(
+				base, target, read_encoding, FILES_MAX_MEDIA_READ_BYTES,
+				"A media file crosses the relay as one message, so larger ones "
+				"cannot be fetched this way.",
+			)
+		if status != 200 or body is None or not (prefix or extra_dirs):
+			return status, body, error
+		payload = json.loads(body)
+
+		def _prefixed(value: str) -> str:
+			return f"{prefix}/{value}" if value else prefix
+
+		if prefix:
+			payload["path"] = _prefixed(payload.get("path") or "")
+			for entry in payload.get("entries") or []:
+				entry["path"] = _prefixed(entry.get("path") or "")
+		entries = payload.get("entries")
+		if extra_dirs and isinstance(entries, list):
+			taken = {entry.get("name") for entry in entries}
+			for key in extra_dirs:
+				if key not in taken:
+					entries.append({
+						"name": key, "path": key, "is_dir": True, "size": None,
+						"media_dir": True,
+					})
+		return status, json.dumps(payload), error
 
 	def _move_file(
 		self, source: Path, dest: Path, overwrite: bool
@@ -2133,7 +2247,7 @@ class RelayClient:
 
 	async def _execute_core(
 		self, method: Optional[str], path: Optional[str], body: Any,
-		*, expect: Optional[str] = None,
+		*, expect: Optional[str] = None, timeout: Any = None,
 	) -> tuple[int, Optional[str], Optional[str]]:
 		"""Proxy one HA core REST call.  Only ``/api/...`` paths are permitted.
 
@@ -2164,7 +2278,7 @@ class RelayClient:
 				url,
 				headers=headers,
 				json=body if body is not None else None,
-				timeout=aiohttp.ClientTimeout(total=RELAY_RPC_TIMEOUT),
+				timeout=aiohttp.ClientTimeout(total=_core_call_timeout(timeout)),
 			) as resp:
 				if expect == "base64":
 					raw = await resp.read()

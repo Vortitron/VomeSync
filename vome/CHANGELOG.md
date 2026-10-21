@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.71 — 21 October 2026
+
+**A firmware build that loses its connection keeps going.** A long
+ESPHome build (a full esp-idf rebuild takes several minutes) could drop
+the connection to the ESPHome dashboard while the dashboard was busy
+compiling, and Vome reported the build as failed although it carried on
+and finished. Vome now waits longer for a busy dashboard, and if the
+connection still drops it follows the same build again.
+
+**Media folders you named in `media_dirs:` can be read through Vome.** A
+coding agent asking for `frontpath/photo.jpg` was looking under /media
+only. A folder your configuration names is now found by its name, and it
+shows up in the media listing (integration 0.9.56).
+
+**Slow actions get their answer back.** When a caller asks for longer (an
+AI task looking at a camera image takes up to twenty seconds), the home
+now waits that long for Home Assistant instead of a fixed thirty seconds.
+
 ## 0.3.70 — 21 October 2026
 
 **When Vome refuses this home's link, Repairs says why.** A coding agent
