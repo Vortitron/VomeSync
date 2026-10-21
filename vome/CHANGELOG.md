@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.70 — 21 October 2026
+
+**When Vome refuses this home's link, Repairs says why.** A coding agent
+key's two-day trial that has ended, a health-score link nobody kept, or a
+link removed on vome.io all leave a home whose secret Vome no longer
+accepts. 0.3.69 would have reported that, after ten minutes, as remote
+access being down and suggested checking the internet connection. It now
+raises a separate issue at once, worded for which of the three it is and
+how to link again. The Remote access sensor gains a `rejected` attribute,
+and the home stops redialling every minute: it retries every fifteen
+minutes until the link works again (integration 0.9.55).
+
 ## 0.3.69 — 21 October 2026
 
 **A Remote access sensor.** The Vome device in Home Assistant now has a

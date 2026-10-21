@@ -52,6 +52,7 @@ def _client(connected):
 	client = MagicMock()
 	client.connected = connected
 	client.server_id = "srv-1"
+	client.rejected = False
 	return client
 
 
@@ -87,7 +88,7 @@ def test_back_before_the_clock_runs_out_is_silent(hass, issues):
 	hass.loop.fire_all()
 	create.assert_not_called()
 	# A reconnect also clears an issue that may have been raised earlier.
-	delete.assert_called_with(hass, DOMAIN, rh.issue_id("e1"))
+	assert rh.issue_id("e1") in [c.args[2] for c in delete.call_args_list]
 
 
 def test_reconnected_by_the_time_the_timer_fires_is_silent(hass, issues):
@@ -115,7 +116,8 @@ def test_deliberate_stop_cancels_and_clears(hass, issues):
 	assert hass.loop.scheduled[0].cancel.called
 	hass.loop.fire_all()
 	create.assert_not_called()
-	delete.assert_called_with(hass, DOMAIN, rh.issue_id("e1"))
+	deleted = [c.args[2] for c in delete.call_args_list]
+	assert rh.issue_id("e1") in deleted and rh.rejected_issue_id("e1") in deleted
 	assert "e1" not in hass.data[DOMAIN][rh._KEY]
 
 
@@ -141,7 +143,7 @@ def test_relay_client_reports_state_and_timestamps():
 		patch("custom_components.vomesync.relay_health.note_relay_state") as note:
 		client._note_state(True)
 		send.assert_called_once_with(hass, SIGNAL_RELAY_STATE, "e1", True)
-		note.assert_called_once_with(hass, "e1", True)
+		note.assert_called_once_with(hass, "e1", True, rejected=False)
 		assert client.connected_since is not None
 		client._note_state(False)
 		assert client.disconnected_since is not None
@@ -181,5 +183,144 @@ async def test_start_relay_passes_entry_and_starts_the_clock(config_entry):
 	with patch("homeassistant.helpers.issue_registry.async_delete_issue") as delete:
 		await rc.async_stop_relay(hass, config_entry)
 	assert hass.loop.scheduled[0].cancel.called
-	delete.assert_called_once()
+	assert delete.call_count == 2
 	assert rc.get_relay_client(hass, config_entry.entry_id) is None
+
+
+# ── A refused link is not an outage ─────────────────────────────────────────
+
+def _entry_with(relay):
+	entry = MagicMock()
+	entry.options = {"relay": relay}
+	return entry
+
+
+@pytest.mark.parametrize("relay,kind", [
+	({"server_id": "s", "agent_trial": True}, rh.REJECTED_TRIAL),
+	({"server_id": "s", "guest": True}, rh.REJECTED_GUEST),
+	({"server_id": "s"}, rh.REJECTED_LINK),
+])
+def test_refusal_raises_at_once_with_the_right_words(hass, issues, relay, kind):
+	create, delete = issues
+	hass.config_entries.async_get_entry.return_value = _entry_with(relay)
+	with patch("custom_components.vomesync.relay_client.get_relay_client",
+			return_value=_client(False)):
+		rh.note_relay_state(hass, "e1", False, rejected=True)
+	# No outage clock: waiting will not fix it.
+	assert hass.loop.scheduled == []
+	create.assert_called_once()
+	args, kwargs = create.call_args
+	assert args[2] == rh.rejected_issue_id("e1")
+	assert kwargs["translation_key"] == kind
+	assert kwargs["translation_placeholders"] == {"server_id": "srv-1"}
+	# The outage issue is withdrawn, the refusal one is not.
+	deleted = [c.args[2] for c in delete.call_args_list]
+	assert rh.issue_id("e1") in deleted
+	assert rh.rejected_issue_id("e1") not in deleted
+
+
+def test_unknown_entry_gets_the_plain_wording(hass):
+	hass.config_entries.async_get_entry.return_value = None
+	assert rh.rejected_kind(hass, "gone") == rh.REJECTED_LINK
+
+
+def test_outage_timer_stands_down_for_a_refused_link(hass, issues):
+	create, _ = issues
+	refused = _client(False)
+	refused.rejected = True
+	with patch("custom_components.vomesync.relay_client.get_relay_client", return_value=refused):
+		rh.note_relay_state(hass, "e1", False)
+		hass.loop.fire_all()
+	create.assert_not_called()
+
+
+def test_connecting_again_clears_the_refusal(hass, issues):
+	_, delete = issues
+	rh.note_relay_state(hass, "e1", True)
+	deleted = [c.args[2] for c in delete.call_args_list]
+	assert rh.rejected_issue_id("e1") in deleted and rh.issue_id("e1") in deleted
+
+
+def test_relay_loop_backs_off_on_a_401_and_marks_rejected():
+	import asyncio
+	import aiohttp
+	from custom_components.vomesync import relay_client as rc
+	from custom_components.vomesync.const import RELAY_REJECTED_RETRY_DELAY
+
+	client = rc.RelayClient(None, server_id="srv-1", secret="dead")
+	err = aiohttp.WSServerHandshakeError(MagicMock(), (), status=401, message="Unauthorized")
+	sleeps = []
+
+	async def _sleep(delay):
+		sleeps.append(delay)
+		client._closing = True
+
+	async def _go():
+		with patch.object(client, "_connect_once", side_effect=err), \
+			patch.object(rc.asyncio, "sleep", _sleep):
+			await client._run()
+
+	asyncio.run(_go())
+	assert client.rejected is True
+	assert sleeps == [RELAY_REJECTED_RETRY_DELAY]
+
+
+def test_relay_loop_treats_a_500_as_an_ordinary_failure():
+	import asyncio
+	import aiohttp
+	from custom_components.vomesync import relay_client as rc
+	from custom_components.vomesync.const import RELAY_RECONNECT_DELAY
+
+	client = rc.RelayClient(None, server_id="srv-1", secret="s")
+	err = aiohttp.WSServerHandshakeError(MagicMock(), (), status=500, message="Verification error")
+	sleeps = []
+
+	async def _sleep(delay):
+		sleeps.append(delay)
+		client._closing = True
+
+	async def _go():
+		with patch.object(client, "_connect_once", side_effect=err), \
+			patch.object(rc.asyncio, "sleep", _sleep):
+			await client._run()
+
+	asyncio.run(_go())
+	assert client.rejected is False
+	assert sleeps == [RELAY_RECONNECT_DELAY]
+
+
+def test_relay_loop_treats_a_revoked_close_as_a_refusal():
+	import asyncio
+	from custom_components.vomesync import relay_client as rc
+	from custom_components.vomesync.const import RELAY_REJECTED_RETRY_DELAY
+
+	client = rc.RelayClient(None, server_id="srv-1", secret="s")
+	sleeps = []
+
+	async def _sleep(delay):
+		sleeps.append(delay)
+		client._closing = True
+
+	async def _revoked():
+		return True
+
+	async def _go():
+		with patch.object(client, "_connect_once", side_effect=_revoked), \
+			patch.object(rc.asyncio, "sleep", _sleep):
+			await client._run()
+
+	asyncio.run(_go())
+	assert client.rejected is True
+	assert sleeps == [RELAY_REJECTED_RETRY_DELAY]
+
+
+def test_a_good_connection_clears_rejected():
+	from custom_components.vomesync.relay_client import RelayClient
+
+	client = RelayClient(None, server_id="srv-1", secret="s")
+	client._note_state(False, rejected=True)
+	first_down = client.disconnected_since
+	client._note_state(False, rejected=True)
+	assert client.disconnected_since == first_down  # the outage began at the first
+	client._note_state(True)
+	assert client.rejected is False

@@ -31,6 +31,7 @@ def _with_client(hass, config_entry, connected):
 	client.ws_url = "wss://sync.vome.io/ws/relay"
 	client.connected_since = 1_700_000_000 if connected else None
 	client.disconnected_since = None if connected else 1_700_000_000
+	client.rejected = False
 	hass.data = {DOMAIN: {"_relays": {config_entry.entry_id: client}}}
 	return client
 

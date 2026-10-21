@@ -62,7 +62,7 @@ def _iso(ts: Optional[float]) -> Optional[str]:
 
 def _relay_section(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
 	from .relay_client import get_relay_client
-	from .relay_health import is_down_too_long
+	from .relay_health import is_down_too_long, is_rejected_raised
 
 	relay = dict((entry.options or {}).get(CONF_RELAY) or {})
 	client = get_relay_client(hass, entry.entry_id)
@@ -73,7 +73,9 @@ def _relay_section(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
 		"connected": bool(client is not None and client.connected),
 		"connected_since": _iso(client.connected_since) if client else None,
 		"disconnected_since": _iso(client.disconnected_since) if client else None,
+		"rejected": bool(client is not None and getattr(client, "rejected", False)),
 		"down_too_long": is_down_too_long(hass, entry.entry_id),
+		"rejected_issue": is_rejected_raised(hass, entry.entry_id),
 		"forward_ui": bool(relay.get(CONF_RELAY_FORWARD_UI)),
 		"lan_routes": len(relay.get(CONF_RELAY_LAN_ROUTES) or []),
 		"webhooks": len(relay.get(CONF_RELAY_WEBHOOKS) or []),

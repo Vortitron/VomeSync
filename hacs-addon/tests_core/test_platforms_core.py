@@ -150,3 +150,36 @@ async def test_diagnostics_download_has_no_secret(hass, hass_client, loaded):
 	assert result["relay"]["connected"] is False
 	assert result["entry"]["options"]["relay"]["server_id"] == "srv-1"
 	assert result["switches"]["coordinator"] is True
+
+
+async def test_a_refused_trial_link_says_so_not_check_your_internet(hass, entry):
+	hass.config_entries.async_update_entry(entry, options={CONF_RELAY: {
+		CONF_RELAY_SERVER_ID: "srv-1", CONF_RELAY_SECRET: SECRET, "agent_trial": True,
+	}})
+	registry = ir.async_get(hass)
+	with _stubbed():
+		assert await hass.config_entries.async_setup(entry.entry_id)
+		await hass.async_block_till_done()
+		client = get_relay_client(hass, entry.entry_id)
+		client._refused("refused the link (HTTP 401)")
+		await hass.async_block_till_done()
+
+		issue = registry.async_get_issue(DOMAIN, rh.rejected_issue_id(entry.entry_id))
+		assert issue is not None
+		assert issue.translation_key == rh.REJECTED_TRIAL
+		assert issue.severity == ir.IssueSeverity.ERROR
+		assert registry.async_get_issue(DOMAIN, rh.issue_id(entry.entry_id)) is None
+		state = hass.states.get("binary_sensor.vome_remote_access")
+		assert state.state == "off" and state.attributes["rejected"] is True
+
+		# The outage clock must not raise its own issue on top.
+		rh._raise_if_still_down(hass, entry.entry_id)
+		assert registry.async_get_issue(DOMAIN, rh.issue_id(entry.entry_id)) is None
+
+		client._ws = MagicMock(closed=False)
+		client._note_state(True)
+		await hass.async_block_till_done()
+		assert registry.async_get_issue(DOMAIN, rh.rejected_issue_id(entry.entry_id)) is None
+		assert hass.states.get("binary_sensor.vome_remote_access").attributes["rejected"] is False
+		assert await hass.config_entries.async_unload(entry.entry_id)
+		await hass.async_block_till_done()
