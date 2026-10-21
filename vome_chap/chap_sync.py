@@ -123,6 +123,14 @@ EXCLUDED_TOP_PATTERNS = (
 	re.compile(r"^OZW_Log\.txt$"),
 )
 
+# Directories, by path from /config, that belong to one install alone.  The
+# e2e door's directory holds the private key for the home's own TLS name:
+# the whole point of that key is that Vome never has it, and a snapshot
+# through Vome (or a copy kept on a standby) would have handed it over --
+# the October 2026 sweep found it going up with the rest of .storage.  A
+# standby that takes the name issues a certificate of its own.
+EXCLUDED_PREFIXES = (".storage/vomesync_e2e",)
+
 # Anywhere in the tree.
 EXCLUDED_ANYWHERE_DIRS = frozenset({"__pycache__", ".git"})
 EXCLUDED_SUFFIXES = (".pyc", ".db-wal", ".db-shm", ".db-journal", ".tmp", ".log")
@@ -135,6 +143,8 @@ def is_synced(rel: str) -> bool:
 		return False
 	top = parts[0]
 	if top in EXCLUDED_TOP:
+		return False
+	if any(rel == pre or rel.startswith(pre + "/") for pre in EXCLUDED_PREFIXES):
 		return False
 	if len(parts) == 1 and any(p.search(top) for p in EXCLUDED_TOP_PATTERNS):
 		return False

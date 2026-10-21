@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.51"
+INTEGRATION_VERSION = "0.9.54"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -391,7 +391,12 @@ LOVELACE_WS_WRITE_COMMANDS = frozenset({
 LOVELACE_WS_ALLOWED_COMMANDS = LOVELACE_WS_READ_COMMANDS | LOVELACE_WS_WRITE_COMMANDS
 
 # Portal validates scope before dispatch; the relay accepts any well-formed HA
-# WebSocket command type (full mode for registries, etc.).
+# WebSocket command type (full mode for registries, etc.) -- except these.
+# ``auth/*`` mints Home Assistant credentials (a long-lived token, a signed
+# URL); the portal refuses them to every key since October 2026, and the
+# home refuses them too, so a portal that got it wrong could not hand out a
+# token that works on this Home Assistant without Vome in the middle.
+WS_COMMAND_DENIED_PREFIXES = ("auth/",)
 WS_COMMAND_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*/[a-z0-9_./-]{0,120}$")
 
 # Home Assistant's WebSocket API reports errors with *string* codes --

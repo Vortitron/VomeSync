@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from contextlib import suppress
 from datetime import timedelta
@@ -108,6 +109,7 @@ from .const import (
 	RELAY_RPC_TIMEOUT,
 	RELAY_WS_MAX_REPLY_TIMEOUT,
 	RELAY_WS_MAX_COMMAND_BYTES,
+	WS_COMMAND_DENIED_PREFIXES,
 	WS_COMMAND_TYPE_RE,
 	WS_ERROR_STATUS,
 	RELAY_WS_MSG_HA_RPC,
@@ -155,6 +157,9 @@ from .lan_routes import (
 _LOGGER = logging.getLogger(__name__)
 
 _RELAYS_KEY = "_relays"
+# Dispatcher signal: ``(entry_id, connected)`` whenever a relay tunnel opens
+# or closes.  The "Remote access" binary sensor listens for it.
+SIGNAL_RELAY_STATE = f"{DOMAIN}_relay_state"
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 # Client name of the long-lived access token we mint for local API calls.  It
@@ -641,9 +646,18 @@ class RelayClient:
 		lan_routes: Optional[list] = None,
 		webhooks: Optional[list] = None,
 		session: Optional[aiohttp.ClientSession] = None,
+		entry_id: Optional[str] = None,
 	) -> None:
 		self._hass = hass
 		self._server_id = server_id
+		# Which config entry this tunnel belongs to, so the "Remote access"
+		# binary sensor and the Repairs issue can be told when it comes and
+		# goes.  None in tests that build a bare client.
+		self._entry_id = entry_id
+		# When the socket last opened and last closed (time.time()), for the
+		# sensor's attributes and for diagnostics.  None until it happens.
+		self.connected_since: Optional[float] = None
+		self.disconnected_since: Optional[float] = None
 		self._secret = secret
 		self._ws_url = ws_url or DEFAULT_RELAY_WS_URL
 		self._local_token = local_token
@@ -692,6 +706,46 @@ class RelayClient:
 		# Serialise writes to the single relay socket: HTTP responses and many
 		# concurrent WS frames share it, and aiohttp does not guard interleaving.
 		self._send_lock = asyncio.Lock()
+
+	@property
+	def connected(self) -> bool:
+		"""Whether the tunnel to Vome is open right now."""
+		return self._ws is not None and not self._ws.closed
+
+	@property
+	def server_id(self) -> str:
+		return self._server_id
+
+	@property
+	def ws_url(self) -> str:
+		return self._ws_url
+
+	def _note_state(self, connected: bool) -> None:
+		"""Tell the rest of the integration the tunnel opened or closed.
+
+		Both listeners are optional: a bare client (no hass, no entry) just
+		keeps the timestamps.  The Repairs side is reached through a
+		function so an import error there can never take the relay down.
+		"""
+		now = time.time()
+		if connected:
+			self.connected_since = now
+		else:
+			self.disconnected_since = now
+		if self._hass is None or not self._entry_id:
+			return
+		try:
+			from homeassistant.helpers.dispatcher import async_dispatcher_send
+
+			async_dispatcher_send(self._hass, SIGNAL_RELAY_STATE, self._entry_id, connected)
+		except Exception as err:  # noqa: BLE001 - a listener's bug is not ours
+			_LOGGER.debug("Relay (%s): state listeners failed: %s", self._server_id, err)
+		try:
+			from .relay_health import note_relay_state
+
+			note_relay_state(self._hass, self._entry_id, connected)
+		except Exception as err:  # noqa: BLE001
+			_LOGGER.debug("Relay (%s): repairs hook failed: %s", self._server_id, err)
 
 	@property
 	def local_url(self) -> str:
@@ -758,6 +812,7 @@ class RelayClient:
 		async with session.ws_connect(self._ws_url, headers=headers, heartbeat=30) as ws:
 			self._ws = ws
 			_LOGGER.info("Relay connected to Vome (%s)", self._server_id)
+			self._note_state(True)
 			try:
 				async for msg in ws:
 					if msg.type == aiohttp.WSMsgType.TEXT:
@@ -766,6 +821,7 @@ class RelayClient:
 						break
 			finally:
 				self._ws = None
+				self._note_state(False)
 				# A dropped tunnel orphans every bridged browser socket: tear
 				# them down so a reconnect starts from a clean slate.
 				await self._close_all_tunnels()
@@ -1997,6 +2053,11 @@ class RelayClient:
 		cmd_type = command.get("type")
 		if not isinstance(cmd_type, str) or not WS_COMMAND_TYPE_RE.match(cmd_type):
 			return 0, None, "Refusing to execute a malformed WebSocket command."
+		if cmd_type.startswith(WS_COMMAND_DENIED_PREFIXES):
+			return 0, None, (
+				f"Refusing {cmd_type!r}: it would issue a Home Assistant credential "
+				"that works without Vome."
+			)
 		try:
 			raw = json.dumps(command)
 		except (TypeError, ValueError):
@@ -2638,9 +2699,14 @@ async def async_start_relay(hass: HomeAssistant, entry) -> None:
 		forward_ui=bool(relay.get(CONF_RELAY_FORWARD_UI)),
 		lan_routes=relay.get(CONF_RELAY_LAN_ROUTES),
 		webhooks=relay.get(CONF_RELAY_WEBHOOKS),
+		entry_id=entry.entry_id,
 	)
 	hass.data.setdefault(DOMAIN, {}).setdefault(_RELAYS_KEY, {})[entry.entry_id] = client
 	client.start()
+	# Not connected yet, and say so: the Remote access sensor becomes
+	# available, and the Repairs clock starts, so a link that never comes
+	# up after a restart is reported just like one that dropped.
+	client._note_state(False)
 	# Log the resolved local URL: when it is wrong the relay still connects and
 	# still looks healthy, so this line is the only external evidence of what we
 	# are actually dialling.
@@ -2659,6 +2725,14 @@ async def async_stop_relay(hass: HomeAssistant, entry) -> None:
 	client = relays.pop(entry.entry_id, None)
 	if client is not None:
 		await client.stop()
+	# A deliberate stop (unlink, reload, shutdown) is not an outage: the
+	# Repairs issue must not be raised, or linger, for a link that is gone.
+	try:
+		from .relay_health import forget_relay
+
+		forget_relay(hass, entry.entry_id)
+	except Exception as err:  # noqa: BLE001
+		_LOGGER.debug("Relay: repairs clean-up failed: %s", err)
 
 
 def get_relay_client(hass: HomeAssistant, entry_id: str) -> Optional[RelayClient]:

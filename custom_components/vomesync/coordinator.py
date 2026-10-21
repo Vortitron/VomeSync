@@ -1037,6 +1037,22 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		except Exception as ex:  # noqa: BLE001 - registry cleanup must not block the forget
 			_LOGGER.debug("Could not remove device registry entry for switch %s: %s", uid, ex)
 
+	def _is_imported(self, uid: str) -> bool:
+		"""Whether the entry's options still carry this switch.
+
+		A subscription whose switch is gone from the server never reaches
+		``self.subscriptions`` (its status call fails every time), so the
+		forget action refused the very uid the coordinator's own warning
+		told people to remove (GamlaBio, "Čuovga", 157 misses in a row).
+		"""
+		options = self.config_entry.options or {}
+		if uid in (options.get("imported_switches") or {}):
+			return True
+		return any(
+			isinstance(sub, dict) and sub.get("uid") == uid
+			for sub in (options.get("subscriptions") or {}).values()
+		)
+
 	async def forget_switch(self, uid: str) -> bool:
 		"""Remove a switch from this Home Assistant only (no server call).
 
@@ -1046,7 +1062,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		owner, elsewhere) is unaffected. Returns False if the uid wasn't
 		known locally.
 		"""
-		if uid not in self.switches and uid not in self.subscriptions:
+		if uid not in self.switches and uid not in self.subscriptions and not self._is_imported(uid):
 			return False
 		_LOGGER.info("Forgetting switch locally (no server call): uid=%s", uid)
 		await self._forget_switch_locally(uid)

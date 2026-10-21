@@ -2896,3 +2896,20 @@ class TestWsReplyTimeout:
 		assert rc._ws_reply_timeout({"type": "x", "timeout": 1}) == rc.RELAY_RPC_TIMEOUT
 		assert rc._ws_reply_timeout({"type": "x", "timeout": True}) == rc.RELAY_RPC_TIMEOUT
 		assert rc._ws_reply_timeout({"type": "x", "timeout": "50"}) == rc.RELAY_RPC_TIMEOUT
+
+
+class TestNoCredentialMintingOverWebSocket:
+	"""October 2026 sweep: the portal classed ``auth/long_lived_access_token``
+	as a read.  The home refuses every ``auth/*`` command itself, so a portal
+	that gets the scope wrong still cannot hand out a token that works on
+	this Home Assistant without Vome in the middle."""
+
+	@pytest.mark.asyncio
+	@pytest.mark.parametrize("cmd", ["auth/long_lived_access_token", "auth/sign_path"])
+	async def test_auth_commands_are_refused_before_any_connection(self, cmd):
+		session = AsyncMock()
+		client = RelayClient(None, server_id="rly-1", secret="sek", session=session)
+		status, body, err = await client._execute_websocket({"type": cmd, "client_name": "x"})
+		assert status == 0 and body is None
+		assert "credential" in err
+		session.ws_connect.assert_not_called()

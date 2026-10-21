@@ -17,7 +17,7 @@ from .relay_client import async_start_relay, async_stop_relay
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.SENSOR, Platform.BINARY_SENSOR]
 
 # Option keys whose values are secrets and must never be logged verbatim.
 _SENSITIVE_OPTION_KEYS = frozenset({"secret", "local_token", "token", "password"})
@@ -134,6 +134,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 	# Setup platforms (entities will be created from coordinator data)
 	await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+	# The last health report, back onto its sensor: Home Assistant forgets
+	# it on every restart and Vome does not. Off the setup path, so a slow
+	# or absent Vome costs the entry nothing.
+	from . import health_score
+	entry.async_create_background_task(
+		hass, health_score.async_restore_report(hass, entry), f"{DOMAIN} health report",
+	)
 
 	pending_uid = (entry.data or {}).get(CONF_SWITCH_UID)
 	if pending_uid:

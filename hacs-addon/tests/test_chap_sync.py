@@ -1445,3 +1445,22 @@ class TestTheRunningInstallsAddOnsAreTheOwners:
 		boom = lambda *a, **k: pytest.fail("a standby starts nothing on request")
 		info = {"role": "standby", "start_addons": {"id": "k1", "slugs": ["core_matter_server"]}}
 		assert cs.maybe_start_addons(info, {}, tmp_path / "s.json", boom) is None
+
+
+class TestE2EKeyStaysHome:
+	"""October 2026 sweep: the e2e door's private key lived under .storage and
+	went into every snapshot, so a standby through Vome gave Vome the one key
+	e2e exists to keep from it."""
+
+	@pytest.mark.parametrize("rel", [
+		".storage/vomesync_e2e",
+		".storage/vomesync_e2e/key.pem",
+		".storage/vomesync_e2e/account.key",
+		".storage/vomesync_e2e/cert.pem",
+	])
+	def test_e2e_directory_is_never_synced(self, rel):
+		assert not cs.is_synced(rel)
+
+	def test_the_rest_of_storage_still_is(self):
+		assert cs.is_synced(".storage/core.config_entries")
+		assert cs.is_synced(".storage/vomesync_e2e_unrelated")

@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.3.69 — 21 October 2026
+
+**A Remote access sensor.** The Vome device in Home Assistant now has a
+binary sensor, **Remote access**, that is on while this home's tunnel to
+Vome is open and off while it is not, with when it last opened and closed
+as attributes. An automation can now tell you when the house drops off
+Vome, and a dashboard can show it as a plain dot. It is unavailable, not
+off, in a home that has never been linked (integration 0.9.54).
+
+**Settings → Repairs says when remote access has been down too long.**
+Short drops (a router reboot, a Vome deploy) are reconnected quietly as
+before. If the tunnel stays closed for ten minutes, a Repairs issue tells
+you so and what to check; it clears itself when the connection returns.
+Unlinking or restarting never raises it.
+
+**Download diagnostics.** Settings → Devices & services → Vome → ⋮ →
+Download diagnostics gives a file to attach to a bug report: the entry's
+settings, the relay's state, the health score's headline and the switch
+counts, with every key, token and secret already blanked.
+
+## 0.3.68 — 20 October 2026
+
+**Your health score survives a restart.** Home Assistant kept the last
+health report only in memory, so every restart emptied the Vome health
+score sensor until someone ran a new check — and a coding agent asking for
+the score through Vome was told the home had none. The integration now
+fetches the last finished report back from Vome when it starts (integration
+0.9.53).
+
+**A subscription whose switch is gone can be forgotten.** The integration
+warned every half hour to remove such a subscription, and its own forget
+action then refused it as unknown. It is accepted now.
+
+## 0.3.67 — 20 October 2026
+
+**No key can mint a Home Assistant token through Vome.** A coding-agent key
+with only read access could have asked your home, through Vome, for a
+long-lived Home Assistant token in your name, and then used it without Vome
+in the middle: the command carried none of the words that mark a change.
+Vome now refuses every credential-issuing command to every key, and so does
+your home, so a mistake on our side could not reopen it. Unfamiliar commands
+need the configuration permission rather than the read one (integration
+0.9.52).
+
+If you updated from a version before 0.3.64 (5 October), your personal key
+was for a time in an owner switch's attributes, which Home Assistant's
+history keeps for ten days by default and backups keep for good. Make a new
+key on vome.io if anyone other than you can read your history or backups.
 ## 0.3.66 — 16 October 2026
 
 An ESPHome build that fails, for instance because the YAML does not

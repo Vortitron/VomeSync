@@ -18,7 +18,9 @@ sidebar. No account is needed to start.
 
 - **Remote access**: once the app is linked to your vome.io account, open
   your Home Assistant from anywhere, with no port-forwarding, public IP or
-  Nabu Casa. LAN devices and webhooks can go through the same link.
+  Nabu Casa. LAN devices and webhooks can go through the same link. A
+  **Remote access** sensor shows whether the link is up, and Settings →
+  Repairs tells you if it has been down for ten minutes.
 - **Health score**: a score out of 100 for your install, with what to fix
   first: backups, updates, chatty devices, dead entities, disk and more.
 - **Coding agent**: a key for Claude Code, Cursor or VS Code, scoped to what
