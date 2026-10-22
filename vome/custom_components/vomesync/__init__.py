@@ -117,6 +117,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	await async_start_ice_servers(hass, entry)
 	from .e2e_remote import async_start_e2e
 	await async_start_e2e(hass, entry)
+	# A temporary link (agent-key trial, guest health run) warns in Repairs
+	# before it runs out.  Never blocks setup.
+	try:
+		from .trial_clock import async_start as async_start_trial_clock
+		async_start_trial_clock(hass, entry)
+	except Exception as err:  # noqa: BLE001
+		_LOGGER.debug("Link-ending check not started: %s", err)
 
 	# Switch sync is best-effort at startup: the coordinator refreshes on its
 	# regular interval, so a failed first fetch degrades switch entities
@@ -350,6 +357,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	await async_stop_ice_servers(hass, entry)
 	from .e2e_remote import async_stop_e2e
 	await async_stop_e2e(hass, entry)
+	from .trial_clock import async_stop as async_stop_trial_clock
+	async_stop_trial_clock(hass, entry)
 
 	# Unload platforms
 	unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

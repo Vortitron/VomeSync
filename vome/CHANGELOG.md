@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.72 — 22 October 2026
+
+**A warning before a temporary link ends.** A coding agent key issued
+without an account lasts two days, and a login-free health check's link
+lasts one. Both said so once, when they started, and then the key simply
+stopped working, usually in the middle of an agent session. Settings →
+Repairs now says how long is left, twelve hours before a key's trial ends
+and four hours before a health check's link does, and how to keep it. The
+warning goes away by itself once the link is kept or has ended
+(integration 0.9.57).
+
 ## 0.3.71 — 21 October 2026
 
 **A firmware build that loses its connection keeps going.** A long

@@ -531,6 +531,14 @@
 		"relay_rejected": {
 			"title": "Vome no longer accepts this home's link",
 			"description": "Vome refused this home's link ({server_id}). This happens when the link was removed on vome.io, or its secret was replaced by linking the home again elsewhere.\n\nOpen the Vome panel and press Connect to Vome to link this home again. Remote access, backups to Vome and coding agent keys are off until then.\n\nThis issue clears itself when the link works again."
+		},
+		"agent_trial_ending": {
+			"title": "The coding agent key stops working in {left}",
+			"description": "This home's coding agent key is a two-day trial, and it ends in {left}. When it does, the key and remote access through Vome stop working.\n\nTo keep it, open the Vome panel and connect a Vome account. The same key carries over and the clock comes off, so nothing has to be pasted into your editor again.\n\nIf you do not need it, do nothing: it ends on its own."
+		},
+		"guest_link_ending": {
+			"title": "The temporary Vome link ends in {left}",
+			"description": "The link opened by your login-free health check ends in {left}. Vome then deletes it, the remote address and its copy of the report. The report stays on the Vome health score sensor either way.\n\nTo keep it, open the Vome panel's health score view and sign in from the link there, or use the link in the Vome health score notification.\n\nIf you do not need it, do nothing: it ends on its own."
 		}
 	}
 }

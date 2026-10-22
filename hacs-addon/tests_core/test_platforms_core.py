@@ -183,3 +183,36 @@ async def test_a_refused_trial_link_says_so_not_check_your_internet(hass, entry)
 		assert hass.states.get("binary_sensor.vome_remote_access").attributes["rejected"] is False
 		assert await hass.config_entries.async_unload(entry.entry_id)
 		await hass.async_block_till_done()
+
+
+async def test_a_trial_near_its_end_warns_and_the_warning_goes_when_kept(hass, entry):
+	import time
+	from homeassistant.util import dt as dt_util
+	from pytest_homeassistant_custom_component.common import async_fire_time_changed
+	from custom_components.vomesync import trial_clock as tc
+
+	hass.config_entries.async_update_entry(entry, options={CONF_RELAY: {
+		CONF_RELAY_SERVER_ID: "srv-1", CONF_RELAY_SECRET: SECRET,
+		"agent_trial": True, "agent_trial_expires_at": int(time.time()) + 3 * 3600,
+	}})
+	registry = ir.async_get(hass)
+	with _stubbed():
+		assert await hass.config_entries.async_setup(entry.entry_id)
+		await hass.async_block_till_done()
+		issue = registry.async_get_issue(DOMAIN, tc.issue_id(entry.entry_id))
+		assert issue is not None
+		assert issue.translation_key == tc.ENDING_TRIAL
+		assert issue.translation_placeholders == {"left": "3 hours"}
+
+		# Linked to an account: the trial flag goes, and the next check
+		# withdraws the warning.
+		hass.config_entries.async_update_entry(entry, options={CONF_RELAY: {
+			CONF_RELAY_SERVER_ID: "srv-1", CONF_RELAY_SECRET: SECRET,
+		}})
+		async_fire_time_changed(hass, dt_util.utcnow() + tc.CHECK_EVERY)
+		await hass.async_block_till_done()
+		assert registry.async_get_issue(DOMAIN, tc.issue_id(entry.entry_id)) is None
+
+		assert await hass.config_entries.async_unload(entry.entry_id)
+		await hass.async_block_till_done()
+	assert entry.entry_id not in hass.data.get(DOMAIN, {}).get(tc._KEY, {})
