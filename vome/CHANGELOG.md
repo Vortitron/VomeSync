@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.3.73 — 25 October 2026
+
+**Vome's actions are for administrators only.** Everything the Vome
+integration offers as an action changes the remote link, the relay, your
+switches or Home Assistant's own settings, or hands back a key. A household
+member's account could call these too. Now Home Assistant refuses anyone who
+is not an administrator. Automations, and the Vome app's own panel, work as
+before.
+
+**The Vome app now makes the YAML changes.** Home Assistant integrations may
+not write your YAML configuration, so the integration no longer does. When a
+coding agent changes configuration.yaml or another YAML file over the remote
+link, or the chat saves or deletes an automation, the Vome app does it. The
+app saves automations through Home Assistant's own automation editor. Without
+the app installed, YAML can still be read, and other files changed. The chat
+gives you the automation and tells you where to paste it.
+
+**No more nudging HACS.** The integration used to start HACS's update check
+for custom repositories after a restart. It no longer reaches into HACS.
+
+**Less work on Home Assistant's main thread.** Getting the end-to-end
+certificate, finding a file for a remote request, and the panel's status no
+longer touch the disk while Home Assistant waits.
+
+Needs Home Assistant 2025.6 or newer (integration 0.9.58).
+
+## 0.3.72 — 22 October 2026
+
+**A warning before a temporary link ends.** A coding agent key issued
+without an account lasts two days, and a login-free health check's link
+lasts one. Both said so once, when they started, and then the key simply
+stopped working, usually in the middle of an agent session. Settings →
+Repairs now says how long is left, twelve hours before a key's trial ends
+and four hours before a health check's link does, and how to keep it. The
+warning goes away by itself once the link is kept or has ended
+(integration 0.9.57).
+
+## 0.3.71 — 21 October 2026
+
+**A firmware build that loses its connection keeps going.** A long
+ESPHome build (a full esp-idf rebuild takes several minutes) could drop
+the connection to the ESPHome dashboard while the dashboard was busy
+compiling, and Vome reported the build as failed although it carried on
+and finished. Vome now waits longer for a busy dashboard, and if the
+connection still drops it follows the same build again.
+
+**Media folders you named in `media_dirs:` can be read through Vome.** A
+coding agent asking for `frontpath/photo.jpg` was looking under /media
+only. A folder your configuration names is now found by its name, and it
+shows up in the media listing (integration 0.9.56).
+
+**Slow actions get their answer back.** When a caller asks for longer (an
+AI task looking at a camera image takes up to twenty seconds), the home
+now waits that long for Home Assistant instead of a fixed thirty seconds.
+
 ## 0.3.70 — 21 October 2026
 
 **When Vome refuses this home's link, Repairs says why.** A coding agent

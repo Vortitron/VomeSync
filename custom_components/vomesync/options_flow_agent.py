@@ -33,7 +33,7 @@ SCOPE_LABELS = {
 	"ha:read": "See states, history and settings",
 	"ha:write": "Control devices (call actions)",
 	"ha:config": "Edit automations, scripts and dashboards",
-	"ha:files": "Read and write files in /config, including secrets.yaml",
+	"ha:files": "Read files in /config, including secrets.yaml, and change them (YAML only with the Vome app)",
 }
 
 _SD_ISSUED = "agent_issued"

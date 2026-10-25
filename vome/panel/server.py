@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chat  # noqa: E402 - the Chat page, next to this file
+import integration_channel  # noqa: E402 - the YAML the integration hands over
 
 DEFAULT_PORTAL_URL = "https://vome.io"
 RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
@@ -679,7 +680,11 @@ class PanelHandler(BaseHTTPRequestHandler):
 			status, payload = call_service_ready("get_remote_status", {})
 			body = _unwrap(payload)
 			if isinstance(body, dict):
-				body = {**body, **installed_versions()}
+				root = _config_root()
+				body = {
+					**body, **installed_versions(),
+					"addon_marker": bool(root) and os.path.isfile(f"{root}/vome/addon.marker"),
+				}
 				# A service that returned {"error": ...} succeeded at the HTTP
 				# layer (200) but failed logically — flag it so the panel shows
 				# the message instead of silently rendering an error object.
@@ -830,6 +835,10 @@ def main() -> None:
 	STATIC_DIR.mkdir(parents=True, exist_ok=True)
 	server = ThreadingHTTPServer(("0.0.0.0", PORT), PanelHandler)
 	LOG.info("Vome panel listening on :%s (static=%s)", PORT, STATIC_DIR)
+	integration_channel.start(
+		call_service=call_service, unwrap=_unwrap, ha_request=_ha_request,
+		config_root=_config_root,
+	)
 	server.serve_forever()
 
 

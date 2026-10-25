@@ -44,6 +44,7 @@ from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from . import app_channel, file_ops
 from .const import (
 	CONF_RELAY,
 	CONF_RELAY_ESPHOME_URL,
@@ -96,12 +97,10 @@ from .const import (
 	RELAY_RECONNECT_MAX_DELAY,
 	FILES_ALLOWED_METHODS,
 	FILES_ALLOWED_PATHS,
-	FILES_DELETE_PROTECTED,
 	FILES_DENIED_DIRS,
 	FILES_MAX_ENTRIES,
 	FILES_MAX_MEDIA_READ_BYTES,
 	FILES_MAX_READ_BYTES,
-	FILES_MAX_WRITE_BYTES,
 	FILES_MEDIA_PATHS,
 	FILES_POST_ONLY_PATHS,
 	RELAY_RPC_TARGET_ESPHOME,
@@ -616,6 +615,25 @@ async def async_ensure_local_access_token(hass: HomeAssistant) -> Optional[str]:
 	return hass.auth.async_create_access_token(refresh)
 
 
+# The dashboard's /ws during a build: a full esp-idf compile pegs the add-on,
+# and aiohttp closes a socket whose pong is more than half a heartbeat late.
+# A minute keeps a busy dashboard's socket open; a dead one is still noticed.
+ESPHOME_WS_HEARTBEAT = 60
+
+
+def _core_call_timeout(asked: Any) -> float:
+	"""How long to wait for Home Assistant on one relayed REST call.
+
+	The portal sends the wait it is prepared to give (15 s, or up to 50 when
+	a caller asks: ai_task.generate_data with an image takes 5–20 s). Never
+	less than RELAY_RPC_TIMEOUT, as before, and never past the relay
+	backend's own one-minute ceiling.
+	"""
+	if isinstance(asked, bool) or not isinstance(asked, (int, float)) or asked <= 0:
+		return RELAY_RPC_TIMEOUT
+	return min(max(RELAY_RPC_TIMEOUT, asked), RELAY_WS_MAX_REPLY_TIMEOUT)
+
+
 def _ws_reply_timeout(command: dict) -> float:
 	"""How long to wait for a command's reply.
 
@@ -905,7 +923,7 @@ class RelayClient:
 		try:
 			status, body, error = await self.execute(
 				data.get("method"), data.get("path"), data.get("body"), data.get("target"),
-				expect=data.get("expect"),
+				expect=data.get("expect"), timeout=data.get("timeout"),
 			)
 		except asyncio.CancelledError:
 			raise
@@ -1366,7 +1384,7 @@ class RelayClient:
 		port = port if isinstance(port, str) and port else None
 		try:
 			local = await self._get_session().ws_connect(
-				_to_ws_url(base, WS_PATH), heartbeat=30
+				_to_ws_url(base, WS_PATH), heartbeat=ESPHOME_WS_HEARTBEAT
 			)
 		except (aiohttp.ClientError, asyncio.TimeoutError) as err:
 			# A cached address may be stale (add-on restarted since discovery),
@@ -1406,11 +1424,28 @@ class RelayClient:
 				"text": json.dumps(frame),
 			})
 
+		async def reconnect() -> EsphomeWsSession:
+			# The job survives its socket; a fresh one follows it again.
+			nonlocal local
+			with suppress(Exception):
+				await local.close()
+			base, problem = await self._resolve_esphome_base()
+			if not base:
+				raise EsphomeWsError(problem or "ESPHome dashboard not found.")
+			local = await self._get_session().ws_connect(
+				_to_ws_url(base, WS_PATH), heartbeat=ESPHOME_WS_HEARTBEAT
+			)
+			self._ws_local[socket_id] = local
+			fresh = EsphomeWsSession(local)
+			await fresh.handshake(RELAY_RPC_TIMEOUT)
+			return fresh
+
 		try:
 			session = EsphomeWsSession(local)
 			await session.handshake(RELAY_RPC_TIMEOUT)
 			await session.run_build_command(
-				command, configuration, port, emit, ESPHOME_STREAM_TIMEOUT
+				command, configuration, port, emit, ESPHOME_STREAM_TIMEOUT,
+				reconnect=reconnect,
 			)
 		except EsphomeWsError as err:
 			close_code, close_reason = 1011, str(err)
@@ -1730,6 +1765,7 @@ class RelayClient:
 		target: Optional[str] = None,
 		*,
 		expect: Optional[str] = None,
+		timeout: Any = None,
 	) -> tuple[int, Optional[str], Optional[str]]:
 		"""Execute one relayed call locally; return ``(status, body_text, error)``.
 
@@ -1747,7 +1783,7 @@ class RelayClient:
 			return await self._execute_files(method, path, body)
 		if target == RELAY_RPC_TARGET_WEBSOCKET:
 			return await self._execute_websocket(body)
-		return await self._execute_core(method, path, body, expect=expect)
+		return await self._execute_core(method, path, body, expect=expect, timeout=timeout)
 
 	def _config_dir(self) -> Optional[Path]:
 		"""Home Assistant's config directory, resolved."""
@@ -1796,34 +1832,60 @@ class RelayClient:
 			return None, f"Home Assistant has no media folder ({raw} does not exist)."
 		return base, None
 
+	def _named_media_dirs(self, base: Optional[Path]) -> dict[str, Path]:
+		"""The other folders ``media_dirs:`` names, keyed as Home Assistant keys them.
+
+		Home Assistant shows each as its own media source next to "My media"
+		(GamlaBio's ``frontpath: /config/frontpath_snapshots``), so a caller
+		naturally asks for ``frontpath/<file>``. The main folder is excluded,
+		and so is any entry that does not exist on disk.
+		"""
+		dirs = getattr(getattr(self._hass, "config", None), "media_dirs", None)
+		if not isinstance(dirs, dict):
+			return {}
+		named: dict[str, Path] = {}
+		for key, raw in dirs.items():
+			if not isinstance(key, str) or not key or "/" in key or not raw:
+				continue
+			try:
+				folder = Path(raw).resolve()
+			except (OSError, ValueError):
+				continue
+			if folder == base or not folder.is_dir():
+				continue
+			named[key] = folder
+		return named
+
+	def _media_target(
+		self, rel: str
+	) -> tuple[Optional[Path], Optional[Path], str, Optional[str]]:
+		"""``(base, target, prefix, problem)`` for one media path.
+
+		A path whose first segment names a ``media_dirs`` folder is served from
+		that folder, unless the main media folder has a real subfolder of the
+		same name, which keeps every path that worked before working the same.
+		``prefix`` is that segment, put back on every path in the answer so a
+		listing's paths can be read straight back.
+		"""
+		base, problem = self._media_dir()
+		named = self._named_media_dirs(base)
+		clean = (rel or "").strip().lstrip("/")
+		head, _, rest = clean.partition("/")
+		if head in named and not (base is not None and (base / head).is_dir()):
+			folder = named[head]
+			target, problem = self._resolve_under(folder, rest, f"the {head} media folder")
+			return folder, target, head, problem
+		if base is None:
+			return None, None, "", problem
+		target, problem = self._resolve_under(base, clean, "the Home Assistant media folder")
+		return base, target, "", problem
+
 	@staticmethod
 	def _resolve_under(
 		base: Path, raw: Any, where: str, denied: tuple[str, ...] = ()
 	) -> tuple[Optional[Path], Optional[str]]:
-		"""Resolve ``raw`` inside ``base``, or explain the refusal.
-
-		Resolution happens *before* the containment check, so a symlink pointing
-		out of the directory is caught as well as ``..`` — checking the string
-		would only stop the obvious half.  An empty path means the directory
-		itself, which is how listing works.  ``denied`` names directories that
-		are never served from anywhere under ``base``.
-		"""
-		rel = (raw or "").strip() if isinstance(raw, str) else ""
-		rel = rel.lstrip("/")
-		try:
-			target = (base / rel).resolve() if rel else base
-		except (OSError, ValueError) as err:
-			return None, f"Invalid path: {err}"
-		if target != base and base not in target.parents:
-			return None, f"Path is outside {where}."
-		parts = target.relative_to(base).parts if target != base else ()
-		if any(part in denied for part in parts):
-			return None, (
-				"Refusing to touch Home Assistant's internal storage. It holds the "
-				"registries and every credential the UI has saved, and hand-editing "
-				"it corrupts state."
-			)
-		return target, None
+		"""Resolve ``raw`` inside ``base``, or explain the refusal (see file_ops)."""
+		return file_ops.resolve_under(base, raw, where, denied)
 
 	async def _execute_files(
 		self, method: Optional[str], path: Optional[str], body: Any
@@ -1831,9 +1893,10 @@ class RelayClient:
 		"""Serve one file call under the config directory, or the media folder.
 
 		The whole point of this target: a hosted home has no SSH and no host
-		shell, so a file with no UI equivalent — configuration.yaml above all —
-		could only be edited through a browser add-on. Every call is confined to
-		its directory and gated on ``ha:files`` upstream.
+		shell, so a file with no UI equivalent could only be edited through a
+		browser add-on. Every call is confined to its directory and gated on
+		``ha:files`` upstream. YAML is read here but changed only by the Vome
+		app (see app_channel), because an integration must not write it.
 		"""
 		portion = _safe_path_portion(path)
 		if portion is None or portion not in FILES_ALLOWED_PATHS:
@@ -1851,38 +1914,74 @@ class RelayClient:
 			for part in path.split("?", 1)[1].split("&"):
 				key, _, value = part.partition("=")
 				query[key] = unquote(value)
-		rel = query.get("path", "")
-		read_encoding = query.get("encoding", "utf8")
-
-		if portion in FILES_MEDIA_PATHS:
-			base, problem = self._media_dir()
-			if base is None:
-				return 0, None, problem
-			target, problem = self._resolve_under(base, rel, "the Home Assistant media folder")
-			if target is None:
-				return 0, None, problem
-			job: tuple = (self._media_op, portion, base, target, read_encoding)
-		else:
-			target, problem = self._resolve_config_path(rel)
-			if target is None:
-				return 0, None, problem
-			if portion == "/move":
-				to = query.get("to", "")
-				if not to.strip().lstrip("/"):
-					return 0, None, "Move needs a destination: ?to=<path>."
-				dest, problem = self._resolve_config_path(to)
-				if dest is None:
-					return 0, None, problem
-				overwrite = query.get("overwrite", "0").strip().lower() in ("1", "true")
-				job = (self._move_file, target, dest, overwrite)
-			else:
-				job = (self._files_op, portion, target, body, read_encoding)
 
 		try:
-			return await self._hass.async_add_executor_job(*job)
+			# Resolving a path stats the disk, so it runs in the executor
+			# with the operation itself, never on the event loop.
+			result = await self._hass.async_add_executor_job(
+				self._files_job, portion, query, body,
+			)
 		except Exception as err:  # pragma: no cover - defensive
 			_LOGGER.debug("Relay (%s) file op failed: %s", self._server_id, err)
 			return 0, None, f"File operation failed: {err}"
+		if isinstance(result, dict):
+			return await self._hand_yaml_to_app(result)
+		return result
+
+	def _files_job(
+		self, portion: str, query: dict[str, str], body: Any
+	) -> Any:
+		"""Blocking half of :meth:`_execute_files`, run in an executor.
+
+		Returns the ``(status, body, error)`` answer, or, for a change to a
+		YAML file, the request to hand to the Vome app instead.
+		"""
+		rel = query.get("path", "")
+		read_encoding = query.get("encoding", "utf8")
+		if portion in FILES_MEDIA_PATHS:
+			base, target, prefix, problem = self._media_target(rel)
+			if base is None or target is None:
+				return 0, None, problem
+			extra = (
+				sorted(self._named_media_dirs(base))
+				if portion == "/media_list" and not prefix and target == base else []
+			)
+			return self._media_op(portion, base, target, read_encoding, prefix, extra)
+
+		base = self._config_dir()
+		target, problem = self._resolve_config_path(rel)
+		if target is None:
+			return 0, None, problem
+		if portion == "/move":
+			to = query.get("to", "")
+			if not to.strip().lstrip("/"):
+				return 0, None, "Move needs a destination: ?to=<path>."
+			dest, problem = self._resolve_config_path(to)
+			if dest is None:
+				return 0, None, problem
+			overwrite = query.get("overwrite", "0").strip().lower() in ("1", "true")
+			if file_ops.is_yaml(target) or file_ops.is_yaml(dest):
+				return {
+					"op": "move", "path": str(target.relative_to(base)),
+					"to": str(dest.relative_to(base)), "overwrite": overwrite,
+				}
+			return self._move_file(target, dest, overwrite)
+		if portion in ("/write", "/delete") and file_ops.is_yaml(target):
+			return {
+				"op": portion[1:],
+				"path": str(target.relative_to(base)),
+				"body": body if portion == "/write" else None,
+			}
+		return self._files_op(portion, target, body, read_encoding)
+
+	async def _hand_yaml_to_app(
+		self, request: dict
+	) -> tuple[int, Optional[str], Optional[str]]:
+		"""Have the Vome app make a YAML change, or say why it cannot be made."""
+		answer, problem = await app_channel.async_request(self._hass, "/files", request)
+		if answer is None:
+			return 0, None, problem
+		return 200, json.dumps(answer.get("result") or {}), None
 
 	@staticmethod
 	def _list_dir(
@@ -1946,64 +2045,55 @@ class RelayClient:
 		}), None
 
 	def _media_op(
-		self, portion: str, base: Path, target: Path, read_encoding: str = "utf8"
+		self, portion: str, base: Path, target: Path, read_encoding: str = "utf8",
+		prefix: str = "", extra_dirs: Optional[list] = None,
 	) -> tuple[int, Optional[str], Optional[str]]:
-		"""Blocking half of a media-folder call: list or read, never write."""
+		"""Blocking half of a media-folder call: list or read, never write.
+
+		``prefix`` names the ``media_dirs`` folder the call was served from and
+		goes back on every path in the answer; ``extra_dirs`` are those folders,
+		shown as entries of the root listing so a caller can find them.
+		"""
 		if portion == "/media_list":
-			return self._list_dir(base, target)
-		return self._read_file(
-			base, target, read_encoding, FILES_MAX_MEDIA_READ_BYTES,
-			"A media file crosses the relay as one message, so larger ones "
-			"cannot be fetched this way.",
-		)
+			status, body, error = self._list_dir(base, target)
+		else:
+			status, body, error = self._read_file(
+				base, target, read_encoding, FILES_MAX_MEDIA_READ_BYTES,
+				"A media file crosses the relay as one message, so larger ones "
+				"cannot be fetched this way.",
+			)
+		if status != 200 or body is None or not (prefix or extra_dirs):
+			return status, body, error
+		payload = json.loads(body)
+
+		def _prefixed(value: str) -> str:
+			return f"{prefix}/{value}" if value else prefix
+
+		if prefix:
+			payload["path"] = _prefixed(payload.get("path") or "")
+			for entry in payload.get("entries") or []:
+				entry["path"] = _prefixed(entry.get("path") or "")
+		entries = payload.get("entries")
+		if extra_dirs and isinstance(entries, list):
+			taken = {entry.get("name") for entry in entries}
+			for key in extra_dirs:
+				if key not in taken:
+					entries.append({
+						"name": key, "path": key, "is_dir": True, "size": None,
+						"media_dir": True,
+					})
+		return status, json.dumps(payload), error
 
 	def _move_file(
 		self, source: Path, dest: Path, overwrite: bool
 	) -> tuple[int, Optional[str], Optional[str]]:
-		"""Blocking half of ``/move``: rename one file inside the config directory.
-
-		Same rules as delete, because a move is a delete of the source: one file,
-		never a directory, and none of the files Home Assistant needs, checked on
-		the resolved paths. Those are refused as the destination too, since
-		replacing configuration.yaml is as fatal as taking it away. An existing
-		destination is only replaced when the caller says so.
-		"""
-		base = self._config_dir()
-		if source == base:
-			return 0, None, "Refusing to move the config directory."
-		if source.is_dir():
-			return 0, None, "Path is a directory; only single files can be moved."
-		if not source.is_file():
-			return 0, None, "Not a file, or it does not exist."
-		for verb, candidate in (("move", source), ("replace", dest)):
-			if candidate.parent == base and candidate.name in FILES_DELETE_PROTECTED:
-				return 0, None, (
-					f"Refusing to {verb} {candidate.name}: Home Assistant needs it to "
-					"start or to keep its history."
-				)
-		if dest == base or dest.is_dir():
-			return 0, None, (
-				"Destination is a directory; give the full path of the file to create."
-			)
-		if dest == source:
-			return 0, None, "Source and destination are the same file."
-		if dest.exists() and not overwrite:
-			return 0, None, "Destination exists; pass overwrite=1 to replace it."
-		try:
-			dest.parent.mkdir(parents=True, exist_ok=True)
-			os.replace(source, dest)
-		except OSError as err:
-			return 0, None, f"Could not move the file: {err}"
-		return 200, json.dumps({
-			"path": str(source.relative_to(base)),
-			"to": str(dest.relative_to(base)),
-			"moved": True,
-		}), None
+		"""Blocking half of ``/move`` for a file that is not YAML (see file_ops)."""
+		return file_ops.move_file(self._config_dir(), source, dest, overwrite)
 
 	def _files_op(
 		self, portion: str, target: Path, body: Any, read_encoding: str = "utf8"
 	) -> tuple[int, Optional[str], Optional[str]]:
-		"""Blocking half of :meth:`_execute_files`, run in an executor."""
+		"""List, read, write or delete under the config directory (not YAML changes)."""
 		base = self._config_dir()
 		if portion == "/list":
 			return self._list_dir(base, target, FILES_DENIED_DIRS)
@@ -2016,61 +2106,8 @@ class RelayClient:
 			)
 
 		if portion == "/delete":
-			# One file at a time and never a directory: a tidy-up that names the
-			# wrong folder must fail, not empty it. The protected names are
-			# checked on the resolved path, so a symlink called something else
-			# cannot be used to delete configuration.yaml through it.
-			if target == base:
-				return 0, None, "Refusing to delete the config directory."
-			if target.is_dir():
-				return 0, None, "Path is a directory; only single files can be deleted."
-			if not target.is_file():
-				return 0, None, "Not a file, or it does not exist."
-			if target.parent == base and target.name in FILES_DELETE_PROTECTED:
-				return 0, None, (
-					f"Refusing to delete {target.name}: Home Assistant needs it to start "
-					"or to keep its history."
-				)
-			try:
-				target.unlink()
-			except OSError as err:
-				return 0, None, f"Could not delete the file: {err}"
-			return 200, json.dumps({
-				"path": str(target.relative_to(base)), "deleted": True,
-			}), None
-
-		# /write
-		content = body.get("content") if isinstance(body, dict) else None
-		if not isinstance(content, str):
-			return 0, None, "Body must be JSON with a 'content' string."
-		write_encoding = body.get("encoding") if isinstance(body, dict) else None
-		if write_encoding not in (None, "utf8", "base64"):
-			return 0, None, "encoding must be 'utf8' or 'base64'."
-		if write_encoding == "base64":
-			try:
-				payload = base64.b64decode(content, validate=True)
-			except ValueError as err:
-				return 0, None, f"Invalid base64 content: {err}"
-		else:
-			payload = content.encode("utf-8")
-		if len(payload) > FILES_MAX_WRITE_BYTES:
-			return 0, None, f"Content exceeds {FILES_MAX_WRITE_BYTES} bytes."
-		if target.exists() and target.is_dir():
-			return 0, None, "Path is a directory."
-		try:
-			target.parent.mkdir(parents=True, exist_ok=True)
-			# Write via a temporary file in the same directory and replace, so a
-			# failure part-way cannot leave configuration.yaml truncated — the
-			# file Home Assistant refuses to start without.
-			tmp = target.with_name(f".{target.name}.vome-tmp")
-			tmp.write_bytes(payload)
-			os.replace(tmp, target)
-		except OSError as err:
-			return 0, None, f"Could not write the file: {err}"
-		return 200, json.dumps({
-			"path": str(target.relative_to(base)), "written": True,
-			"bytes": len(payload),
-		}), None
+			return file_ops.delete_file(base, target)
+		return file_ops.write_file(base, target, body)
 
 	async def _execute_websocket(
 		self, command: Any
@@ -2133,7 +2170,7 @@ class RelayClient:
 
 	async def _execute_core(
 		self, method: Optional[str], path: Optional[str], body: Any,
-		*, expect: Optional[str] = None,
+		*, expect: Optional[str] = None, timeout: Any = None,
 	) -> tuple[int, Optional[str], Optional[str]]:
 		"""Proxy one HA core REST call.  Only ``/api/...`` paths are permitted.
 
@@ -2164,7 +2201,7 @@ class RelayClient:
 				url,
 				headers=headers,
 				json=body if body is not None else None,
-				timeout=aiohttp.ClientTimeout(total=RELAY_RPC_TIMEOUT),
+				timeout=aiohttp.ClientTimeout(total=_core_call_timeout(timeout)),
 			) as resp:
 				if expect == "base64":
 					raw = await resp.read()

@@ -15,7 +15,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.service import async_register_admin_service
 
+from . import app_channel
 from .const import (
 	CONF_BACKUP,
 	CONF_BACKUP_SECRET,
@@ -113,6 +115,25 @@ def _guard(handler):
 			_LOGGER.warning("vomesync.%s failed: %s", getattr(handler, "__name__", "service"), err)
 			return {"error": str(err) or err.__class__.__name__}
 	return _wrapped
+
+
+def async_register_admin(
+	hass: HomeAssistant,
+	service: str,
+	handler,
+	*,
+	schema: vol.Schema,
+	supports_response: SupportsResponse = SupportsResponse.ONLY,
+) -> None:
+	"""Register a Vome action that only an administrator may call.
+
+	Every Vome action changes the link, the relay, the switches or Home
+	Assistant itself, or hands back something that grants access (an agent
+	key, the app's secret), so a household member's account must reach none
+	of them.  Automations and Home Assistant's own calls carry no user and
+	still run, and the Vome app calls as the Supervisor, an administrator.
+	"""
+	async_register_admin_service(hass, DOMAIN, service, handler, schema, supports_response)
 
 
 def _relay_entries(hass: HomeAssistant) -> list[ConfigEntry]:
@@ -364,7 +385,7 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 		"lan_max": LAN_MAX_ROUTES,
 		"webhooks": normalise_webhooks(relay.get(CONF_RELAY_WEBHOOKS)),
 		"webhook_max": WEBHOOK_MAX,
-		"addon_marker": _addon_marker_present(),
+		"addon_marker": _addon_marker_present(hass),
 		# Which address we dial Home Assistant on, and whether we worked it out
 		# or were told. Since 2026.8 the port is a user-facing setting, so this
 		# can change under a running relay.
@@ -393,12 +414,9 @@ def remote_status_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 	}
 
 
-def _addon_marker_present() -> bool:
-	try:
-		from pathlib import Path
-		return Path("/config/vome/addon.marker").is_file()
-	except OSError:
-		return False
+def _addon_marker_present(hass: HomeAssistant) -> bool:
+	"""Whether the Vome app is installed: it checks in, so no file is read."""
+	return hass is not None and app_channel.available(hass)
 
 
 def async_register_remote_services(hass: HomeAssistant) -> None:
@@ -426,7 +444,7 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 				"forward_ui": False,
 				"lan_routes": [],
 				"lan_max": LAN_MAX_ROUTES,
-				"addon_marker": _addon_marker_present(),
+				"addon_marker": _addon_marker_present(hass),
 				"local_url": local_url,
 				"local_url_source": local_url_source,
 				"local_url_override": "",
@@ -617,8 +635,8 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		await _save_relay(hass, entry, relay)
 		return remote_status_payload(hass, entry)
 
-	hass.services.async_register(
-		DOMAIN, "get_remote_status", _guard(_get_status),
+	async_register_admin(
+		hass, "get_remote_status", _guard(_get_status),
 		schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
 		supports_response=SupportsResponse.ONLY,
 	)
@@ -628,72 +646,72 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 	# return_response over the REST API is rejected as a bare "400: Bad
 	# Request" (no message), which is exactly what the panel was hitting on
 	# every write while the ONLY-typed get_remote_status worked fine.
-	hass.services.async_register(
-		DOMAIN, "set_forward_ui", _guard(_set_forward_ui),
+	async_register_admin(
+		hass, "set_forward_ui", _guard(_set_forward_ui),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required(CONF_RELAY_FORWARD_UI): cv.boolean,
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)
-	hass.services.async_register(
-		DOMAIN, "set_lan_routes", _guard(_set_lan_routes),
+	async_register_admin(
+		hass, "set_lan_routes", _guard(_set_lan_routes),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required("routes"): list,
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)
-	hass.services.async_register(
-		DOMAIN, "set_relay_server", _set_relay_server,
+	async_register_admin(
+		hass, "set_relay_server", _set_relay_server,
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Optional("ws_url", default=""): cv.string,
 		}),
 		supports_response=SupportsResponse.OPTIONAL,
 	)
-	hass.services.async_register(
-		DOMAIN, "set_webhooks", _guard(_set_webhooks),
+	async_register_admin(
+		hass, "set_webhooks", _guard(_set_webhooks),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required("webhooks"): list,
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)
-	hass.services.async_register(
-		DOMAIN, "add_webhook", _guard(_add_webhook),
+	async_register_admin(
+		hass, "add_webhook", _guard(_add_webhook),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required("webhook_id"): cv.string,
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)
-	hass.services.async_register(
-		DOMAIN, "remove_webhook", _guard(_remove_webhook),
+	async_register_admin(
+		hass, "remove_webhook", _guard(_remove_webhook),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required("webhook_id"): cv.string,
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)
-	hass.services.async_register(
-		DOMAIN, "set_local_url", _guard(_set_local_url),
+	async_register_admin(
+		hass, "set_local_url", _guard(_set_local_url),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Optional("local_url", default=""): cv.string,
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)
-	hass.services.async_register(
-		DOMAIN, "set_external_url", _guard(_set_external_url),
+	async_register_admin(
+		hass, "set_external_url", _guard(_set_external_url),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Optional("external_url", default=""): cv.string,
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)
-	hass.services.async_register(
-		DOMAIN, "add_lan_route", _guard(_add_lan_route),
+	async_register_admin(
+		hass, "add_lan_route", _guard(_add_lan_route),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required(ROUTE_SLUG): cv.string,
@@ -706,8 +724,8 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)
-	hass.services.async_register(
-		DOMAIN, "remove_lan_route", _guard(_remove_lan_route),
+	async_register_admin(
+		hass, "remove_lan_route", _guard(_remove_lan_route),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required(ROUTE_SLUG): cv.string,
@@ -736,8 +754,8 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			raise ValueError(error)
 		return {"token": token, "slug": slug, "ttl_seconds": ttl}
 
-	hass.services.async_register(
-		DOMAIN, "mint_lan_tcp_token", _guard(_mint_lan_tcp_token),
+	async_register_admin(
+		hass, "mint_lan_tcp_token", _guard(_mint_lan_tcp_token),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Required(ROUTE_SLUG): cv.string,
@@ -864,8 +882,8 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		hass.data.get(DOMAIN, {}).get(_PENDING_LINK_KEY, {}).pop(entry.entry_id, None)
 		return {"status": "unlinked", "was_linked": was_linked}
 
-	hass.services.async_register(
-		DOMAIN, "link_start", _guard(_link_start),
+	async_register_admin(
+		hass, "link_start", _guard(_link_start),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Optional("portal_url"): cv.string,
@@ -882,8 +900,8 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		("link_poll", _link_poll),
 		("unlink", _unlink),
 	):
-		hass.services.async_register(
-			DOMAIN, _name, _guard(_handler),
+		async_register_admin(
+			hass, _name, _guard(_handler),
 			schema=_link_follow_schema, supports_response=SupportsResponse.ONLY,
 		)
 	# ── The health score ────────────────────────────────────────────────
@@ -926,16 +944,16 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 			"card_included": bool((report or {}).get("card_included")),
 		}
 
-	hass.services.async_register(
-		DOMAIN, "health_score_run", _guard(_health_score_run),
+	async_register_admin(
+		hass, "health_score_run", _guard(_health_score_run),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Optional("use_ai", default=True): cv.boolean,
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)
-	hass.services.async_register(
-		DOMAIN, "health_score_get", _guard(_health_score_get),
+	async_register_admin(
+		hass, "health_score_get", _guard(_health_score_get),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 			vol.Optional("refresh", default=True): cv.boolean,
@@ -949,8 +967,8 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		entry = _pick_vome_entry(hass, call.data.get("entry_id"))
 		return await guest_remote.async_ensure_address(hass, entry)
 
-	hass.services.async_register(
-		DOMAIN, "get_remote_address", _guard(_get_remote_address),
+	async_register_admin(
+		hass, "get_remote_address", _guard(_get_remote_address),
 		schema=vol.Schema({
 			vol.Optional("entry_id"): cv.string,
 		}),
@@ -1028,12 +1046,24 @@ def async_register_remote_services(hass: HomeAssistant) -> None:
 		("agent_key_reissue", _agent_key_reissue, _agent_plain_schema),
 		("agent_key_revoke", _agent_key_revoke, _agent_plain_schema),
 	):
-		hass.services.async_register(
-			DOMAIN, _name, _guard(_handler), schema=_schema,
+		async_register_admin(
+			hass, _name, _guard(_handler), schema=_schema,
 			# ONLY, not OPTIONAL: the panel calls every service over REST
 			# with ?return_response, and Home Assistant rejects an
 			# OPTIONAL-response service invoked that way with a bare 400.
 			supports_response=SupportsResponse.ONLY,
 		)
+
+	# ── The Vome app ────────────────────────────────────────────────────
+	# Where the app listens, so the YAML this integration may not write can
+	# be handed to it.  See app_channel.py.
+
+	async def _app_check_in(call: ServiceCall) -> ServiceResponse:
+		return app_channel.check_in(hass, call.data.get("url"))
+
+	async_register_admin(
+		hass, "app_check_in", _guard(_app_check_in),
+		schema=vol.Schema({vol.Required("url"): cv.string}),
+	)
 
 	_LOGGER.debug("Registered Vome remote-access services")

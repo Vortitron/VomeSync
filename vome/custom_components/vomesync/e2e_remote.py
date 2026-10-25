@@ -455,7 +455,7 @@ class E2ERemote:
 		cert_key = await self.hass.async_add_executor_job(self._key, "key.pem")
 		client = e2e_acme.AcmeClient(
 			session or async_get_clientsession(self.hass), self.directory, account_key,
-			ssl_context=ssl_context,
+			ssl_context=ssl_context, run_blocking=self.hass.async_add_executor_job,
 		)
 		chain = await client.obtain(self.host, cert_key, self.responder)
 		await self.hass.async_add_executor_job(self._write_private, "cert.pem", chain)

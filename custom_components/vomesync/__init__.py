@@ -51,7 +51,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 	_register_services(hass)
 	_register_http_views(hass)
 	_register_chat(hass)
-	_start_hacs_refresh(hass)
 	return True
 
 
@@ -64,16 +63,6 @@ def _register_chat(hass: HomeAssistant) -> None:
 	from .llm_api import async_register_llm_api
 	async_register_chat_services(hass)
 	async_register_llm_api(hass)
-
-
-def _start_hacs_refresh(hass: HomeAssistant) -> None:
-	"""Keep HACS checking custom repositories however often HA restarts."""
-	from .hacs_refresh import async_start
-
-	try:
-		async_start(hass, hass.data.setdefault(DOMAIN, {}))
-	except Exception as err:  # noqa: BLE001 - optional; never blocks setup
-		_LOGGER.debug("HACS refresh not started: %s", err)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -117,6 +106,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	await async_start_ice_servers(hass, entry)
 	from .e2e_remote import async_start_e2e
 	await async_start_e2e(hass, entry)
+	# A temporary link (agent-key trial, guest health run) warns in Repairs
+	# before it runs out.  Never blocks setup.
+	try:
+		from .trial_clock import async_start as async_start_trial_clock
+		async_start_trial_clock(hass, entry)
+	except Exception as err:  # noqa: BLE001
+		_LOGGER.debug("Link-ending check not started: %s", err)
 
 	# Switch sync is best-effort at startup: the coordinator refreshes on its
 	# regular interval, so a failed first fetch degrades switch entities
@@ -210,7 +206,7 @@ def _register_services(hass: HomeAssistant) -> None:
 		return
 	hass.data[DOMAIN]["_services_registered"] = True
 	
-	from .services_remote import _guard
+	from .services_remote import _guard, async_register_admin
 
 	async def _svc_create_switch(call) -> ServiceResponse:
 		entry_id = call.data.get("entry_id")
@@ -271,8 +267,8 @@ def _register_services(hass: HomeAssistant) -> None:
 			raise ValueError("Unknown switch (already removed?)")
 		return {"uid": uid}
 
-	hass.services.async_register(
-		DOMAIN,
+	async_register_admin(
+		hass,
 		"create_switch",
 		_guard(_svc_create_switch),
 		schema=vol.Schema({
@@ -295,8 +291,8 @@ def _register_services(hass: HomeAssistant) -> None:
 		supports_response=SupportsResponse.ONLY,
 	)
 
-	hass.services.async_register(
-		DOMAIN,
+	async_register_admin(
+		hass,
 		"subscribe_switch",
 		_guard(_svc_subscribe_switch),
 		schema=vol.Schema({
@@ -306,8 +302,8 @@ def _register_services(hass: HomeAssistant) -> None:
 		supports_response=SupportsResponse.ONLY,
 	)
 
-	hass.services.async_register(
-		DOMAIN,
+	async_register_admin(
+		hass,
 		"delete_switch",
 		_guard(_svc_delete_switch),
 		schema=vol.Schema({
@@ -317,16 +313,16 @@ def _register_services(hass: HomeAssistant) -> None:
 		supports_response=SupportsResponse.ONLY,
 	)
 
-	hass.services.async_register(
-		DOMAIN,
+	async_register_admin(
+		hass,
 		"list_switches",
 		_guard(_svc_list_switches),
 		schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
 		supports_response=SupportsResponse.ONLY,
 	)
 
-	hass.services.async_register(
-		DOMAIN,
+	async_register_admin(
+		hass,
 		"forget_switch",
 		_guard(_svc_forget_switch),
 		schema=vol.Schema({
@@ -350,6 +346,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	await async_stop_ice_servers(hass, entry)
 	from .e2e_remote import async_stop_e2e
 	await async_stop_e2e(hass, entry)
+	from .trial_clock import async_stop as async_stop_trial_clock
+	async_stop_trial_clock(hass, entry)
 
 	# Unload platforms
 	unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

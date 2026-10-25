@@ -626,3 +626,17 @@ chat_set_scopes:
             - read
             - control
             - configure
+
+app_check_in:
+  name: Vome app check-in
+  description: >-
+    Called by the Vome app every couple of minutes, so the integration can hand
+    it the YAML changes an integration may not make itself. Returns the secret
+    the app requires on those requests. Administrators only.
+  fields:
+    url:
+      name: App address
+      description: Where the app listens on Home Assistant's internal network, as http://host:port.
+      required: true
+      selector:
+        text:

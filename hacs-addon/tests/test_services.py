@@ -40,6 +40,8 @@ EXPECTED_SERVICES = frozenset({
 	"agent_key_scopes",
 	"agent_key_reissue",
 	"agent_key_revoke",
+	# Where the Vome app listens, for the YAML this integration may not write.
+	"app_check_in",
 })
 
 
@@ -81,6 +83,22 @@ def test_get_coordinator_for_service_multiple_entries_requires_entry_id():
 	with pytest.raises(ValueError, match="Multiple VomeSync entries"):
 		_get_coordinator_for_service(hass, None)
 	assert _get_coordinator_for_service(hass, "entry-2") is c2
+
+
+def test_every_vome_action_is_for_administrators_only(hass, admin_services):
+	# Each one writes the config entry, takes a host or URL, or hands back
+	# something that grants access, so a household member's account must not
+	# reach it (HACS review, 20 Oct 2026).  Only the chat's own actions are
+	# open to them, and those answer with the read tools.
+	from custom_components.vomesync import _register_chat
+
+	hass.data = {DOMAIN: {}}
+	hass.services = MagicMock()
+	_register_services(hass)
+	_register_chat(hass)
+	registered = {c[0][1] for c in hass.services.async_register.call_args_list}
+	assert registered - admin_services == {"chat_tools", "chat_tool_call"}
+	assert EXPECTED_SERVICES <= admin_services
 
 
 @pytest.mark.asyncio

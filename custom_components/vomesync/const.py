@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.55"
+INTEGRATION_VERSION = "0.9.58"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -351,28 +351,17 @@ FILES_ALLOWED_PATHS = (
 )
 FILES_POST_ONLY_PATHS = ("/delete", "/move")
 FILES_MEDIA_PATHS = ("/media_list", "/media_read")
-# Files at the top of the config directory that ``/delete`` refuses, and that
-# ``/move`` will neither take away nor replace: Home Assistant will not start
-# without the first two, and the rest are its database and version marker.  An
-# agent tidying up must not be able to take any of them with it.
-FILES_DELETE_PROTECTED = (
-	"configuration.yaml",
-	"secrets.yaml",
-	".HA_VERSION",
-	"home-assistant_v2.db",
-	"home-assistant_v2.db-wal",
-	"home-assistant_v2.db-shm",
+# What ``/delete`` and ``/move`` protect, what is never served, and the write
+# cap live in file_ops, which the Vome app shares for the YAML it writes.
+from .file_ops import (  # noqa: E402
+	DELETE_PROTECTED as FILES_DELETE_PROTECTED,
+	DENIED_DIRS as FILES_DENIED_DIRS,
+	MAX_WRITE_BYTES as FILES_MAX_WRITE_BYTES,
 )
 FILES_ALLOWED_METHODS = ("GET", "POST")
-# Directories never served, whatever the caller asks for.  ``.storage`` is Home
-# Assistant's own database -- registries, config entries, every credential the
-# UI has stored.  Hand-editing it corrupts state, and reading it would hand over
-# far more than a config file.
-FILES_DENIED_DIRS = (".storage", ".cloud")
 # Caps.  A config file is kilobytes; anything near these is not one, and the
 # relay frame carries the whole body.
 FILES_MAX_READ_BYTES = 2 * 1024 * 1024
-FILES_MAX_WRITE_BYTES = 2 * 1024 * 1024
 # A media file (a snapshot, a sound, a recording) is bigger than a config file,
 # but it still crosses the relay as one frame: base64 makes it a third bigger
 # and JSON wraps that, so 5 MiB arrives at about 6.7 MB, under the 8 MiB the

@@ -24,6 +24,60 @@ from flow_test_framework import (
 )
 
 
+ADMIN_SERVICES: set = set()
+
+
+@pytest.fixture(autouse=True)
+def admin_services(monkeypatch):
+	"""Stand in for Core's ``async_register_admin_service``.
+
+	The pinned Core 2023.7 has no ``supports_response`` on it (2025.6 added
+	that), and its wrapper would hide the handler.  This one registers the
+	handler as-is, so the tests that collect handlers keep working, and
+	records the name: ``ADMIN_SERVICES`` is what was registered admin-only.
+	The real check of a household member being refused runs on a current
+	Core in tests_core.
+	"""
+	ADMIN_SERVICES.clear()
+
+	def _register(hass, domain, service, func, schema=None, supports_response=None):
+		ADMIN_SERVICES.add(service)
+		hass.services.async_register(
+			domain, service, func, schema=schema, supports_response=supports_response,
+		)
+
+	monkeypatch.setattr(
+		"custom_components.vomesync.services_remote.async_register_admin_service", _register,
+	)
+	return ADMIN_SERVICES
+
+
+@pytest.fixture
+def vome_app(monkeypatch):
+	"""The Vome app is installed: YAML changes reach its real file handler.
+
+	Only the HTTP hop is skipped.  The integration's request goes to
+	``vome/panel/integration_channel.handle_files`` as the app would get
+	it, and that applies the integration's own file_ops rules.  Returns the
+	requests, ``[(path, payload), ...]``.
+	"""
+	sys.path.insert(0, str(ROOT / "vome" / "panel"))
+	import integration_channel
+
+	monkeypatch.setattr(
+		integration_channel, "INTEGRATION_DIR", ROOT / "custom_components" / "vomesync",
+	)
+	requests = []
+
+	async def _request(hass, path, payload):
+		requests.append((path, payload))
+		status, answer = integration_channel.handle_files(payload, hass.config.path())
+		return (answer, None) if status == 200 else (None, answer["error"])
+
+	monkeypatch.setattr("custom_components.vomesync.app_channel.async_request", _request)
+	return requests
+
+
 @pytest.fixture
 def hass():
 	"""Mock Home Assistant instance."""

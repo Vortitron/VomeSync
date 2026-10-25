@@ -1946,6 +1946,64 @@ class TestEsphomeStream:
 		return dash, _ws_frames(ws)
 
 	@pytest.mark.asyncio
+	async def test_a_dropped_socket_mid_build_follows_the_same_job_again(self, monkeypatch):
+		"""GamlaBio, 21 Oct 2026: eight minutes into an esp-idf rebuild the
+		dashboard's /ws closed, the upload reported failure, and the build had
+		in fact carried on. The job is followed again on a fresh socket."""
+		monkeypatch.setattr(esphome_ws, "FOLLOW_REATTACH_DELAY", 0)
+
+		def first(command, mid, args):
+			if command == "firmware/upload":
+				return [{"message_id": mid, "result": {"job_id": "j9", "status": "running"}}]
+			if command == "firmware/follow_job":
+				# Some output, then the queue runs dry: the fake reports CLOSED.
+				return [{"message_id": mid, "event": "output", "data": "[94/125] Building C object\n"}]
+			return []
+
+		def second(command, mid, args):
+			assert command == "firmware/follow_job" and args == {"job_id": "j9"}
+			return [
+				{"message_id": mid, "event": "output", "data": "Successfully uploaded\n"},
+				{"message_id": mid, "event": "result", "data": {"status": "succeeded", "exit_code": 0}},
+			]
+
+		dashes = [_FakeWsDashboard(responder=first), _FakeWsDashboard(responder=second)]
+		session = AsyncMock(spec=aiohttp.ClientSession)
+		session.ws_connect = AsyncMock(side_effect=dashes)
+		client = _client(session, esphome_url="http://esp:6052")
+		ws = AsyncMock()
+		await client._handle_esphome_ws_open(
+			ws, "s1", {"command": "upload", "configuration": "frontpath-display.yaml"}
+		)
+		await asyncio.wait_for(client._ws_pumps["s1"], 5)
+		frames = _ws_frames(ws)
+		assert frames[0] == {"event": "line", "data": "[94/125] Building C object\n"}
+		assert "following the same job again" in frames[1]["data"]
+		assert frames[-1] == {"event": "exit", "code": 0}
+		assert session.ws_connect.await_count == 2
+		assert dashes[0].closed is True
+
+	@pytest.mark.asyncio
+	async def test_a_dashboard_that_keeps_dropping_is_reported_after_a_few_tries(self, monkeypatch):
+		monkeypatch.setattr(esphome_ws, "FOLLOW_REATTACH_DELAY", 0)
+
+		def dropping(command, mid, args):
+			if command == "firmware/compile":
+				return [{"message_id": mid, "result": {"job_id": "j8", "status": "running"}}]
+			return [{"message_id": mid, "event": "output", "data": "still going\n"}]
+
+		count = esphome_ws.FOLLOW_REATTACH_ATTEMPTS + 1
+		session = AsyncMock(spec=aiohttp.ClientSession)
+		session.ws_connect = AsyncMock(side_effect=[_FakeWsDashboard(responder=dropping) for _ in range(count)])
+		client = _client(session, esphome_url="http://esp:6052")
+		ws = AsyncMock()
+		await client._handle_esphome_ws_open(ws, "s1", {"command": "compile", "configuration": "lr.yaml"})
+		await asyncio.wait_for(client._ws_pumps["s1"], 5)
+		closes = [p for p in _sent_payloads(ws) if p.get("type") == "ws_close"]
+		assert closes[-1]["code"] == 1011 and "closed the /ws connection" in closes[-1]["reason"]
+		assert session.ws_connect.await_count == count
+
+	@pytest.mark.asyncio
 	async def test_a_plain_result_carrying_a_failure_is_a_failure(self):
 		# A config that fails validation ends its job at once. Reading a plain
 		# reply as exit 0 whatever it said turned a failed build into a success.
@@ -2131,6 +2189,7 @@ class TestEsphomeStream:
 		client._handle_esphome_ws_open.assert_called_once()
 
 
+@pytest.mark.usefixtures("vome_app")
 class TestConfigFiles:
 	"""The `files` target — a hosted home has no SSH, so this is the only way
 	to reach configuration.yaml from an agent."""
@@ -2376,6 +2435,7 @@ class TestConfigFiles:
 		assert json.loads(body)["bytes"] == len(raw)
 
 
+@pytest.mark.usefixtures("vome_app")
 class TestMoveAndMediaFiles:
 	"""``/move`` renames one config file under delete's rules; ``/media_list``
 	and ``/media_read`` are read-only views of Home Assistant's media folder."""
@@ -2664,6 +2724,65 @@ class TestMoveAndMediaFiles:
 		assert len(listing["entries"]) == FILES_MAX_ENTRIES
 
 
+class TestNamedMediaDirs:
+	"""A ``media_dirs:`` folder is reached by its key, as Home Assistant shows it.
+
+	GamlaBio, 20 Oct 2026: ``frontpath: /config/frontpath_snapshots`` is a media
+	source of its own in HA's Media panel, so ``frontpath/<photo>.jpg`` is the
+	path an agent asks for, and it resolved under /media and failed.
+	"""
+
+	def _client(self, tmp_path, with_local_frontpath=False):
+		media = tmp_path / "media"
+		media.mkdir()
+		snaps = tmp_path / "config" / "frontpath_snapshots"
+		snaps.mkdir(parents=True)
+		(snaps / "web-1.jpg").write_bytes(b"\xff\xd8night")
+		(media / "door.jpg").write_bytes(b"\xff\xd8door")
+		if with_local_frontpath:
+			(media / "frontpath").mkdir()
+			(media / "frontpath" / "old.jpg").write_bytes(b"\xff\xd8old")
+		dirs = {"local": str(media), "frontpath": str(snaps), "gone": str(tmp_path / "nope")}
+		return TestMoveAndMediaFiles._client(None, tmp_path / "config", dirs)
+
+	@pytest.mark.asyncio
+	async def test_a_named_folder_is_read_by_its_key(self, tmp_path):
+		client = self._client(tmp_path)
+		status, body, error = await client.execute(
+			"GET", "/media_read?path=frontpath/web-1.jpg&encoding=base64", None, "files")
+		assert status == 200 and error is None
+		payload = json.loads(body)
+		assert payload["path"] == "frontpath/web-1.jpg"
+		assert base64.b64decode(payload["content"]) == b"\xff\xd8night"
+
+	@pytest.mark.asyncio
+	async def test_the_root_listing_shows_the_named_folders_and_they_list(self, tmp_path):
+		client = self._client(tmp_path)
+		_s, body, _e = await client.execute("GET", "/media_list?path=", None, "files")
+		entries = {e["name"]: e for e in json.loads(body)["entries"]}
+		assert entries["frontpath"] == {"name": "frontpath", "path": "frontpath", "is_dir": True,
+		                                "size": None, "media_dir": True}
+		assert "door.jpg" in entries and "gone" not in entries
+		_s, body, _e = await client.execute("GET", "/media_list?path=frontpath", None, "files")
+		listing = json.loads(body)
+		assert listing["path"] == "frontpath"
+		assert [e["path"] for e in listing["entries"]] == ["frontpath/web-1.jpg"]
+
+	@pytest.mark.asyncio
+	async def test_a_real_subfolder_of_the_same_name_still_wins(self, tmp_path):
+		client = self._client(tmp_path, with_local_frontpath=True)
+		status, body, _e = await client.execute(
+			"GET", "/media_read?path=frontpath/old.jpg&encoding=base64", None, "files")
+		assert status == 200 and json.loads(body)["path"] == "frontpath/old.jpg"
+
+	@pytest.mark.asyncio
+	async def test_a_named_folder_cannot_be_escaped(self, tmp_path):
+		client = self._client(tmp_path)
+		status, _body, error = await client.execute(
+			"GET", "/media_read?path=frontpath/../../configuration.yaml", None, "files")
+		assert status == 0 and "outside the frontpath media folder" in error
+
+
 # ── Access-event reporting (the home's own failed-login notifications) ──────
 
 class TestSendAccessEvents:
@@ -2818,7 +2937,7 @@ class TestBinaryOverTheRelay:
 		client = _client(AsyncMock(spec=aiohttp.ClientSession), local_token="llt")
 		seen = {}
 
-		async def fake_execute(method, path, body, target=None, *, expect=None):
+		async def fake_execute(method, path, body, target=None, *, expect=None, timeout=None):
 			seen["expect"] = expect
 			return 200, "{}", None
 		client.execute = fake_execute
@@ -2896,6 +3015,24 @@ class TestWsReplyTimeout:
 		assert rc._ws_reply_timeout({"type": "x", "timeout": 1}) == rc.RELAY_RPC_TIMEOUT
 		assert rc._ws_reply_timeout({"type": "x", "timeout": True}) == rc.RELAY_RPC_TIMEOUT
 		assert rc._ws_reply_timeout({"type": "x", "timeout": "50"}) == rc.RELAY_RPC_TIMEOUT
+
+
+class TestCoreCallTimeout:
+	"""A relayed service call waits what the portal says it will (21 Oct 2026):
+	ai_task.generate_data with an image needs longer than the old fixed wait."""
+
+	def test_the_portal_s_wait_is_honoured_within_bounds(self):
+		assert rc._core_call_timeout(None) == rc.RELAY_RPC_TIMEOUT
+		assert rc._core_call_timeout(15) == rc.RELAY_RPC_TIMEOUT
+		assert rc._core_call_timeout(50) == 50
+		assert rc._core_call_timeout(600) == rc.RELAY_WS_MAX_REPLY_TIMEOUT
+		assert rc._core_call_timeout(True) == rc.RELAY_RPC_TIMEOUT
+		assert rc._core_call_timeout("50") == rc.RELAY_RPC_TIMEOUT
+
+	def test_the_rpc_handler_passes_it_through(self):
+		import inspect
+		source = inspect.getsource(rc.RelayClient._handle_rpc)
+		assert 'timeout=data.get("timeout")' in source
 
 
 class TestNoCredentialMintingOverWebSocket:

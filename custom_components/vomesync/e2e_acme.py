@@ -22,7 +22,7 @@ import json
 import logging
 import ssl
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import aiohttp
 from cryptography import x509
@@ -44,6 +44,10 @@ _POLL_INTERVAL = 2.0
 _POLL_TIMEOUT = 120.0
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
 _NONCE_ATTEMPTS = 5
+
+
+async def _run_in_default_executor(func: Callable[..., Any], *args: Any) -> Any:
+	return await asyncio.get_running_loop().run_in_executor(None, func, *args)
 
 
 class AcmeError(Exception):
@@ -166,7 +170,10 @@ class AlpnResponder:
 		self._server: Optional[asyncio.base_events.Server] = None
 		self.port: Optional[int] = None
 
-	def _context_for(self, cert_pem: bytes, key_pem: bytes) -> ssl.SSLContext:
+	@staticmethod
+	def context_for(cert_pem: bytes, key_pem: bytes) -> ssl.SSLContext:
+		"""The SSL context presenting one challenge certificate. Blocking: run it
+		in an executor (it writes two temporary files and reads them back)."""
 		import os
 		import tempfile
 		ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -184,7 +191,11 @@ class AlpnResponder:
 		return ctx
 
 	def add(self, domain: str, cert_pem: bytes, key_pem: bytes) -> None:
-		self._contexts[domain.lower()] = self._context_for(cert_pem, key_pem)
+		"""Blocking; :meth:`AcmeClient.obtain` builds the context in an executor."""
+		self.set_context(domain, self.context_for(cert_pem, key_pem))
+
+	def set_context(self, domain: str, ctx: ssl.SSLContext) -> None:
+		self._contexts[domain.lower()] = ctx
 
 	def remove(self, domain: str) -> None:
 		self._contexts.pop(domain.lower(), None)
@@ -231,8 +242,12 @@ class AcmeClient:
 		account_key: ec.EllipticCurvePrivateKey,
 		*,
 		ssl_context: Any = None,
+		run_blocking: Optional[Callable[..., Awaitable[Any]]] = None,
 	) -> None:
 		self._session = session
+		# Key generation, certificate signing and loading a certificate into
+		# an SSL context all block; Home Assistant passes its executor here.
+		self._run_blocking = run_blocking or _run_in_default_executor
 		self._directory_url = directory_url
 		self._key = account_key
 		self._ssl = ssl_context
@@ -358,7 +373,12 @@ class AcmeClient:
 			if challenge is None:
 				raise AcmeError("authorization: the CA offered no tls-alpn-01 challenge")
 			key_authorization = f"{challenge['token']}.{thumbprint(self._key)}"
-			responder.add(domain, *challenge_certificate(domain, key_authorization))
+			cert_pem, key_pem = await self._run_blocking(
+				challenge_certificate, domain, key_authorization,
+			)
+			responder.set_context(
+				domain, await self._run_blocking(responder.context_for, cert_pem, key_pem),
+			)
 			try:
 				status, _h, body = await self._post(challenge["url"], {})
 				if status != 200:
@@ -369,9 +389,8 @@ class AcmeClient:
 
 		order = await self._poll(order_url, "order", {"ready", "valid"})
 		if order["status"] == "ready":
-			status, _h, body = await self._post(
-				order["finalize"], {"csr": _b64(make_csr(domain, cert_key))},
-			)
+			csr = await self._run_blocking(make_csr, domain, cert_key)
+			status, _h, body = await self._post(order["finalize"], {"csr": _b64(csr)})
 			if status != 200:
 				raise self._fail("finalize", status, body)
 			order = await self._poll(order_url, "issuance", {"valid"})
