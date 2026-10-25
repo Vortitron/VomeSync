@@ -67,3 +67,51 @@ def test_csr_names_only_this_home():
 def test_keys_round_trip_through_pem():
 	key = e2e_acme.new_key()
 	assert e2e_acme.thumbprint(e2e_acme.key_from_pem(e2e_acme.key_to_pem(key))) == e2e_acme.thumbprint(key)
+
+
+def test_obtain_does_its_blocking_work_in_the_executor_it_is_given():
+	# HACS review: key generation, certificate signing and loading the
+	# challenge certificate into an SSL context (temp files) block, so they
+	# go through run_blocking (Home Assistant's executor), not the loop.
+	import asyncio
+	import ssl
+
+	ran = []
+
+	async def run_blocking(fn, *args):
+		ran.append(fn.__name__)
+		return fn(*args)
+
+	client = e2e_acme.AcmeClient(None, "https://ca.test/dir", e2e_acme.new_key(),
+	                             run_blocking=run_blocking)
+	client.kid = "https://ca.test/acct/1"
+	answers = {
+		"https://ca.test/new-order": (201, {"Location": "order"}, {"authorizations": ["authz"]}),
+		"authz": (200, {}, {"status": "pending", "challenges": [
+			{"type": "tls-alpn-01", "token": "tok", "url": "chal"}]}),
+		"chal": (200, {}, {}),
+		"fin": (200, {}, {}),
+		"cert": (200, {}, b"-----BEGIN CERTIFICATE-----\n"),
+	}
+	polls = iter([{"status": "valid"}, {"status": "ready", "finalize": "fin"},
+	              {"status": "valid", "certificate": "cert"}])
+
+	async def _directory():
+		return {"newOrder": "https://ca.test/new-order"}
+
+	async def _post(url, payload, **kwargs):
+		return answers[url]
+
+	async def _poll(url, step, done):
+		return next(polls)
+
+	client._get_directory, client._post, client._poll = _directory, _post, _poll
+	responder = e2e_acme.AlpnResponder()
+	presented = []
+	responder.set_context = lambda domain, ctx: presented.append((domain, ctx))
+
+	chain = asyncio.run(client.obtain("abc.e2e.vome.io", e2e_acme.new_key(), responder))
+	assert chain.startswith(b"-----BEGIN CERTIFICATE")
+	assert ran == ["challenge_certificate", "context_for", "make_csr"]
+	(domain, ctx), = presented
+	assert domain == "abc.e2e.vome.io" and isinstance(ctx, ssl.SSLContext)

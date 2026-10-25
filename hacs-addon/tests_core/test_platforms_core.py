@@ -68,8 +68,7 @@ def _stubbed():
 		patch("custom_components.vomesync.ice_servers.async_stop_ice_servers", _noop), \
 		patch("custom_components.vomesync.e2e_remote.async_start_e2e", _noop), \
 		patch("custom_components.vomesync.e2e_remote.async_stop_e2e", _noop), \
-		patch("custom_components.vomesync.health_score.async_restore_report", _noop), \
-		patch("custom_components.vomesync.hacs_refresh.async_start", lambda *a, **k: None):
+		patch("custom_components.vomesync.health_score.async_restore_report", _noop):
 		yield
 
 
@@ -216,3 +215,41 @@ async def test_a_trial_near_its_end_warns_and_the_warning_goes_when_kept(hass, e
 		assert await hass.config_entries.async_unload(entry.entry_id)
 		await hass.async_block_till_done()
 	assert entry.entry_id not in hass.data.get(DOMAIN, {}).get(tc._KEY, {})
+
+
+@pytest.mark.parametrize("service,data", [
+	("app_check_in", {"url": "http://a0d7b954-vome:8098"}),
+	("set_relay_server", {"ws_url": "wss://elsewhere.example"}),
+	("agent_key_issue", {"scopes": ["ha:write"]}),
+	("create_switch", {"name": "x"}),
+	("chat_set_scopes", {"scopes": ["read"]}),
+])
+async def test_a_household_member_cannot_reach_a_vome_action(
+	hass, loaded, hass_read_only_user, service, data,
+):
+	# HACS review, 20 Oct 2026: these change the link, the relay or Home
+	# Assistant, or hand back a key, so Core refuses anyone not an admin
+	# before our handler runs.
+	from homeassistant.core import Context
+	from homeassistant.exceptions import Unauthorized
+
+	with pytest.raises(Unauthorized):
+		await hass.services.async_call(
+			DOMAIN, service, data, blocking=True, return_response=True,
+			context=Context(user_id=hass_read_only_user.id),
+		)
+
+
+async def test_an_administrator_gets_the_answer(hass, loaded, hass_admin_user):
+	from homeassistant.core import Context
+
+	answer = await hass.services.async_call(
+		DOMAIN, "app_check_in", {"url": "http://a0d7b954-vome:8098"},
+		blocking=True, return_response=True, context=Context(user_id=hass_admin_user.id),
+	)
+	assert len(answer["secret"]) >= 32
+	refused = await hass.services.async_call(
+		DOMAIN, "app_check_in", {"url": "https://vome.io"},
+		blocking=True, return_response=True, context=Context(user_id=hass_admin_user.id),
+	)
+	assert "internal network" in refused["error"]

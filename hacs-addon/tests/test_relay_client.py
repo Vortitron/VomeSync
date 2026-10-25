@@ -2189,6 +2189,7 @@ class TestEsphomeStream:
 		client._handle_esphome_ws_open.assert_called_once()
 
 
+@pytest.mark.usefixtures("vome_app")
 class TestConfigFiles:
 	"""The `files` target — a hosted home has no SSH, so this is the only way
 	to reach configuration.yaml from an agent."""
@@ -2434,6 +2435,7 @@ class TestConfigFiles:
 		assert json.loads(body)["bytes"] == len(raw)
 
 
+@pytest.mark.usefixtures("vome_app")
 class TestMoveAndMediaFiles:
 	"""``/move`` renames one config file under delete's rules; ``/media_list``
 	and ``/media_read`` are read-only views of Home Assistant's media folder."""

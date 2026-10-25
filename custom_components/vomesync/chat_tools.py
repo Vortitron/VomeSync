@@ -45,6 +45,7 @@ import voluptuous as vol
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from . import app_channel
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -85,10 +86,16 @@ MAX_HISTORY_POINTS = 200
 MAX_FIND = 100
 SERVICE_WAIT = 10
 
-# Serialises our writes to automations.yaml.  Home Assistant's own editor
-# has its own lock; the window between the two is a read-modify-write of a
-# small file, and the editor re-reads before every save.
-_AUTOMATION_LOCK = asyncio.Lock()
+# How to paste an automation in when there is no Vome app to save it.
+PASTE_NEW = (
+	"Settings → Automations & scenes → Create automation → Create new automation, "
+	"then ⋮ → Edit in YAML, paste it over what is there, and Save."
+)
+PASTE_EXISTING = (
+	"Settings → Automations & scenes, open \"{alias}\", then ⋮ → Edit in YAML, "
+	"paste it over what is there, and Save."
+)
+DELETE_BY_HAND = "Settings → Automations & scenes, open \"{alias}\", then ⋮ → Delete."
 
 
 class ChatToolError(Exception):
@@ -372,14 +379,6 @@ def _read_automations(path: str) -> list:
 	return data if isinstance(data, list) else []
 
 
-def _write_automations(path: str, data: list) -> None:
-	from homeassistant.util.file import write_utf8_file_atomic
-	from homeassistant.util.yaml import dump
-
-	contents = dump(data)  # before opening, so a dump error cannot truncate
-	write_utf8_file_atomic(path, contents)
-
-
 def _automation_id(hass, automation_id: str) -> str:
 	"""Accept the id or ``automation.<entity>``; return the id."""
 	automation_id = automation_id.strip()
@@ -507,8 +506,23 @@ def _parse_automation(text: str) -> dict:
 	return json.loads(json.dumps(config))  # plain dicts, no YAML node types
 
 
+def _automation_alias(hass, key: str) -> Optional[str]:
+	"""The name of the automation with id ``key``, or None if there is none."""
+	for state in hass.states.async_all("automation"):
+		if str(state.attributes.get("id")) == key:
+			return state.attributes.get("friendly_name") or state.entity_id
+	return None
+
+
 async def _save_automation(hass, context, yaml: str, automation_id: str = "") -> dict:
+	"""Validate it here; have the Vome app save it, or give it back to paste.
+
+	An integration must not write automations.yaml, so the save itself goes
+	through the Vome app, which hands it to Home Assistant's own automation
+	editor API.  Without the app, the owner gets the YAML and the steps.
+	"""
 	from homeassistant.components.automation.config import async_validate_config_item
+	from homeassistant.util.yaml import dump
 
 	config = _parse_automation(yaml)
 	key = automation_id.strip() or str(config.pop("id", "") or "") \
@@ -522,42 +536,41 @@ async def _save_automation(hass, context, yaml: str, automation_id: str = "") ->
 	except Exception as err:  # noqa: BLE001 - vol.Invalid or HomeAssistantError
 		raise ChatToolError(f"Home Assistant would not accept it: {err}") from err
 
-	path = hass.config.path(AUTOMATIONS_FILE)
-	async with _AUTOMATION_LOCK:
-		data = await hass.async_add_executor_job(_read_automations, path)
-		value = {"id": key, **config}
-		for index, item in enumerate(data):
-			if isinstance(item, dict) and str(item.get("id")) == key:
-				data[index] = value
-				created = False
-				break
-		else:
-			data.append(value)
-			created = True
-		await hass.async_add_executor_job(_write_automations, path, data)
-	await hass.services.async_call(
-		"automation", "reload", {"id": key}, blocking=True, context=context)
-	return {"id": key, "alias": config["alias"],
-	        "result": "created" if created else "updated"}
+	existing = _automation_alias(hass, key)
+	if app_channel.available(hass):
+		_answer, problem = await app_channel.async_request(
+			hass, "/automation", {"op": "save", "id": key, "config": config})
+		if problem:
+			raise ChatToolError(problem)
+		return {"id": key, "alias": config["alias"],
+		        "result": "updated" if existing else "created",
+		        "saved_by": "the Vome app"}
+	return {
+		"id": key, "alias": config["alias"], "result": "not saved",
+		"why": app_channel.APP_MISSING,
+		"yaml": dump(config),
+		"next_step": PASTE_EXISTING.format(alias=existing) if existing else PASTE_NEW,
+		"note": "Give the owner the YAML and the steps, word for word.",
+	}
 
 
 async def _delete_automation(hass, context, automation_id: str) -> dict:
+	"""Have the Vome app delete it, or tell the owner where to."""
 	key = _automation_id(hass, automation_id)
-	path = hass.config.path(AUTOMATIONS_FILE)
-	async with _AUTOMATION_LOCK:
-		data = await hass.async_add_executor_job(_read_automations, path)
-		kept = [i for i in data if not (isinstance(i, dict) and str(i.get("id")) == key)]
-		if len(kept) == len(data):
-			raise ChatToolError(f"No automation with id {key}.")
-		await hass.async_add_executor_job(_write_automations, path, kept)
-	from homeassistant.helpers import entity_registry as er
-
-	ents = er.async_get(hass)
-	entity_id = ents.async_get_entity_id("automation", "automation", key)
-	if entity_id:
-		ents.async_remove(entity_id)
-	await hass.services.async_call("automation", "reload", {}, blocking=True, context=context)
-	return {"id": key, "result": "deleted"}
+	alias = _automation_alias(hass, key)
+	if alias is None:
+		raise ChatToolError(f"No automation with id {key}.")
+	if app_channel.available(hass):
+		_answer, problem = await app_channel.async_request(
+			hass, "/automation", {"op": "delete", "id": key})
+		if problem:
+			raise ChatToolError(problem)
+		return {"id": key, "result": "deleted", "deleted_by": "the Vome app"}
+	return {
+		"id": key, "alias": alias, "result": "not deleted",
+		"why": app_channel.APP_MISSING,
+		"next_step": DELETE_BY_HAND.format(alias=alias),
+	}
 
 
 TOOLS = (
@@ -627,7 +640,9 @@ TOOLS = (
 		"save_automation",
 		"Create or replace an automation, given as Home Assistant automation YAML "
 		"(alias, description, triggers, conditions, actions, mode). Pass automation_id "
-		"to replace an existing one. Show the owner the YAML and get a yes first.",
+		"to replace an existing one. Show the owner the YAML and get a yes first. "
+		"The Vome app saves it when installed; otherwise this checks it and returns "
+		"the YAML and the steps for the owner to paste it in themselves.",
 		SCOPE_CONFIGURE, _save_automation,
 		(Param("yaml", "string", "The automation, as YAML.", True),
 		 Param("automation_id", "string", "The id of the automation to replace.")),
@@ -635,7 +650,8 @@ TOOLS = (
 	),
 	ChatTool(
 		"delete_automation",
-		"Delete an automation made in the editor. Ask the owner first.",
+		"Delete an automation made in the editor. Ask the owner first. The Vome app "
+		"deletes it when installed; otherwise this says where the owner deletes it.",
 		SCOPE_CONFIGURE, _delete_automation,
 		(Param("automation_id", "string", "The id, or automation.<name>.", True),),
 		confirm=True,
@@ -661,11 +677,12 @@ def async_register_chat_services(hass: HomeAssistant) -> None:
 	The caller's own user decides what runs, exactly as in Assist: the
 	panel calls as the Supervisor (an administrator), and a household
 	member's account calling these directly gets the read tools only.
+	Changing the scopes is an administrator's action.
 	"""
 	from homeassistant.core import ServiceCall, SupportsResponse
 	from homeassistant.helpers import config_validation as cv
 
-	from .services_remote import _guard
+	from .services_remote import _guard, async_register_admin
 
 	async def _tools(call: ServiceCall):
 		return {
@@ -686,8 +703,6 @@ def async_register_chat_services(hass: HomeAssistant) -> None:
 		return {"ok": True, "result": result}
 
 	async def _set_scopes(call: ServiceCall):
-		if not await async_is_admin(hass, call.context.user_id):
-			raise ValueError("Only an administrator can change what the chat may do.")
 		entry = _entry(hass)
 		if entry is None:
 			raise ValueError("Set up the Vome integration first.")
@@ -708,8 +723,9 @@ def async_register_chat_services(hass: HomeAssistant) -> None:
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)
-	hass.services.async_register(
-		DOMAIN, "chat_set_scopes", _guard(_set_scopes),
+	# Only an administrator decides what the chat may do.
+	async_register_admin(
+		hass, "chat_set_scopes", _guard(_set_scopes),
 		schema=vol.Schema({vol.Required("scopes"): [vol.In(ALL_SCOPES)]}),
 		supports_response=SupportsResponse.ONLY,
 	)

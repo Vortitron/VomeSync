@@ -153,14 +153,16 @@ def test_a_huge_answer_is_cut_and_says_so():
 	assert ct._fit({"a": 1}) == {"a": 1}
 
 
-def test_setting_scopes_needs_an_administrator():
+def test_setting_scopes_needs_an_administrator(admin_services):
+	# Core refuses a household member before the handler runs; asking what
+	# the chat may do stays open to them, and answers with the read tools.
 	hass = _hass(admin=False)
 	handlers = {}
 	hass.services.async_register = lambda d, name, fn, **kw: handlers.__setitem__(name, fn)
 	ct.async_register_chat_services(hass)
+	assert "chat_set_scopes" in admin_services
+	assert not {"chat_tools", "chat_tool_call"} & admin_services
 	call = SimpleNamespace(data={"scopes": ["read"]}, context=SimpleNamespace(user_id="kid"))
-	assert "administrator" in run(handlers["chat_set_scopes"](call))["error"]
-	hass.config_entries.async_update_entry.assert_not_called()
 	listed = run(handlers["chat_tools"](call))
 	assert listed["scopes"] == ["read"]
 	assert all(t["scope"] == "read" for t in listed["tools"])

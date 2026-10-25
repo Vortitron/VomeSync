@@ -1,8 +1,11 @@
 # flake8: noqa
 """The AI chat tools against a real Core: the "Vome" LLM API that Assist's
 agents are given, and the tools doing their work on a real house — states,
-areas, an input_boolean, and automations.yaml written the way the editor
-writes it and picked up by a reload."""
+areas, an input_boolean, and automations saved through the Vome app, which
+hands them to Home Assistant's own automation editor API."""
+import sys
+from pathlib import Path
+
 import pytest
 from homeassistant.core import Context
 from homeassistant.helpers import area_registry as ar
@@ -10,6 +13,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
 from homeassistant.setup import async_setup_component
 
+from custom_components.vomesync import app_channel
 from custom_components.vomesync import chat_tools as ct
 from custom_components.vomesync.llm_api import API_ID, async_register_llm_api
 
@@ -131,11 +135,42 @@ mode: single
 """
 
 
-async def test_an_automation_is_written_reloaded_read_and_deleted(hass, house, hass_admin_user):
+@pytest.fixture
+async def vome_app(hass, house, hass_client, monkeypatch):
+	"""The Vome app installed: its real automation handler, and Home
+	Assistant's real editor API behind it (the HTTP hops are the test client)."""
+	sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "vome" / "panel"))
+	import integration_channel
+
+	assert await async_setup_component(hass, "config", {})
+	client = await hass_client()
+
+	async def _request(_hass, path, payload):
+		assert path == "/automation"
+		sent = []
+		status, answer = integration_channel.handle_automation(
+			payload, lambda method, url, body=None: sent.append((method, url, body)) or (200, {}),
+		)
+		if status != 200:
+			return None, answer["error"]
+		for method, url, body in sent:
+			resp = await client.request(method, "/api" + url, json=body)
+			if resp.status != 200:
+				return None, f"HTTP {resp.status}: {await resp.text()}"
+		return answer, None
+
+	monkeypatch.setattr(app_channel, "available", lambda _hass: True)
+	monkeypatch.setattr(app_channel, "async_request", _request)
+
+
+async def test_an_automation_is_saved_by_the_app_reloaded_read_and_deleted(
+	hass, house, vome_app, hass_admin_user,
+):
 	saved = await ct.async_call_tool(
 		hass, "save_automation", {"yaml": AUTOMATION, "automation_id": "chat_1"},
 		hass_admin_user.id)
-	assert saved == {"id": "chat_1", "alias": "Hall light at sunset", "result": "created"}
+	assert saved == {"id": "chat_1", "alias": "Hall light at sunset", "result": "created",
+	                 "saved_by": "the Vome app"}
 	await hass.async_block_till_done()
 	state = hass.states.get("automation.hall_light_at_sunset")
 	assert state is not None and state.attributes["id"] == "chat_1"
@@ -163,3 +198,23 @@ async def test_an_automation_is_written_reloaded_read_and_deleted(hass, house, h
 	await hass.async_block_till_done()
 	assert hass.states.get("automation.hall_light_at_sunset") is None
 	assert "chat_1" not in (house / "automations.yaml").read_text()
+
+
+async def test_without_the_app_the_owner_gets_the_yaml_and_nothing_is_written(
+	hass, house, hass_admin_user,
+):
+	# An integration may not write automations.yaml (HACS review, 20 Oct 2026).
+	saved = await ct.async_call_tool(
+		hass, "save_automation", {"yaml": AUTOMATION, "automation_id": "chat_1"},
+		hass_admin_user.id)
+	assert saved["result"] == "not saved"
+	assert "Vome app" in saved["why"]
+	assert "Edit in YAML" in saved["next_step"]
+	assert saved["yaml"].startswith("alias: Hall light at sunset\n")
+	assert "\nid:" not in saved["yaml"]
+	assert (house / "automations.yaml").read_text() == "[]\n"
+	assert hass.states.get("automation.hall_light_at_sunset") is None
+
+	with pytest.raises(ct.ChatToolError, match="No automation"):
+		await ct.async_call_tool(hass, "delete_automation", {"automation_id": "chat_1"},
+		                         hass_admin_user.id)
