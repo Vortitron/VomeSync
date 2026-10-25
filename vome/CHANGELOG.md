@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.74 — 25 October 2026
+
+**Every YAML change the app makes is in your logbook.** When the Vome app
+changes a YAML file for a coding agent, or saves or deletes an automation
+for the chat, Home Assistant's logbook now says so. For example: "Vome wrote
+configuration.yaml for a Vome remote file request". The app's log has the
+same line. Nothing is recorded for a change that was refused.
+
 ## 0.3.73 — 25 October 2026
 
 **Vome's actions are for administrators only.** Everything the Vome

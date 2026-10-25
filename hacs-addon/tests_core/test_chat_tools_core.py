@@ -154,13 +154,20 @@ async def vome_app(hass, house, hass_client, monkeypatch):
 		if status != 200:
 			return None, answer["error"]
 		for method, url, body in sent:
+			if url == "/services/logbook/log":
+				# The owner's record of the change; checked in test_app_channel,
+				# and this harness has no recorder for the logbook to sit on.
+				logbook.append(body["message"])
+				continue
 			resp = await client.request(method, "/api" + url, json=body)
 			if resp.status != 200:
 				return None, f"HTTP {resp.status}: {await resp.text()}"
 		return answer, None
 
+	logbook = []
 	monkeypatch.setattr(app_channel, "available", lambda _hass: True)
 	monkeypatch.setattr(app_channel, "async_request", _request)
+	return logbook
 
 
 async def test_an_automation_is_saved_by_the_app_reloaded_read_and_deleted(
@@ -198,6 +205,8 @@ async def test_an_automation_is_saved_by_the_app_reloaded_read_and_deleted(
 	await hass.async_block_till_done()
 	assert hass.states.get("automation.hall_light_at_sunset") is None
 	assert "chat_1" not in (house / "automations.yaml").read_text()
+	assert vome_app[0] == 'saved the automation "Hall light at sunset" for the Vome chat'
+	assert vome_app[-1] == "deleted the automation chat_1 for the Vome chat"
 
 
 async def test_without_the_app_the_owner_gets_the_yaml_and_nothing_is_written(

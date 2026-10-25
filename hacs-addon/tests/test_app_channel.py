@@ -283,17 +283,54 @@ def test_the_app_saves_automations_through_home_assistants_editor(app):
 		== (200, {"result": "saved"})
 	assert app.handle_automation({"op": "delete", "id": "chat_1"}, ha_request) \
 		== (200, {"result": "deleted"})
+	logbook = ("POST", "/services/logbook/log")
 	assert sent == [
 		("POST", "/config/automation/config/chat_1", {"alias": "x"}),
+		(*logbook, {"name": "Vome", "domain": "vomesync",
+		            "message": 'saved the automation "x" for the Vome chat'}),
 		("DELETE", "/config/automation/config/chat_1", None),
+		(*logbook, {"name": "Vome", "domain": "vomesync",
+		            "message": "deleted the automation chat_1 for the Vome chat"}),
 	]
 	for bad in ({"op": "save", "id": "../x", "config": {}}, {"op": "save", "id": "a"},
 	            {"op": "rename", "id": "a"}):
 		assert app.handle_automation(bad, ha_request)[0] == 400
-	assert len(sent) == 2
+	assert len(sent) == 4
 	status, answer = app.handle_automation(
 		{"op": "save", "id": "a", "config": {}}, lambda *a, **k: (400, {"message": "Message malformed"}))
 	assert status == 400 and "Message malformed" in answer["error"]
+
+
+def test_every_yaml_change_is_in_the_logbook(app, tmp_path):
+	# What the owner can look back at: each change names the file and the verb,
+	# and a refused change leaves no entry.  A logbook that cannot be reached
+	# never undoes the change.
+	(tmp_path / "a.yaml").write_text("a: 1\n", encoding="utf-8")
+	entries = []
+
+	def ha_request(method, path, body=None):
+		entries.append(body["message"])
+		return 200, {}
+
+	for payload in (
+		{"op": "write", "path": "a.yaml", "body": {"content": "a: 2\n"}},
+		{"op": "move", "path": "a.yaml", "to": "packages/a.yaml"},
+		{"op": "delete", "path": "configuration.yaml"},
+		{"op": "delete", "path": "packages/a.yaml"},
+	):
+		app.handle_files(payload, str(tmp_path), ha_request)
+	assert entries == [
+		"wrote a.yaml for a Vome remote file request",
+		"moved a.yaml to packages/a.yaml for a Vome remote file request",
+		"deleted packages/a.yaml for a Vome remote file request",
+	]
+
+	def broken(*_args, **_kwargs):
+		raise OSError("logbook unreachable")
+
+	status, _answer = app.handle_files(
+		{"op": "write", "path": "b.yaml", "body": {"content": "b: 1\n"}}, str(tmp_path), broken)
+	assert status == 200 and (tmp_path / "b.yaml").exists()
 
 
 def test_the_listener_refuses_anyone_without_the_secret(app, tmp_path, monkeypatch):
