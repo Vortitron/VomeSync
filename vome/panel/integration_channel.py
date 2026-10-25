@@ -17,6 +17,10 @@ Files are changed with the integration's own ``file_ops`` rules, loaded from
 the copy bundled in this image, and only YAML is accepted.  Automations are
 saved and deleted through Home Assistant's own automation editor API, so Home
 Assistant writes automations.yaml exactly as its editor would.
+
+Every change is recorded where the owner will see it: a line in this app's
+log and an entry in Home Assistant's logbook, naming the file or automation
+and what was done to it.
 """
 from __future__ import annotations
 
@@ -86,7 +90,29 @@ def authorised(header: Optional[str]) -> bool:
 	return hmac.compare_digest(header.encode(), f"Bearer {secret}".encode())
 
 
-def handle_files(payload: dict, config_root: str) -> tuple[int, dict]:
+_FILE_VERBS = {"write": "wrote", "delete": "deleted", "move": "moved"}
+
+
+def record(ha_request: Optional[Callable], message: str) -> None:
+	"""Say what was changed: in this app's log, and in Home Assistant's logbook.
+
+	The logbook entry is a courtesy, not a condition: a home without the
+	logbook (or one that refuses the call) still gets its change, and the
+	app's log still has the line.
+	"""
+	LOG.info("%s", message)
+	if ha_request is None:
+		return
+	try:
+		ha_request("POST", "/services/logbook/log",
+		           {"name": "Vome", "message": message, "domain": "vomesync"})
+	except Exception as err:  # noqa: BLE001 - never undo a change over its record
+		LOG.debug("logbook entry not written: %s", err)
+
+
+def handle_files(
+	payload: dict, config_root: str, ha_request: Optional[Callable] = None,
+) -> tuple[int, dict]:
 	"""One YAML ``write``, ``delete`` or ``move`` under Home Assistant's config."""
 	if not config_root:
 		return 503, {"error": "The Vome app cannot see Home Assistant's config folder."}
@@ -98,7 +124,13 @@ def handle_files(payload: dict, config_root: str) -> tuple[int, dict]:
 	)
 	if status != 200 or body is None:
 		return 400, {"error": error or "The file was not changed."}
-	return 200, {"result": json.loads(body)}
+	result = json.loads(body)
+	op = str(payload.get("op"))
+	where = result.get("path") or payload.get("path")
+	if op == "move":
+		where = f"{where} to {result.get('to')}"
+	record(ha_request, f"{_FILE_VERBS.get(op, op)} {where} for a Vome remote file request")
+	return 200, {"result": result}
 
 
 def handle_automation(payload: dict, ha_request: Callable) -> tuple[int, dict]:
@@ -117,6 +149,11 @@ def handle_automation(payload: dict, ha_request: Callable) -> tuple[int, dict]:
 	else:
 		return 400, {"error": f"Unknown automation operation: {op}"}
 	if status == 200:
+		if op == "save":
+			name = payload["config"].get("alias") or key
+			record(ha_request, f"saved the automation \"{name}\" for the Vome chat")
+		else:
+			record(ha_request, f"deleted the automation {key} for the Vome chat")
 		return 200, {"result": "saved" if op == "save" else "deleted"}
 	detail = body.get("message") or body.get("error") if isinstance(body, dict) else body
 	return 400, {"error": f"Home Assistant refused it (HTTP {status}): {detail}"}
@@ -159,7 +196,7 @@ def make_handler(config_root: Callable[[], str], ha_request: Callable) -> type:
 				return
 			try:
 				if self.path == "/files":
-					self._send_json(*handle_files(payload, config_root()))
+					self._send_json(*handle_files(payload, config_root(), ha_request))
 				elif self.path == "/automation":
 					self._send_json(*handle_automation(payload, ha_request))
 				else:
