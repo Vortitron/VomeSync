@@ -273,9 +273,10 @@ class FakePortal:
 		self.uploads = []
 		self.reports = []
 
-	def role(self, primary_reachable=None, edge_reachable=None):
+	def role(self, primary_reachable=None, edge_reachable=None, sending=None):
 		self.reported = primary_reachable
 		self.reported_edge = edge_reachable
+		self.sending = sending
 		return self._role
 
 	def upload(self, blob, meta):
@@ -1464,3 +1465,88 @@ class TestE2EKeyStaysHome:
 	def test_the_rest_of_storage_still_is(self):
 		assert cs.is_synced(".storage/core.config_entries")
 		assert cs.is_synced(".storage/vomesync_e2e_unrelated")
+
+
+class TestNotSendingIsSaid:
+	"""GamlaBio, 17-28 Oct 2026: the configuration grew past the size limit,
+	every upload was skipped with a line in the add-on's own log, and Vome
+	showed the pair in step for eleven days -- until a failover ran on the
+	old settings and the handback copied them over the newer ones."""
+
+	def test_too_large_is_reported_on_the_next_check_in(self, tmp_path, monkeypatch):
+		active = make_config(tmp_path / "active")
+		monkeypatch.setattr(cs, "MAX_SNAPSHOT_BYTES", 10)
+		portal = FakePortal({"role": "active", "latest": {"sha256": "older"}})
+		outcome, _ = cs.run_once(portal, active, tmp_path)
+		assert "too large" in outcome and portal.uploads == []
+		cs.run_once(portal, active, tmp_path)
+		_, meta = cs.build_snapshot(active)
+		assert portal.sending["sha256"] == meta["sha256"]
+		assert "more than" in portal.sending["problem"]
+
+	def test_a_sent_config_clears_the_problem(self, tmp_path, monkeypatch):
+		active = make_config(tmp_path / "active")
+		monkeypatch.setattr(cs, "MAX_SNAPSHOT_BYTES", 10)
+		portal = FakePortal({"role": "active", "latest": {"sha256": "older"}})
+		cs.run_once(portal, active, tmp_path)
+		monkeypatch.setattr(cs, "MAX_SNAPSHOT_BYTES", 512 * 1024 * 1024)
+		cs.run_once(portal, active, tmp_path)
+		assert len(portal.uploads) == 1
+		cs.run_once(portal, active, tmp_path)
+		assert portal.sending.get("problem") is None
+
+	def test_a_failed_upload_is_reported(self, tmp_path):
+		active = make_config(tmp_path / "active")
+
+		class Down(FakePortal):
+			def upload(self, blob, meta):
+				raise urllib.error.URLError("connection reset")
+
+		portal = Down({"role": "active", "latest": {"sha256": "older"}})
+		cs.run_once(portal, active, tmp_path)
+		cs.run_once(portal, active, tmp_path)
+		assert "connection reset" in portal.sending["problem"]
+
+
+class TestLeftOut:
+	def teardown_method(self):
+		cs.set_excludes(())
+
+	def test_an_owners_folder_is_neither_sent_nor_removed(self, tmp_path):
+		active = make_config(tmp_path / "active")
+		(active / "frontpath_snapshots").mkdir()
+		(active / "frontpath_snapshots" / "a.jpg").write_bytes(b"photo")
+		cs.set_excludes(["frontpath_snapshots/"])
+		blob, _ = cs.build_snapshot(active)
+		names = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz").getnames()
+		assert not any(n.startswith("frontpath_snapshots") for n in names)
+		# The receiving install keeps its own photos: the mirror never deletes them.
+		standby = make_config(tmp_path / "standby")
+		(standby / "frontpath_snapshots").mkdir()
+		(standby / "frontpath_snapshots" / "b.jpg").write_bytes(b"its own")
+		cs.apply_snapshot(standby, blob)
+		assert (standby / "frontpath_snapshots" / "b.jpg").read_bytes() == b"its own"
+
+	def test_a_snapshot_from_an_older_add_on_is_not_refused_for_them(self, tmp_path):
+		old = make_config(tmp_path / "old")
+		(old / "frontpath_snapshots").mkdir()
+		(old / "frontpath_snapshots" / "a.jpg").write_bytes(b"photo")
+		(old / "custom_components" / "x" / "card.js.map").write_text("{}")
+		blob, _ = cs.build_snapshot(old)  # no list yet: photos go in
+		names = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz").getnames()
+		assert "frontpath_snapshots/a.jpg" in names
+		cs.set_excludes(["frontpath_snapshots"])
+		new = make_config(tmp_path / "new")
+		result = cs.apply_snapshot(new, blob)
+		assert result["written"] > 0
+		assert not (new / "frontpath_snapshots" / "a.jpg").exists()
+
+	def test_source_maps_are_never_sent(self, tmp_path):
+		active = make_config(tmp_path / "active")
+		(active / "custom_components" / "x" / "card.js.map").write_text("{}")
+		assert "custom_components/x/card.js.map" not in cs.synced_files(active)
+
+	def test_a_list_cannot_leave_out_what_a_snapshot_needs(self):
+		cs.set_excludes([".storage", "../etc", ".HA_VERSION", "*.jpg"])
+		assert cs._chosen_excludes == ("*.jpg",)
+		assert cs.is_synced(".storage/core.config_entries")
