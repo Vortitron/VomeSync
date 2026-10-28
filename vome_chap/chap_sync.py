@@ -33,6 +33,7 @@ Stdlib only: the add-on image is built without network access.
 """
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import ipaddress
 import io
@@ -89,8 +90,14 @@ DEFAULT_INTERVAL = 300
 VOLATILE = frozenset({".storage/core.restore_state"})
 REFRESH_SECONDS = 6 * 3600
 IDLE_INTERVAL = 60
-MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
-MAX_UNPACKED_BYTES = 1024 * 1024 * 1024
+# GamlaBio, 28 Oct 2026: its configuration (a camera's photos among it) grew
+# past the old 256 MB on 17 Oct, every upload after that was skipped, and the
+# portal heard nothing -- so its standby took over eleven days behind and the
+# handback put those eleven days back. The limit is higher now, the add-on
+# says on every check-in when it cannot send (send_problem), and an owner can
+# leave folders out (the portal's ``exclude`` list).
+MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
+MAX_UNPACKED_BYTES = 2 * 1024 * 1024 * 1024
 
 ROLE_ACTIVE = "active"
 ROLE_STANDBY = "standby"
@@ -133,7 +140,50 @@ EXCLUDED_PREFIXES = (".storage/vomesync_e2e",)
 
 # Anywhere in the tree.
 EXCLUDED_ANYWHERE_DIRS = frozenset({"__pycache__", ".git"})
-EXCLUDED_SUFFIXES = (".pyc", ".db-wal", ".db-shm", ".db-journal", ".tmp", ".log")
+EXCLUDED_SUFFIXES = (".pyc", ".db-wal", ".db-shm", ".db-journal", ".tmp", ".log",
+                     # Source maps: a debugger's aid, never needed to run, and
+                     # often the biggest files a custom card or panel ships.
+                     ".js.map", ".css.map")
+
+# Paths the owner chose to leave out of syncing (Vome's CHAP page, sent with
+# every check-in): a camera's snapshot folder, say. Left out both ways: never
+# sent, and never removed from the install that receives -- each side keeps
+# its own. A pattern with * is matched against the whole path; anything else
+# is a folder or file, from /config.
+_chosen_excludes: tuple = ()
+
+
+def set_excludes(patterns) -> None:
+	"""The owner's list from the portal, cleaned: paths under /config only,
+	and never one a snapshot must hold (REQUIRED_IN_SNAPSHOT), which would
+	make every snapshot be refused."""
+	global _chosen_excludes
+	clean = []
+	for p in patterns or ():
+		p = str(p or "").strip().strip("/")
+		if not p or p.startswith("/") or "\\" in p or ".." in p.split("/"):
+			continue
+		if any(req == p or req.startswith(p + "/") or ("*" in p and fnmatch.fnmatchcase(req, p))
+		       for req in REQUIRED_IN_SNAPSHOT):
+			continue
+		clean.append(p)
+	_chosen_excludes = tuple(clean)
+
+
+def chosen_excluded(rel: str) -> bool:
+	for pat in _chosen_excludes:
+		if "*" in pat or "?" in pat:
+			if fnmatch.fnmatchcase(rel, pat):
+				return True
+		elif rel == pat or rel.startswith(pat + "/"):
+			return True
+	return False
+
+
+def skipped_quietly(rel: str) -> bool:
+	"""In a snapshot from an install with different rules (an older add-on,
+	or no exclude list yet): skip it rather than refuse the whole snapshot."""
+	return chosen_excluded(rel) or rel.endswith((".js.map", ".css.map"))
 
 
 def is_synced(rel: str) -> bool:
@@ -151,6 +201,8 @@ def is_synced(rel: str) -> bool:
 	if any(p in EXCLUDED_ANYWHERE_DIRS for p in parts[:-1]):
 		return False
 	if parts[-1].endswith(EXCLUDED_SUFFIXES):
+		return False
+	if chosen_excluded(rel):
 		return False
 	return True
 
@@ -172,7 +224,7 @@ def synced_files(config_dir: Path) -> list[str]:
 			rel = f"{rel_dir}/{d}" if rel_dir else d
 			if os.path.islink(os.path.join(dirpath, d)):
 				continue
-			if d in EXCLUDED_ANYWHERE_DIRS or (not rel_dir and d in EXCLUDED_TOP):
+			if d in EXCLUDED_ANYWHERE_DIRS or (not rel_dir and d in EXCLUDED_TOP) or chosen_excluded(rel):
 				continue
 			keep.append(d)
 		dirnames[:] = keep
@@ -321,6 +373,8 @@ def _safe_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
 		if name.startswith("/") or "\\" in name or ".." in name.split("/"):
 			raise ApplyRefused(f"unsafe path in snapshot: {name}")
 		if not is_synced(name):
+			if skipped_quietly(name):
+				continue
 			raise ApplyRefused(f"snapshot holds a path this side does not sync: {name}")
 		members.append(m)
 	# Declared sizes are what extraction writes: a small, highly compressed
@@ -1330,13 +1384,21 @@ class Portal:
 		return self.opener(req, timeout=timeout)
 
 	def role(self, primary_reachable: Optional[bool] = None,
-	         edge_reachable: Optional[bool] = None) -> Optional[dict]:
+	         edge_reachable: Optional[bool] = None, sending: Optional[dict] = None) -> Optional[dict]:
 		"""The portal's view of this install, or None when it cannot be asked.
 
 		A local fallback for a hosted home also says, on each poll, whether
 		it can reach that hosted home — the portal's evidence of the link.
+		The active install says what its configuration hashes to now, and
+		why it could not send it if it could not: without that, a main that
+		stopped sending looked exactly like one with nothing new.
 		"""
 		headers = {}
+		sending = sending or {}
+		if sending.get("sha256"):
+			headers["X-Config-SHA256"] = str(sending["sha256"])
+		if sending.get("problem"):
+			headers["X-Send-Problem"] = urllib.parse.quote(str(sending["problem"])[:300])
 		if primary_reachable is not None:
 			headers["X-Primary-Reachable"] = "1" if primary_reachable else "0"
 		if edge_reachable is not None:
@@ -1555,7 +1617,8 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	now = time.time()
 	reachable = watch_primary(state, now, probe, edge_probe)
 
-	info = portal.role(reachable, state.get("edge_reachable") if reachable is not None else None)
+	info = portal.role(reachable, state.get("edge_reachable") if reachable is not None else None,
+	                   sending={"sha256": state.get("config_sha256"), "problem": state.get("send_problem")})
 	if info is None:
 		note = maybe_take_over_locally(state, now, set_running)
 		save_json(state_path, state)
@@ -1579,6 +1642,7 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	save_json(state_path, state)
 	role = info.get("role")
 	interval = int(info.get("interval_seconds") or DEFAULT_INTERVAL)
+	set_excludes(info.get("exclude"))
 	update_note = ensure_auto_update(state, state_path)
 	if update_note:
 		LOG.info("%s", update_note)
@@ -1612,24 +1676,40 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 		blob, meta = build_snapshot(config_dir)
 		latest = info.get("latest") or {}
 		age = time.time() - float(latest.get("created_at") or 0)
+
+		def sending(problem: Optional[str]) -> None:
+			# Told to the portal on the next check-in (Portal.role).
+			state["config_sha256"] = meta["sha256"]
+			if problem:
+				state["send_problem"] = problem
+			else:
+				state.pop("send_problem", None)
+			save_json(state_path, state)
+
 		# upload_now: a handback is waiting for a snapshot taken after it was
 		# asked for, changed or not.
 		if (meta["sha256"] == latest.get("sha256") and age < REFRESH_SECONDS
 		        and not info.get("upload_now")):
+			sending(None)
 			return "active: unchanged since the last upload", interval
 		if len(blob) > MAX_SNAPSHOT_BYTES:
+			mb = lambda n: round(n / (1024 * 1024))  # noqa: E731
+			sending(f"the configuration is {mb(len(blob))} MB packed, more than the {mb(MAX_SNAPSHOT_BYTES)} MB "
+			        "Vome takes; leave a big folder out on Vome's CHAP page")
 			return f"active: snapshot too large to send ({len(blob)} bytes)", interval
 		try:
 			result = portal.upload(blob, meta)
 		except urllib.error.HTTPError as exc:
 			# 409: the portal no longer sees this side as active (a takeover
 			# happened between the role check and the upload). Not an error.
+			sending(None if exc.code == 409 else f"Vome refused the upload (HTTP {exc.code})")
 			return f"active: upload refused ({exc.code})", interval
 		except (urllib.error.URLError, OSError) as exc:
+			sending(f"the upload failed: {exc}")
 			return f"active: upload failed ({exc})", IDLE_INTERVAL
 		state.update({"uploaded_sha256": meta["sha256"], "uploaded_at": int(time.time()),
 		              "uploaded_id": result.get("id")})
-		save_json(state_path, state)
+		sending(None)
 		return f"active: uploaded {meta['file_count']} files ({len(blob)} bytes)", interval
 
 	if role == ROLE_STANDBY:

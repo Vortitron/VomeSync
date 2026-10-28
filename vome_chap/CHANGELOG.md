@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.6 — 28 October 2026
+
+**When your main install can't send its changes, Vome hears why.** A
+configuration bigger than the size Vome took was skipped on every pass, with a
+line in this app's own log and nothing else, so Vome went on showing the
+standby in step while it fell behind. Every check-in now carries what the
+configuration adds up to and, if it could not be sent, the reason; Vome
+counts the standby as behind from then, tells you, and does not copy the old
+settings back after a failover.
+
+**Bigger homes fit.** The limit is 512 MB packed (it was 256 MB), source maps
+(`.js.map`, `.css.map`) are left out, and folders you choose on Vome's CHAP
+page (a camera's snapshots, say) are left out both ways: never sent, and never
+removed from the install that receives.
+
 ## 0.2.5 — 20 October 2026
 
 **Your home's end-to-end key stays in your home.** A home with end-to-end
