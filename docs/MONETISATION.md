@@ -18,6 +18,11 @@ British English. No marketing voice. Do not promise a paid feature the code does
 | Stripe | Same live account as vome.io | Hosting plans on vome.io; VomeSync promotion + premium on sync.vome.io. Separate webhook URL. **VAT:** Stripe Tax already registered; Checkout sends `automatic_tax`. |
 | Manage billing | Stripe Customer Portal | Website **Manage billing** + HA **More → Manage billing**. Needs a paid Checkout customer, not a promo grant. |
 | Owner “shop” | Public `link` field | A URL on the card. No payment, no webhook, no commission. Amazon Associates tagged hardware links are a later option with disclosure — not a live inventory feed. |
+| DIY commerce (3a) | `commerce.payLink`, `commerce.webhookUrl`, public toggle, access keys | **Built 29 Oct 2026, on Develop.** Owner's own pay link on the card, signed webhook for every change they did not make, public "Flip it" mode with cooldown and hold. |
+| Pay to switch / tips (3b) | `POST /v2/switch/:uid/pay`, Stripe Connect Accounts v2 | **Built 29 Oct 2026, on Develop, not live.** Destination charges, owner is settlement merchant, fee 10 % + 30 minor units. Connect is **not enabled** on the sandbox or live account yet. |
+| Get paid to switch (rewards) | `reward` offer + claims ledger | **Built 29 Oct 2026, on Develop.** Self-reported claims from the claimant's Home Assistant; publisher settles DIY and marks paid. |
+
+The full contract for the 29 Oct work (properties, per-change notes, commerce, Connect, rewards) is `docs/SWITCH_EXTRAS.md` in the VomeSync-server repo.
 
 Catalogue and public holidays stay free to watch. Directory views are not charged.
 
@@ -94,8 +99,8 @@ Do not use Connect for (1) or (2). Mixing SaaS subscriptions with destination ch
 
 1. **Paid promotion** — Checkout + `promotedUntil` + sort + badge. **Done.**
 2. **Paid premium** — Checkout + `owner_tier` + HA **Upgrade to premium** + Customer Portal. **Done.** VAT is collected on Checkout via Stripe Tax on the existing vome.io registration.
-3. **DIY commerce fields** — webhooks + copy. Zero payouts, zero KYC.
-4. **Connect commission** — only if DIY owners say they want us to collect for them.
+3. **DIY commerce fields** — webhooks + copy. Zero payouts, zero KYC. **Built (Develop).**
+4. **Connect commission** — only if DIY owners say they want us to collect for them. **Built (Develop) ahead of that signal, at the owner's request ("build all the sorts and see what works"); switched off per switch until the owner chooses paid mode or tips.**
 
 Crypto (Base/Solana) stays out until there is a reason. Promo codes remain for comps and the catalogue owner.
 
