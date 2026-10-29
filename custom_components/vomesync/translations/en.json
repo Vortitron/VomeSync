@@ -57,9 +57,20 @@
 					"reannounce_owned_switches": "📣 Re-announce owned switches",
 					"cleanup_orphaned_devices": "🧹 Clean up orphaned devices",
 					"edit_connection": "⚙️ Edit connection URLs",
+					"switch_rewards": "🎁 Rewards for acting on switches",
 					"relay_server": "🛰️ Change the relay server",
 					"vome_backups": "💾 Back up to Vome",
 					"back": "← Back"
+				}
+			},
+			"switch_rewards": {
+				"title": "Rewards for acting on switches",
+				"description": "Some switches you watch offer a small reward for acting on them, such as \"turn your heat pump down when this goes on, 2 kr each time\". When this is on, and a watched switch's change really switched the entities you linked to it, Home Assistant tells the switch's owner so they can pay you. It sends which switch it was, when the change happened and how many entities switched, signed with this Home Assistant's key. The owner settles up however they like; Vome does not pay out.",
+				"data": {
+					"claim_rewards": "Claim rewards"
+				},
+				"data_description": {
+					"claim_rewards": "Off unless you turn it on."
 				}
 			},
 			"backup_signing_key": {

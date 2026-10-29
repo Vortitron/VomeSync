@@ -9,7 +9,7 @@ DOMAIN = "vomesync"
 # add-on copies a newer build into /config, the file on disk is new but the
 # module Home Assistant is running is still old. Comparing this constant with
 # the on-disk manifest is how the panel knows a restart is required.
-INTEGRATION_VERSION = "0.9.58"
+INTEGRATION_VERSION = "0.9.59"
 
 # Configuration keys
 CONF_PERSONAL_KEY = "personal_key"
@@ -531,6 +531,20 @@ API_V2_TOGGLE = "/api/v2/switch/{uid}/toggle"
 API_V2_OWNER_TIER = "/api/v2/owner/tier"
 API_V2_OWNER_PREMIUM = "/api/v2/owner/premium"
 API_V2_OWNER_BILLING_PORTAL = "/api/v2/owner/billing-portal"
+# Switch extras (docs/SWITCH_EXTRAS.md in the server repository): taking
+# payments through Stripe Connect, and reward offers.
+API_V2_OWNER_CONNECT = "/api/v2/owner/connect"
+API_V2_OWNER_CONNECT_STATUS = "/api/v2/owner/connect/status"
+API_V2_OWNER_REWARD_CLAIMS = "/api/v2/owner/reward-claims"
+API_V2_OWNER_MY_REWARDS = "/api/v2/owner/my-rewards"
+API_V2_REWARD_CLAIM = "/api/v2/switch/{uid}/reward-claims"
+
+# Options key: claim a subscribed switch's reward after its linked entities
+# really switched.  Off unless the owner turns it on.
+CONF_CLAIM_REWARDS = "claim_rewards"
+
+# Fired on every change pushed over the WebSocket, owned or subscribed.
+EVENT_STATE_CHANGED = "vomesync_state_changed"
 
 # WebSocket message types
 WS_MSG_STATE_UPDATE = "state_update"

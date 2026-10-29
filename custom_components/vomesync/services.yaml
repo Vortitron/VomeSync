@@ -640,3 +640,315 @@ app_check_in:
       required: true
       selector:
         text:
+
+set_state:
+  name: Set a switch, with a note
+  description: >-
+    Turn a Vome switch on or off, optionally saying what this change is
+    about. The note and params replace the last change's, and everyone who
+    watches the switch sees them. A switch you only watch needs its owner's
+    access key. Administrators only.
+  fields:
+    entity_id:
+      name: Switch
+      description: The Vome switch to change.
+      required: true
+      selector:
+        entity:
+          integration: vomesync
+    state:
+      name: State
+      required: true
+      selector:
+        select:
+          options:
+            - "on"
+            - "off"
+    note:
+      name: Note
+      description: What this change is about, up to 280 characters, for example "Now playing Abba".
+      required: false
+      selector:
+        text:
+    params:
+      name: Params
+      description: >-
+        A small set of values for this change, for example song: SOS or
+        rgb_color: [255, 0, 0]. Up to 16 keys of text, numbers, true/false or
+        short lists. Vome shortens anything longer instead of refusing it.
+      required: false
+      selector:
+        object:
+
+set_properties:
+  name: Set a switch's properties
+  description: >-
+    Fixed facts about one of your switches that stay until you change them,
+    such as wattage: 40 or operator: Hamnen AB. Up to 12. A public switch
+    shows them publicly, so put nothing private in them. Administrators only.
+  fields:
+    entity_id:
+      name: Switch
+      required: true
+      selector:
+        entity:
+          integration: vomesync
+    properties:
+      name: Properties
+      description: >-
+        Names are lower case letters, digits and _ (up to 32). Values are text
+        (up to 200 characters), numbers or true/false. Without Replace, the
+        names given are added or changed and a name set to null is removed.
+      required: true
+      selector:
+        object:
+    replace:
+      name: Replace all
+      description: Replace every property with the ones given, instead of changing only those.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+set_commerce:
+  name: Set how others may change a switch
+  description: >-
+    Whether visitors to one of your public switches may flip it for free or
+    pay to, whether they may tip you, and your own payment link or webhook.
+    Only the settings given change. Returns the webhook secret once when a
+    webhook address is first set or its secret renewed. Administrators only.
+  fields:
+    entity_id:
+      name: Switch
+      required: true
+      selector:
+        entity:
+          integration: vomesync
+    toggle_mode:
+      name: Who may change it
+      description: owner (only you), public (anyone, free, rate-limited) or paid (anyone who pays the price).
+      required: false
+      selector:
+        select:
+          options:
+            - owner
+            - public
+            - paid
+    action:
+      name: What a visitor's change does
+      required: false
+      selector:
+        select:
+          options:
+            - toggle
+            - "on"
+            - "off"
+    hold_seconds:
+      name: Put it back after
+      description: Seconds after a visitor's change before Vome puts the switch back (0 to 3600; 0 never does).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: s
+    cooldown_seconds:
+      name: Gap between free changes
+      description: Seconds between public changes (0 to 3600; at least 5 in public mode).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: s
+    price:
+      name: Price
+      description: >-
+        What a paid change costs, in minor units (100 is 1.00; at least 10 kr
+        in SEK). 0 takes the price off.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 500000
+          mode: box
+    currency:
+      name: Currency
+      required: false
+      selector:
+        select:
+          options:
+            - eur
+            - sek
+            - gbp
+            - usd
+    tips:
+      name: Take tips
+      required: false
+      selector:
+        boolean:
+    allow_message:
+      name: Visitors may add a message
+      description: Up to 140 characters, no links.
+      required: false
+      selector:
+        boolean:
+    note:
+      name: Your note
+      description: Up to 200 characters shown with the switch.
+      required: false
+      selector:
+        text:
+    pay_link:
+      name: Your payment link
+      description: Your own payment page (a Stripe Payment Link, Ko-fi and so on). Empty takes it off.
+      required: false
+      selector:
+        text:
+          type: url
+    webhook_url:
+      name: Webhook address
+      description: >-
+        Vome posts a signed event here for every change not made by you
+        (access keys, visitors, payments, tips, putting it back) and every
+        reward claim. https only. Empty takes it off.
+      required: false
+      selector:
+        text:
+          type: url
+    rotate_webhook_secret:
+      name: New webhook secret
+      description: Make a new secret for the webhook; it is returned once.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+set_reward:
+  name: Offer a reward for acting on a switch
+  description: >-
+    Offer the people who watch one of your switches a reward each time they
+    act on its change, for example 2 kr for turning a heat pump down. Their
+    Home Assistant claims it; you pay them however you like and mark it paid.
+    Administrators only.
+  fields:
+    entity_id:
+      name: Switch
+      required: true
+      selector:
+        entity:
+          integration: vomesync
+    amount:
+      name: Amount
+      description: Per qualifying change, in minor units (200 is 2.00).
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 500000
+          mode: box
+    currency:
+      name: Currency
+      required: false
+      selector:
+        select:
+          options:
+            - eur
+            - sek
+            - gbp
+            - usd
+    "on":
+      name: Which change
+      description: The change that earns it.
+      required: false
+      default: "on"
+      selector:
+        select:
+          options:
+            - "on"
+            - "off"
+            - any
+    window_seconds:
+      name: Claim within
+      description: Seconds after the change a claim is accepted (60 to 86400).
+      required: false
+      selector:
+        number:
+          min: 60
+          max: 86400
+          unit_of_measurement: s
+          mode: box
+    max_per_day:
+      name: At most per day
+      description: Claims per person per day (1 to 100).
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: box
+    note:
+      name: Note
+      description: Up to 200 characters, for example "Thanks for easing the grid at peak".
+      required: false
+      selector:
+        text:
+    clear:
+      name: Withdraw the offer
+      required: false
+      default: false
+      selector:
+        boolean:
+
+connect_payments:
+  name: Take payments for your switches
+  description: >-
+    Start or carry on setting up your payout account with Stripe, so visitors
+    can pay to change your switches or tip you. Returns the link and shows it
+    in a notification. Administrators only.
+  fields:
+    entry_id:
+      name: Vome integration
+      description: Which Vome config entry to use (only needed if you have more than one).
+      required: false
+      selector:
+        text:
+
+payments_status:
+  name: Payments status
+  description: >-
+    Whether your payout account is ready to take payments, and what Stripe
+    still needs. Administrators only.
+  fields:
+    entry_id:
+      name: Vome integration
+      description: Which Vome config entry to use (only needed if you have more than one).
+      required: false
+      selector:
+        text:
+
+reward_claims:
+  name: Reward claims on a switch
+  description: >-
+    The claims made against one of your switches' reward offers, with what
+    you owe each person. Administrators only.
+  fields:
+    entity_id:
+      name: Switch
+      required: true
+      selector:
+        entity:
+          integration: vomesync
+
+my_rewards:
+  name: My rewards
+  description: >-
+    The rewards this Home Assistant has claimed from switches you watch, and
+    what you are owed. Administrators only.
+  fields:
+    entry_id:
+      name: Vome integration
+      description: Which Vome config entry to use (only needed if you have more than one).
+      required: false
+      selector:
+        text:

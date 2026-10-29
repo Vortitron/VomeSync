@@ -332,6 +332,10 @@ def _register_services(hass: HomeAssistant) -> None:
 		supports_response=SupportsResponse.ONLY,
 	)
 
+	# Notes, properties, commerce, payments and rewards (docs/SWITCH_EXTRAS.md).
+	from .services_extras import async_register_extras_services
+	async_register_extras_services(hass)
+
 	from .services_remote import async_register_remote_services
 	async_register_remote_services(hass)
 

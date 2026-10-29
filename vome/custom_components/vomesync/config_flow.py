@@ -44,6 +44,7 @@ from .const import (
 	CONF_CAPTCHA_TOKEN,
 	CONF_SWITCH_ADVANCED,
 	CONF_SHOW_SIGNING_KEY_AFTER,
+	CONF_CLAIM_REWARDS,
 	CONF_BACKUP,
 	CONF_BACKUP_SECRET,
 	backup_secret_server_id,
@@ -608,6 +609,7 @@ class VomeSyncOptionsFlow(
 			"reannounce_owned_switches",
 			"cleanup_orphaned_devices",
 			"edit_connection",
+			"switch_rewards",
 		]
 		if self._relay_is_linked():
 			menu_options.append("relay_server")
@@ -620,6 +622,24 @@ class VomeSyncOptionsFlow(
 	) -> FlowResult:
 		"""Return to the main options menu."""
 		return await self.async_step_init()
+
+	async def async_step_switch_rewards(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		"""Whether to claim the rewards switches you watch offer (off unless turned on)."""
+		if user_input is not None:
+			await self._async_update_entry_options({
+				**(self._config_entry.options or {}),
+				CONF_CLAIM_REWARDS: bool(user_input.get(CONF_CLAIM_REWARDS, False)),
+			})
+			return await self.async_step_init()
+		current = bool((self._config_entry.options or {}).get(CONF_CLAIM_REWARDS, False))
+		return self.async_show_form(
+			step_id="switch_rewards",
+			data_schema=vol.Schema({
+				vol.Optional(CONF_CLAIM_REWARDS, default=current): bool,
+			}),
+		)
 
 	def _crypto_ready(self) -> bool:
 		return (
