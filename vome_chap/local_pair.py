@@ -749,8 +749,12 @@ class Env:
 			local.unlink(missing_ok=True)
 
 	def keep_updating(self, pair: dict) -> Optional[str]:
-		"""Turn on this app's automatic updates, once (chap_sync.ensure_auto_update)."""
-		return self.cs.ensure_auto_update(pair, self.data_dir / PAIR_FILE)
+		"""Turn on this app's automatic updates, once, and see that the store
+		knows of new versions (chap_sync.ensure_auto_update, keep_self_current)."""
+		path = self.data_dir / PAIR_FILE
+		notes = [n for n in (self.cs.ensure_auto_update(pair, path),
+		                     self.cs.keep_self_current(pair, path, time.time())) if n]
+		return "; ".join(notes) or None
 
 	def addon_names(self) -> Optional[dict]:
 		listed = self.cs.addon_list()

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.7 — 29 October 2026
+
+**A standby keeps itself up to date.** Automatic updates were on, but on some
+boxes Home Assistant's app store never refreshes by itself, so it never heard
+that a newer Vome CHAP was out and the standby kept its old version until
+someone ran `ha store reload` on it. Nobody opens a standby, so this app now
+refreshes the store every six hours and, when a newer Vome CHAP is waiting,
+updates itself. This applies on both installs and in both kinds of pair.
+From 0.2.7 on, no one has to do it by hand.
+
 ## 0.2.6 — 28 October 2026
 
 **When your main install can't send its changes, Vome hears why.** A

@@ -1354,6 +1354,69 @@ class TestAutoUpdate:
 		assert calls == ["GET"]
 
 
+T = 1_793_262_588.0  # 29 Oct 2026
+
+
+class TestKeepsItselfCurrent:
+	"""GamlaBio.local, 5 and 29 Oct 2026: automatic updates were on, but the
+	Supervisor's app store never refreshed by itself, so the standby sat on
+	an old Vome CHAP until the owner ran ``ha store reload`` on the house box."""
+
+	def _call(self, calls, info, store=200, update=200):
+		def call(method, path, body=None, timeout=60):
+			calls.append((method, path, body))
+			if path == "/store/reload":
+				return store, {}
+			if path == "/addons/self/info":
+				return 200, {"data": info}
+			return update, {}
+		return call
+
+	def test_it_refreshes_the_store_and_takes_a_waiting_update(self, tmp_path):
+		calls = []
+		info = {"slug": "b1bff62e_vome_chap", "version": "0.2.4", "version_latest": "0.2.7", "update_available": True}
+		note = cs.keep_self_current({}, tmp_path / "s.json", T, self._call(calls, info))
+		assert note == "updated Vome CHAP from 0.2.4 to 0.2.7"
+		assert [c[:2] for c in calls] == [("POST", "/store/reload"), ("GET", "/addons/self/info"),
+		                                  ("POST", "/store/addons/b1bff62e_vome_chap/update")]
+		assert calls[-1][2] == {"backup": False}
+
+	def test_nothing_waiting_is_a_quiet_refresh(self, tmp_path):
+		calls = []
+		info = {"slug": "x_vome_chap", "version": "0.2.7", "version_latest": "0.2.7", "update_available": False}
+		assert cs.keep_self_current({}, tmp_path / "s.json", T, self._call(calls, info)) is None
+		assert [c[1] for c in calls] == ["/store/reload", "/addons/self/info"]
+
+	def test_every_six_hours_not_every_pass(self, tmp_path):
+		calls = []
+		info = {"slug": "x_vome_chap", "version": "0.2.7", "version_latest": "0.2.7", "update_available": False}
+		state, path, call = {}, tmp_path / "s.json", self._call(calls, info)
+		cs.keep_self_current(state, path, T, call)
+		cs.keep_self_current(state, path, T + cs.STORE_RELOAD_SECONDS - 1, call)
+		assert len(calls) == 2
+		cs.keep_self_current(state, path, T + cs.STORE_RELOAD_SECONDS, call)
+		assert len(calls) == 4
+		# Kept on disk, so a restart does not reload again at once.
+		assert json.loads(path.read_text())["store_reloaded_at"] == T + cs.STORE_RELOAD_SECONDS
+
+	def test_a_failed_refresh_says_so_and_waits(self, tmp_path):
+		calls = []
+		state = {}
+		note = cs.keep_self_current(state, tmp_path / "s.json", T, self._call(calls, {}, store=500))
+		assert "could not refresh the app store" in note and "500" in note
+		assert cs.keep_self_current(state, tmp_path / "s.json", T + 60, self._call(calls, {})) is None
+		assert len(calls) == 1
+
+	def test_a_failed_update_says_so(self, tmp_path):
+		info = {"slug": "x_vome_chap", "version": "0.2.4", "version_latest": "0.2.7", "update_available": True}
+		note = cs.keep_self_current({}, tmp_path / "s.json", T, self._call([], info, update=400))
+		assert note.startswith("could not update Vome CHAP to 0.2.7") and "400" in note
+
+	def test_both_kinds_of_pair_do_it(self):
+		assert "current_note = keep_self_current(state, state_path, now)" in (ROOT / "vome_chap" / "chap_sync.py").read_text()
+		assert "self.cs.keep_self_current(pair, path, time.time())" in (ROOT / "vome_chap" / "local_pair.py").read_text()
+
+
 class TestSaysWhichVersionItIs:
 	"""GamlaBio, 4 Oct 2026: the house fallback ran a Vome CHAP too old to
 	update its own Home Assistant, and Vome could not tell the owner so."""

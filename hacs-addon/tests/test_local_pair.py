@@ -632,8 +632,14 @@ def test_the_real_env_asks_the_supervisor(tmp_path):
 		def ensure_auto_update(state, path):
 			calls.append(path)
 			return "turned on"
+
+		@staticmethod
+		def keep_self_current(state, path, now):
+			calls.append(path)
+			return "updated Vome CHAP from 0.2.4 to 0.2.7"
 	env = lp.Env(FakeCs, tmp_path, tmp_path)
-	assert env.keep_updating({}) == "turned on" and calls == [tmp_path / lp.PAIR_FILE]
+	assert env.keep_updating({}) == "turned on; updated Vome CHAP from 0.2.4 to 0.2.7"
+	assert calls == [tmp_path / lp.PAIR_FILE] * 2
 
 
 

@@ -929,6 +929,42 @@ def ensure_auto_update(state: dict, state_path: Path, call=None) -> Optional[str
 	return note
 
 
+STORE_RELOAD_SECONDS = 6 * 3600
+
+
+def keep_self_current(state: dict, state_path: Path, now: float, call=None) -> Optional[str]:
+	"""Refresh the app store every few hours, and take a newer Vome CHAP.
+
+	GamlaBio.local, 5 and 29 Oct 2026: automatic updates were on, but the
+	Supervisor's copy of the app store never refreshed by itself, so it
+	never learnt a newer version existed and the owner had to run ``ha store
+	reload`` on the house box and update by hand. Nobody opens a standby, so
+	it does both itself: reload, and if an update is waiting, ask for it
+	(the Supervisor restarts this app on the new version; a pass is never
+	half done here, as this runs before the pass does anything).
+	"""
+	if now - float(state.get("store_reloaded_at") or 0) < STORE_RELOAD_SECONDS:
+		return None
+	call = call or _supervisor_call
+	state["store_reloaded_at"] = now
+	save_json(state_path, state)
+	status, _ = call("POST", "/store/reload", None, timeout=300)
+	if status != 200:
+		return f"could not refresh the app store (the Supervisor answered {status}); trying again in 6 hours"
+	status, body = call("GET", "/addons/self/info", None, timeout=30)
+	data = (body or {}).get("data") if isinstance(body, dict) else None
+	if status != 200 or not isinstance(data, dict) or not data.get("update_available"):
+		return None
+	slug, have, latest = data.get("slug"), data.get("version"), data.get("version_latest")
+	if not slug or not latest:
+		return None
+	LOG.info("Vome CHAP %s is out (this is %s); updating", latest, have)
+	status, _ = call("POST", f"/store/addons/{slug}/update", {"backup": False}, timeout=1800)
+	if status != 200:
+		return f"could not update Vome CHAP to {latest} (the Supervisor answered {status}); trying again in 6 hours"
+	return f"updated Vome CHAP from {have} to {latest}"
+
+
 def core_version(opener=urllib.request.urlopen) -> str:
 	status, body = _supervisor_get("/core/info", opener)
 	if status == 200 and isinstance(body, dict):
@@ -1646,6 +1682,9 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	update_note = ensure_auto_update(state, state_path)
 	if update_note:
 		LOG.info("%s", update_note)
+	current_note = keep_self_current(state, state_path, now)
+	if current_note:
+		LOG.info("%s", current_note)
 
 	core_note = enforce_core(info.get("core"), state, state_path, core_stopped, set_running)
 	if core_note:
