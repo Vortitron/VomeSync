@@ -930,27 +930,46 @@ def ensure_auto_update(state: dict, state_path: Path, call=None) -> Optional[str
 
 
 STORE_RELOAD_SECONDS = 6 * 3600
+SUPERVISOR_SETTLE_SECONDS = 600
 
 
 def keep_self_current(state: dict, state_path: Path, now: float, call=None) -> Optional[str]:
-	"""Refresh the app store every few hours, and take a newer Vome CHAP.
+	"""Look for updates every few hours; take a newer Supervisor, then a
+	newer Vome CHAP.
 
-	GamlaBio.local, 5 and 29 Oct 2026: automatic updates were on, but the
-	Supervisor's copy of the app store never refreshed by itself, so it
-	never learnt a newer version existed and the owner had to run ``ha store
-	reload`` on the house box and update by hand. Nobody opens a standby, so
-	it does both itself: reload, and if an update is waiting, ask for it
-	(the Supervisor restarts this app on the new version; a pass is never
-	half done here, as this runs before the pass does anything).
+	GamlaBio.local, 5 and 29 Oct 2026: automatic updates were on, but its
+	Supervisor never refreshed its version list or its copy of the app
+	store by itself, so it never learnt a newer anything existed; the owner
+	had to update by hand on the house box. Nobody opens a standby, so it
+	does it itself (the Supervisor restarts on its new version, and this app
+	on its; a pass is never half done here, as this runs before the pass
+	does anything).
 	"""
 	if now - float(state.get("store_reloaded_at") or 0) < STORE_RELOAD_SECONDS:
 		return None
 	call = call or _supervisor_call
 	state["store_reloaded_at"] = now
 	save_json(state_path, state)
-	status, _ = call("POST", "/store/reload", None, timeout=300)
+	# The app store and the Supervisor's own version list both: on GamlaBio.local
+	# neither refreshed, and its old Supervisor refused every copy of the
+	# add-ons' data made by the main's newer one (HTTP 400, 29-30 Oct 2026).
+	status, _ = call("POST", "/refresh_updates", None, timeout=300)
 	if status != 200:
-		return f"could not refresh the app store (the Supervisor answered {status}); trying again in 6 hours"
+		return f"could not look for updates (the Supervisor answered {status}); trying again in 6 hours"
+	status, body = call("GET", "/supervisor/info", None, timeout=30)
+	sup = (body or {}).get("data") if isinstance(body, dict) else None
+	if status == 200 and isinstance(sup, dict) and sup.get("update_available"):
+		have, latest = sup.get("version"), sup.get("version_latest")
+		LOG.info("Supervisor %s is out (this is %s); updating", latest, have)
+		status, body = call("POST", "/supervisor/update", {}, timeout=900)
+		# It restarts; this app's own update is looked at again in a few
+		# minutes, not in six hours.
+		state["store_reloaded_at"] = now - STORE_RELOAD_SECONDS + SUPERVISOR_SETTLE_SECONDS
+		save_json(state_path, state)
+		if status == 200:
+			return f"updated the Supervisor from {have} to {latest}"
+		said = supervisor_says(body)
+		return f"could not update the Supervisor to {latest} (HTTP {status}" + (f": {said}" if said else "") + ")"
 	status, body = call("GET", "/addons/self/info", None, timeout=30)
 	data = (body or {}).get("data") if isinstance(body, dict) else None
 	if status != 200 or not isinstance(data, dict) or not data.get("update_available"):
@@ -997,9 +1016,20 @@ def _supervisor_call(method: str, path: str, body: Optional[dict] = None,
 			raw = resp.read()
 			return resp.status, (json.loads(raw.decode("utf-8")) if raw else None)
 	except urllib.error.HTTPError as err:
-		return err.code, None
+		# The Supervisor says why in the body ({"result": "error", "message": ...}):
+		# kept, so a refusal is reported with its reason, not only its code.
+		try:
+			return err.code, json.loads(err.read().decode("utf-8") or "null")
+		except (OSError, ValueError):
+			return err.code, None
 	except (urllib.error.URLError, OSError, ValueError):
 		return 0, None
+
+
+def supervisor_says(body: Any) -> str:
+	"""The Supervisor's own message in an error reply, or ''."""
+	message = body.get("message") if isinstance(body, dict) else None
+	return str(message).strip()[:300] if message else ""
 
 
 class SeedFailed(Exception):
@@ -1248,7 +1278,11 @@ def restore_seed(portal: "Portal", seed_id: str, backup_dir: Path = BACKUP_DIR,
 			"homeassistant": False, "addons": addons, "folders": folders, "password": key,
 		}, timeout=3600)
 		if status != 200 or not isinstance(body, dict) or body.get("result") != "ok":
-			raise SeedFailed(f"the Supervisor did not restore the seed (HTTP {status})")
+			said = supervisor_says(body)
+			# GamlaBio.local, 29 Oct 2026: a day of bare "HTTP 400", and no way
+			# to read why from a standby nobody can open.
+			raise SeedFailed(f"the Supervisor did not restore the seed (HTTP {status})"
+			                 + (f": {said}" if said else ""))
 		return f"seed restored ({len(addons)} add-ons, {len(folders)} folders)", addons
 	finally:
 		# Whatever happened: this backup is not the owner's either.
