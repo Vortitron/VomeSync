@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.8 — 30 October 2026
+
+**A standby keeps its Supervisor up to date too.** It turned out the store was
+not the only thing a standby never refreshed. Its Supervisor never looked for
+a newer version of itself either, so once the main install's Supervisor moved
+on, the standby refused every copy of your add-ons' data that the newer one
+made. This app now has the Supervisor look for updates every six hours,
+updates the Supervisor first when a newer one is out, and then updates itself.
+
+**A refused copy says why.** When the Supervisor refuses to restore your
+add-ons' data, Vome now gets its own words, not just "HTTP 400".
+
 ## 0.2.7 — 29 October 2026
 
 **A standby keeps itself up to date.** Automatic updates were on, but on some
