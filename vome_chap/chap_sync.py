@@ -598,6 +598,17 @@ def set_addons_running(slugs: list, running: bool, call=None,
 	return failed
 
 
+def addons_here(call=None) -> Optional[list]:
+	"""The slugs of every add-on installed here, running or not, or None if
+	the Supervisor could not say."""
+	call = call or _supervisor_call
+	status, body = call("GET", "/addons", None, timeout=60)
+	listed = ((body or {}).get("data") or {}).get("addons") if isinstance(body, dict) else None
+	if status != 200 or not isinstance(listed, list):
+		return None
+	return [a["slug"] for a in listed if isinstance(a, dict) and a.get("slug")]
+
+
 def addon_allowed(slug: str, allowed: Optional[list]) -> bool:
 	"""Is this add-on one the portal lets this install run? None: all.
 	An entry ``*suffix`` matches any slug ending in it (``*_esphome``)."""
@@ -645,6 +656,19 @@ def enforce_addons(role: Optional[str], state: dict, state_path: Path,
 	run = sorted(s for s in held if role == ROLE_ACTIVE and addon_allowed(s, allowed))
 	if state.get("held_addons_target") == run:
 		return None
+	# One the owner has since uninstalled here is not held any more.
+	# GamlaBio Hosted, 29-31 Oct 2026: Matter Server, removed because the
+	# one on the house's Orange Pi is the home's, was asked to start every
+	# five minutes after the switch back, and failed every time.
+	gone = [s for s in held if s not in (addons_here(call) or held)]
+	if gone:
+		LOG.info("no longer installed here, so no longer held: %s", ", ".join(gone))
+		held = [s for s in held if s not in gone]
+		state["held_addons"] = held
+		save_json(state_path, state)
+		run = [s for s in run if s not in gone]
+		if state.get("held_addons_target") == run:
+			return None
 	stop = [s for s in held if s not in run]
 	if role == ROLE_ACTIVE and not state.get("held_start_pending"):
 		before = state.get("held_addons_last_run")

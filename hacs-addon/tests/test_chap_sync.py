@@ -1518,6 +1518,33 @@ class TestTheRunningInstallsAddOnsAreTheOwners:
 		assert ("POST", "/addons/core_matter_server/options", {"boot": "auto"}) not in calls
 		assert states["core_matter_server"] == "stopped"
 
+	def test_one_uninstalled_here_is_let_go(self, tmp_path):
+		"""GamlaBio Hosted, 29-31 Oct 2026: back from a failover, it asked to
+		start Matter Server every five minutes. The owner had uninstalled it
+		(the house's Orange Pi runs the home's), so every start failed."""
+		state, path, calls = {"held_addons": ["core_matter_server", "core_mosquitto"],
+		                      "held_addons_role": "standby"}, tmp_path / "s.json", []
+		inner = self._call(calls, {})
+
+		def call(method, path_, body=None, timeout=60):
+			if path_ == "/addons":
+				return 200, {"data": {"addons": [{"slug": "core_mosquitto"}, {"slug": "b1bff62e_vome_chap"}]}}
+			return inner(method, path_, body, timeout)
+		note = cs.enforce_addons("active", state, path, call)
+		assert note.startswith("running 1 of 1")
+		assert not any("core_matter_server" in c[1] for c in calls)
+		assert json.loads(path.read_text())["held_addons"] == ["core_mosquitto"]
+		# And it stays quiet afterwards.
+		calls.clear()
+		assert cs.enforce_addons("active", state, path, call) is None
+		assert not any(c[1].endswith("/start") for c in calls)
+
+	def test_a_supervisor_that_cannot_list_them_lets_nothing_go(self, tmp_path):
+		state, path = {"held_addons": ["core_matter_server"]}, tmp_path / "s.json"
+		call = lambda method, path_, body=None, timeout=60: (502, None)
+		cs.enforce_addons("standby", state, path, call)
+		assert state["held_addons"] == ["core_matter_server"]
+
 	def test_taking_the_home_over_still_starts_them(self, tmp_path):
 		state, path, calls = {"held_addons": ["core_matter_server"]}, tmp_path / "s.json", []
 		call = self._call(calls, {})
