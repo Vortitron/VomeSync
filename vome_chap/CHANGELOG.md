@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.9 — 31 October 2026
+
+**An app you uninstall stays gone.** After the install running your home
+comes back from a failover, this app starts the apps it stopped there. One
+you had uninstalled in the meantime was still on its list, so it asked for it
+to start every five minutes, forever. It now lets go of any app that is no
+longer installed.
+
 ## 0.2.8 — 30 October 2026
 
 **A standby keeps its Supervisor up to date too.** It turned out the store was
