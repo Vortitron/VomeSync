@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.10 — 31 October 2026
+
+**Vome hears when a disk is filling up.** Each version of Home Assistant a
+standby follows leaves the previous one's image behind, about 3.4 GB each,
+because a standby's Home Assistant never starts and so is never cleaned up.
+This app cannot remove images. So it now tells Vome how much space the
+Supervisor counts as free, at most every ten minutes. When a standby has less
+than 4 GB left, so that the next update would not fit, Vome warns you on the
+CHAP page and by email, and says what to remove.
+
 ## 0.2.9 — 31 October 2026
 
 **An app you uninstall stays gone.** After the install running your home

@@ -273,7 +273,7 @@ class FakePortal:
 		self.uploads = []
 		self.reports = []
 
-	def role(self, primary_reachable=None, edge_reachable=None, sending=None):
+	def role(self, primary_reachable=None, edge_reachable=None, sending=None, disk=None):
 		self.reported = primary_reachable
 		self.reported_edge = edge_reachable
 		self.sending = sending
@@ -1455,6 +1455,39 @@ class TestASupervisorRefusalSaysWhy:
 
 	def test_no_body_no_message(self):
 		assert cs.supervisor_says(None) == "" and cs.supervisor_says({"result": "error"}) == ""
+
+
+class TestSaysHowFullItsDiskIs:
+	"""GamlaBio.local, 31 Oct 2026: four old Home Assistant images (3.4 GB
+	each) filled its disk until the Supervisor refused updates, and Vome
+	could not tell."""
+
+	def test_asked_at_most_every_ten_minutes(self, tmp_path):
+		calls = []
+
+		def call(method, path, body=None, timeout=60):
+			calls.append(path)
+			return 200, {"data": {"disk_free": 1.1, "disk_total": 30.8}}
+		state, path = {}, tmp_path / "s.json"
+		assert cs.disk_space(state, path, T, call) == {"free": 1.1, "total": 30.8}
+		assert cs.disk_space(state, path, T + 60, call) == {"free": 1.1, "total": 30.8}
+		assert calls == ["/host/info"]
+		cs.disk_space(state, path, T + cs.DISK_CHECK_SECONDS, call)
+		assert calls == ["/host/info"] * 2
+
+	def test_no_answer_is_no_report(self, tmp_path):
+		assert cs.disk_space({}, tmp_path / "s.json", T, lambda *a, **k: (0, None)) is None
+
+	def test_each_check_in_carries_it(self):
+		seen = []
+
+		def opener(req, timeout=None):
+			seen.append((req.get_header("X-disk-free-gb"), req.get_header("X-disk-total-gb")))
+			return FakeResponse(200, b'{"role": "standby"}')
+		portal = cs.Portal({"portal_url": "https://vome.example", "server_id": "s", "token": "t"}, opener=opener)
+		portal.role(disk={"free": 1.1, "total": 30.8})
+		portal.role()
+		assert seen == [("1.1", "30.8"), (None, None)]
 
 
 class TestSaysWhichVersionItIs:
