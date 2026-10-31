@@ -953,6 +953,32 @@ def ensure_auto_update(state: dict, state_path: Path, call=None) -> Optional[str
 	return note
 
 
+DISK_CHECK_SECONDS = 10 * 60
+
+
+def disk_space(state: dict, state_path: Path, now: float, call=None) -> Optional[dict]:
+	"""``{'free', 'total'}`` in GB, as the Supervisor counts them, asked at
+	most every ten minutes; None if it could not say.
+
+	GamlaBio.local, 31 Oct 2026: every Home Assistant version a standby
+	follows leaves the old one's image behind (about 3.4 GB; its Core never
+	starts, so the Supervisor never cleans up), and nothing here can remove
+	images. Its disk filled until the Supervisor refused updates ("not
+	enough free space (1.2GB)"). Vome hears it, and tells the owner.
+	"""
+	known = state.get("disk") if isinstance(state.get("disk"), dict) else None
+	if known and now - float(known.get("at") or 0) < DISK_CHECK_SECONDS:
+		return {"free": known.get("free"), "total": known.get("total")}
+	call = call or _supervisor_call
+	status, body = call("GET", "/host/info", None, timeout=30)
+	data = (body or {}).get("data") if isinstance(body, dict) else None
+	if status != 200 or not isinstance(data, dict) or not isinstance(data.get("disk_free"), (int, float)):
+		return None
+	state["disk"] = {"free": data["disk_free"], "total": data.get("disk_total"), "at": now}
+	save_json(state_path, state)
+	return {"free": data["disk_free"], "total": data.get("disk_total")}
+
+
 STORE_RELOAD_SECONDS = 6 * 3600
 SUPERVISOR_SETTLE_SECONDS = 600
 
@@ -1478,7 +1504,8 @@ class Portal:
 		return self.opener(req, timeout=timeout)
 
 	def role(self, primary_reachable: Optional[bool] = None,
-	         edge_reachable: Optional[bool] = None, sending: Optional[dict] = None) -> Optional[dict]:
+	         edge_reachable: Optional[bool] = None, sending: Optional[dict] = None,
+	         disk: Optional[dict] = None) -> Optional[dict]:
 		"""The portal's view of this install, or None when it cannot be asked.
 
 		A local fallback for a hosted home also says, on each poll, whether
@@ -1497,6 +1524,10 @@ class Portal:
 			headers["X-Primary-Reachable"] = "1" if primary_reachable else "0"
 		if edge_reachable is not None:
 			headers["X-Edge-Reachable"] = "1" if edge_reachable else "0"
+		if disk and disk.get("free") is not None:
+			headers["X-Disk-Free-GB"] = str(disk["free"])
+			if disk.get("total") is not None:
+				headers["X-Disk-Total-GB"] = str(disk["total"])
 		try:
 			with self._request("GET", API_ROLE, timeout=30, headers=headers) as resp:
 				data = json.loads(resp.read().decode("utf-8"))
@@ -1712,7 +1743,8 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	reachable = watch_primary(state, now, probe, edge_probe)
 
 	info = portal.role(reachable, state.get("edge_reachable") if reachable is not None else None,
-	                   sending={"sha256": state.get("config_sha256"), "problem": state.get("send_problem")})
+	                   sending={"sha256": state.get("config_sha256"), "problem": state.get("send_problem")},
+	                   disk=disk_space(state, state_path, now))
 	if info is None:
 		note = maybe_take_over_locally(state, now, set_running)
 		save_json(state_path, state)
