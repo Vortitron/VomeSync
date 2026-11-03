@@ -18,6 +18,7 @@ from .relay_client import async_start_relay, async_stop_relay
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.SENSOR, Platform.BINARY_SENSOR]
+_LOADED_PLATFORMS = f"{DOMAIN}_loaded_platforms"
 
 # Option keys whose values are secrets and must never be logged verbatim.
 _SENSITIVE_OPTION_KEYS = frozenset({"secret", "local_token", "token", "password"})
@@ -128,8 +129,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 			err,
 		)
 
-	# Setup platforms (entities will be created from coordinator data)
-	await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+	# Setup platforms (entities will be created from coordinator data).
+	# The AI services' two (ai_task, stt) only when the owner turned them
+	# on; what was loaded is remembered so unload matches it even after
+	# the option changes.
+	from . import home_ai
+	loaded = PLATFORMS + home_ai.platforms(entry)
+	hass.data.setdefault(_LOADED_PLATFORMS, {})[entry.entry_id] = loaded
+	await hass.config_entries.async_forward_entry_setups(entry, loaded)
 
 	# The last health report, back onto its sensor: Home Assistant forgets
 	# it on every restart and Vome does not. Off the setup path, so a slow
@@ -350,7 +357,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 	async_stop_trial_clock(hass, entry)
 
 	# Unload platforms
-	unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+	loaded = hass.data.get(_LOADED_PLATFORMS, {}).pop(entry.entry_id, PLATFORMS)
+	unload_ok = await hass.config_entries.async_unload_platforms(entry, loaded)
 	
 	if unload_ok:
 		# Clean up coordinator

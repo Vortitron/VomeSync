@@ -541,7 +541,7 @@ class TestTheReportSurvivesARestart:
 		import inspect
 		import custom_components.vomesync as init_module
 		source = inspect.getsource(init_module.async_setup_entry)
-		platforms = source.index("async_forward_entry_setups(entry, PLATFORMS)")
+		platforms = source.index("async_forward_entry_setups(entry, loaded)")
 		restore = source.index("health_score.async_restore_report(hass, entry)")
 		assert platforms < restore
 		assert "async_create_background_task" in source[platforms:restore + 80]

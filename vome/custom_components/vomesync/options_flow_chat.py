@@ -72,3 +72,52 @@ class VomeSyncOptionsFlowChatMixin:
 			}),
 			description_placeholders={"info": chat_info(has_llm_apis())},
 		)
+
+
+def ai_services_info(wallet: Optional[dict], error: Optional[str]) -> str:
+	"""What the AI services step says above its switch."""
+	if error:
+		return f"Vome says: {error}"
+	if not wallet:
+		return ""
+	return (
+		f"**{wallet.get('name', 'Pocket money')}: {wallet.get('balance', '0,00 kr')}**, "
+		f"and {wallet.get('allowance_left', '0 kr')} free left this month for pictures "
+		f"and voice commands. Today: {wallet.get('spent_today', '0 kr')} of a "
+		f"{wallet.get('daily_cap', '')} limit. Top up or change the limit at "
+		f"{wallet.get('topup_url', 'vome.io')}."
+	)
+
+
+class VomeSyncOptionsFlowAIServicesMixin:
+	"""The ``ai_services`` item on the Configure menu: pictures and voice."""
+
+	async def async_step_ai_services(
+		self, user_input: Optional[Dict[str, Any]] = None
+	) -> FlowResult:
+		from . import home_ai
+
+		entry = self._config_entry
+		if user_input is not None:
+			wanted = bool(user_input.get(home_ai.CONF_AI_SERVICES))
+			if wanted != home_ai.enabled(entry):
+				await self._async_update_entry_options({
+					**(entry.options or {}), home_ai.CONF_AI_SERVICES: wanted,
+				})
+				# The entities appear or go with the platforms, which load at setup.
+				self.hass.async_create_task(
+					self.hass.config_entries.async_reload(entry.entry_id))
+			return await self.async_step_init()
+
+		wallet, error = None, None
+		try:
+			wallet = await home_ai.async_wallet(self.hass, entry)
+		except home_ai.VomeAIError as err:
+			error = str(err)
+		return self.async_show_form(
+			step_id="ai_services",
+			data_schema=vol.Schema({
+				vol.Required(home_ai.CONF_AI_SERVICES, default=home_ai.enabled(entry)): bool,
+			}),
+			description_placeholders={"info": ai_services_info(wallet, error)},
+		)
