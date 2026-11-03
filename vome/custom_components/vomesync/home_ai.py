@@ -9,7 +9,7 @@ Configure):
 * ``stt.vome`` -- a speech-to-text engine for the Assist pipeline, which Vome
   hears with Deepgram (:mod:`.stt`).
 
-Both are paid from the home's **pocket money** at Vome: a few kronor a month
+Both are paid from the home's **Brainpower** at Vome: a few kronor a month
 free between them, then whatever the owner has topped up, never more than the
 daily limit they set. The portal's half and its rules are in the portal repo,
 ``portal/home_wallet.py`` and ``docs/home_ai_services_plan.md``.
@@ -100,7 +100,7 @@ async def _call(hass: HomeAssistant, entry: ConfigEntry, method: str, path: str,
 
 
 async def async_wallet(hass: HomeAssistant, entry: ConfigEntry) -> dict:
-	"""The home's pocket money, as Vome counts it."""
+	"""The home's brainpower, as Vome counts it."""
 	return await _call(hass, entry, "GET", WALLET_PATH)
 
 

@@ -4,7 +4,7 @@ Choose it as a voice assistant's speech-to-text engine, and a command from
 an ESP32 satellite, Voice PE or the phone app goes to Vome, which hears it
 with Deepgram. The names of the home's areas and of the entities exposed to
 Assist go along as hints, so "Vardagsrum" comes back spelled right. Paid from
-the home's pocket money (:mod:`.home_ai`). Loaded only when the owner has
+the home's brainpower (:mod:`.home_ai`). Loaded only when the owner has
 turned the AI services on.
 """
 from __future__ import annotations
