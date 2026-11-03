@@ -81,7 +81,7 @@ def ai_services_info(wallet: Optional[dict], error: Optional[str]) -> str:
 	if not wallet:
 		return ""
 	return (
-		f"**{wallet.get('name', 'Pocket money')}: {wallet.get('balance', '0,00 kr')}**, "
+		f"**{wallet.get('name', 'Brainpower')}: {wallet.get('balance', '0,00 kr')}**, "
 		f"and {wallet.get('allowance_left', '0 kr')} free left this month for pictures "
 		f"and voice commands. Today: {wallet.get('spent_today', '0 kr')} of a "
 		f"{wallet.get('daily_cap', '')} limit. Top up or change the limit at "

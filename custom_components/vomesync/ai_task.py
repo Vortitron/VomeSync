@@ -4,7 +4,7 @@ Built for pictures: ``ai_task.generate_data`` with a camera attachment
 (``media-source://camera/camera.door``) and instructions such as "is there a
 person at the door?" goes to Vome, which asks Claude and answers in words or,
 with a ``structure``, as data an automation can test. Paid from the home's
-pocket money (:mod:`.home_ai`). Loaded only when the owner has turned the AI
+brainpower (:mod:`.home_ai`). Loaded only when the owner has turned the AI
 services on, and only on Core 2025.8+, where AI tasks exist.
 """
 from __future__ import annotations

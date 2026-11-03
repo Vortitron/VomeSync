@@ -202,7 +202,7 @@ async def test_a_failed_hearing_is_an_error_result_not_a_crash(hass):
 	await _load(hass, entry)
 
 	async def hear(*args, **kwargs):
-		raise home_ai.VomeAIError("This home's pocket money has run out.")
+		raise home_ai.VomeAIError("This home's brainpower has run out.")
 
 	async def chunks():
 		yield b"\0\0" * 1600

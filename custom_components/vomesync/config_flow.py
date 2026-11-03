@@ -588,7 +588,7 @@ class VomeSyncOptionsFlow(
 		# Which tools Home Assistant's assistants get from Vome (Assist chat).
 		menu_options.append("ai_chat")
 		# Vome looking at camera pictures and hearing voice commands, paid
-		# from the home's pocket money (home_ai.py).
+		# from the home's brainpower (home_ai.py).
 		menu_options.append("ai_services")
 		if self._relay_is_linked():
 			menu_options.append("remote_access")
