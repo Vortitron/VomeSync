@@ -227,3 +227,24 @@ async def test_without_the_app_the_owner_gets_the_yaml_and_nothing_is_written(
 	with pytest.raises(ct.ChatToolError, match="No automation"):
 		await ct.async_call_tool(hass, "delete_automation", {"automation_id": "chat_1"},
 		                         hass_admin_user.id)
+
+
+async def test_anonymous_takes_an_administrators_rights_away(hass, house, hass_admin_user):
+	# The Vome app's MCP server calls as the Supervisor (an administrator) on
+	# behalf of an Assist agent that says nobody's name (3 Nov 2026).
+	ct.async_register_chat_services(hass)
+	admin = Context(user_id=hass_admin_user.id)
+	full = await hass.services.async_call(
+		"vomesync", "chat_tools", {}, blocking=True, return_response=True, context=admin)
+	anonymous = await hass.services.async_call(
+		"vomesync", "chat_tools", {"anonymous": True}, blocking=True, return_response=True,
+		context=admin)
+	assert "vome_backups" in {t["name"] for t in full["tools"]}
+	names = {t["name"]: t["group"] for t in anonymous["tools"]}
+	assert names == {t.name: t.group for t in ct.tools_for(["read"], admin=False)}
+	assert names["vome_status"] == "vome" and "vome_backups" not in names
+	refused = await hass.services.async_call(
+		"vomesync", "chat_tool_call",
+		{"name": "render_template", "arguments": {"template": "{{ 1 }}"}, "anonymous": True},
+		blocking=True, return_response=True, context=admin)
+	assert refused["ok"] is False

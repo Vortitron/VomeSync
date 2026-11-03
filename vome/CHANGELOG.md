@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.75 — 3 November 2026
+
+**Vome is on Home Assistant's Model Context Protocol page.** Home Assistant
+2026.10 lists the MCP servers your apps offer under Settings → Devices &
+services, next to ESPHome Device Builder. The Vome app now offers one too.
+Click Add, and your Assist agents can answer "is my remote access up?",
+"what's my health score?" and "is CHAP protecting this home?" by choosing
+Vome under their "Control Home Assistant" setting. These tools only look.
+They show what anyone who is not an administrator may see, because Home
+Assistant does not tell an MCP server who is asking.
+
+**The AI chat knows about Vome.** The chat tools now include Vome's own:
+remote access status, the health score and its findings, CHAP, and (for
+administrators) the backups this home keeps with Vome. These work in the
+Vome panel's Chat page and in Assist through the "Vome" LLM API.
+
+Bundles the Vome integration 0.9.60.
+
 ## 0.3.74 — 25 October 2026
 
 **Every YAML change the app makes is in your logbook.** When the Vome app

@@ -109,7 +109,8 @@ def test_reads_home_assistant_keeps_to_administrators_stay_theirs():
 	# Core's template, system log and automation-config APIs require admin.
 	household = run(ct.async_tools_for_user(_hass(admin=False), "kid"))
 	names = {t.name for t in household}
-	assert names == {"find_entities", "get_state", "get_history", "list_areas", "list_automations"}
+	assert names == {"find_entities", "get_state", "get_history", "list_areas", "list_automations",
+	                 "vome_status", "vome_health_score", "vome_chap_status"}
 	with pytest.raises(ct.ChatToolError, match="switched off"):
 		run(ct.async_call_tool(_hass(admin=False), "render_template", {"template": "{{ 1 }}"}, "kid"))
 	admin = {t.name for t in run(ct.async_tools_for_user(_hass(), "u1"))}
@@ -166,3 +167,78 @@ def test_setting_scopes_needs_an_administrator(admin_services):
 	listed = run(handlers["chat_tools"](call))
 	assert listed["scopes"] == ["read"]
 	assert all(t["scope"] == "read" for t in listed["tools"])
+
+
+# ── Vome's own tools (3 Nov 2026: Vome on Home Assistant's MCP page) ─────
+
+
+RELAY = {"relay": {
+	"server_id": "rly-1", "secret": "relay-secret-value", "remote_url": "https://gamla.home.vome.io",
+	"forward_ui": True, "guest": True, "guest_expires_at": 9_999_999_999,
+	"guest_claim_url": "https://vome.io/claim/one-time-code",
+}}
+
+
+def _vome_hass(tmp_path, options=RELAY, admin=False):
+	hass = _hass(options, admin=admin)
+	entry = hass.config_entries.async_entries.return_value[0]
+	entry.entry_id = "e1"
+	entry.data = {}
+	hass.data = {}
+	hass.config.path = lambda *parts: str(tmp_path.joinpath(*parts))
+
+	async def _executor(fn, *args):
+		return fn(*args)
+
+	hass.async_add_executor_job = _executor
+	return hass
+
+
+def test_vome_tools_are_grouped_and_only_look():
+	vome = [t for t in ct.TOOLS if t.group == "vome"]
+	assert {t.name for t in vome} == {"vome_status", "vome_health_score", "vome_chap_status", "vome_backups"}
+	assert all(t.scope == ct.SCOPE_READ and not t.confirm for t in vome)
+	assert all(t.describe()["group"] == t.group for t in ct.TOOLS)
+
+
+def test_nobody_in_particular_gets_vome_tools_but_not_the_backup_list(tmp_path):
+	# What the Vome app's MCP server sees: it calls with anonymous=True.
+	names = {t.name for t in run(ct.async_tools_for_user(_vome_hass(tmp_path), None))}
+	assert {"vome_status", "vome_health_score", "vome_chap_status"} <= names
+	assert "vome_backups" not in names
+	with pytest.raises(ct.ChatToolError):
+		run(ct.async_call_tool(_vome_hass(tmp_path), "vome_backups", {}, None))
+
+
+def test_vome_status_says_how_things_stand_without_a_secret(tmp_path):
+	hass = _vome_hass(tmp_path)
+	result = run(ct.async_call_tool(hass, "vome_status", {}, None))
+	assert result["linked"] is True and result["remote_url"] == "https://gamla.home.vome.io"
+	assert "temporary link" in result["temporary_link"]
+	text = str(result)
+	assert "relay-secret-value" not in text and "one-time-code" not in text
+
+
+def test_vome_health_score_before_any_check(tmp_path):
+	result = run(ct.async_call_tool(_vome_hass(tmp_path), "vome_health_score", {}, None))
+	assert result["score"] is None and "Vome panel" in result["note"]
+
+
+def test_vome_health_score_leaves_the_share_token_out(tmp_path):
+	hass = _vome_hass(tmp_path)
+	hass.data = {"vomesync": {"health_score": {"e1": {
+		"score": 82, "summary": "Mostly fine", "findings": [{"title": "Backups are old"}],
+		"share_token": "tok-123", "share_url": "https://vome.io/score/tok-123"}}}}
+	result = run(ct.async_call_tool(hass, "vome_health_score", {}, None))
+	assert result["score"] == 82 and result["findings"][0]["title"] == "Backups are old"
+	assert "tok-123" not in str(result)
+
+
+def test_vome_chap_status_reads_what_the_chap_app_left(tmp_path):
+	hass = _vome_hass(tmp_path)
+	assert run(ct.async_call_tool(hass, "vome_chap_status", {}, None))["installed"] is False
+	(tmp_path / ".vome_chap_status.json").write_text(
+		'{"role": "main", "last_outcome": "synced", "pairing_secret": "x"}', encoding="utf-8")
+	result = run(ct.async_call_tool(hass, "vome_chap_status", {}, None))
+	assert result["installed"] is True and result["role"] == "main"
+	assert result["pairing_secret"] != "x"

@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chat  # noqa: E402 - the Chat page, next to this file
 import integration_channel  # noqa: E402 - the YAML the integration hands over
+import mcp_server  # noqa: E402 - Vome on Home Assistant's MCP page
 
 DEFAULT_PORTAL_URL = "https://vome.io"
 RELAY_DEVICE_CODE_PATH = "/api/v1/relay/device/code"
@@ -839,6 +840,7 @@ def main() -> None:
 		call_service=call_service, unwrap=_unwrap, ha_request=_ha_request,
 		config_root=_config_root,
 	)
+	mcp_server.start(call_service=call_service, unwrap=_unwrap, supervisor_token=SUPERVISOR_TOKEN)
 	server.serve_forever()
 
 

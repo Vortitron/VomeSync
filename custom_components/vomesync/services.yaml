@@ -589,6 +589,15 @@ chat_tools:
     The tools an AI chat may use on this Home Assistant, as allowed under
     Vome → Configure → AI chat. Anyone who is not an administrator gets
     the read tools only. Used by the Vome app's Chat page.
+  fields:
+    anonymous:
+      name: As nobody in particular
+      description: >-
+        List the tools a caller who is not an administrator would get, as the
+        Vome app's MCP server does for Assist.
+      required: false
+      selector:
+        boolean:
 
 chat_tool_call:
   name: Run an AI chat tool
@@ -609,6 +618,13 @@ chat_tool_call:
       required: false
       selector:
         object:
+    anonymous:
+      name: As nobody in particular
+      description: >-
+        Run it with the rights of a caller who is not an administrator.
+      required: false
+      selector:
+        boolean:
 
 chat_set_scopes:
   name: Set what the AI chat may do
