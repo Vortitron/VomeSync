@@ -18,7 +18,7 @@ from .options_flow_links import VomeSyncOptionsFlowLinkEntitiesMixin
 from .options_flow_relay import VomeSyncOptionsFlowRelayMixin
 from .options_flow_lan import VomeSyncOptionsFlowLanMixin
 from .options_flow_agent import VomeSyncOptionsFlowAgentMixin
-from .options_flow_chat import VomeSyncOptionsFlowChatMixin
+from .options_flow_chat import VomeSyncOptionsFlowAIServicesMixin, VomeSyncOptionsFlowChatMixin
 from .const import (
 	DOMAIN,
 	CONF_PERSONAL_KEY,
@@ -310,6 +310,7 @@ class VomeSyncOptionsFlow(
 	VomeSyncOptionsFlowLanMixin,
 	VomeSyncOptionsFlowAgentMixin,
 	VomeSyncOptionsFlowChatMixin,
+	VomeSyncOptionsFlowAIServicesMixin,
 ):
 	"""Handle options flow for VomeSync."""
 
@@ -587,6 +588,9 @@ class VomeSyncOptionsFlow(
 		menu_options.append("coding_agent")
 		# Which tools Home Assistant's assistants get from Vome (Assist chat).
 		menu_options.append("ai_chat")
+		# Vome looking at camera pictures and hearing voice commands, paid
+		# from the home's pocket money (home_ai.py).
+		menu_options.append("ai_services")
 		if self._relay_is_linked():
 			menu_options.append("remote_access")
 			menu_options.append("unlink_vome")

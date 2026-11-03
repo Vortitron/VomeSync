@@ -45,7 +45,8 @@
 					"remote_access": "🌐 Remote access & LAN tunnels",
 					"more": "⋯ More",
 					"coding_agent": "🤖 Coding agent (Claude Code, Cursor)",
-					"ai_chat": "💬 AI chat (Assist)"
+					"ai_chat": "💬 AI chat (Assist)",
+					"ai_services": "📷 AI for cameras and voice"
 				}
 			},
 			"more": {
@@ -473,6 +474,13 @@
 				"description": "What an AI assistant may do in this Home Assistant through Vome.\n\n{info}",
 				"data": {
 					"scopes": "What the chat may do"
+				}
+			},
+			"ai_services": {
+				"title": "AI for cameras and voice",
+				"description": "Let this Home Assistant ask Vome to look at camera pictures (an **AI task**, `ai_task.vome_ai`) and hear voice commands (a **speech-to-text** engine for your voice assistant). Pictures go to Anthropic and audio to Deepgram; Vome keeps no copy. Each call is paid from this home's pocket money at Vome, a few öre at most.\n\n{info}",
+				"data": {
+					"ai_services": "Turn on Vome's AI services for this home"
 				}
 			}
 		},
