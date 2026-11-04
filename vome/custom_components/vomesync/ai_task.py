@@ -32,12 +32,46 @@ async def async_setup_entry(
 	async_add_entities([VomeAITaskEntity(entry)])
 
 
-def structure_schema(structure) -> dict:
-	"""A task's ``structure`` (a voluptuous schema) as JSON schema for Vome."""
-	from homeassistant.helpers import llm
-	from voluptuous_openapi import convert
+def _selector_schema(sel) -> dict:
+	"""One field's selector as JSON schema: what ai_task's ``structure`` allows."""
+	from homeassistant.helpers import selector
 
-	return convert(structure, custom_serializer=llm.selector_serializer)
+	config = getattr(sel, "config", {}) or {}
+	if isinstance(sel, selector.BooleanSelector):
+		out = {"type": "boolean"}
+	elif isinstance(sel, selector.NumberSelector):
+		out = {"type": "number"}
+	elif isinstance(sel, selector.SelectSelector):
+		values = [o.get("value") if isinstance(o, dict) else o for o in config.get("options") or []]
+		out = {"type": "string", "enum": [str(v) for v in values]} if values else {"type": "string"}
+	else:
+		# Text, and anything else: words are the one shape every model can give.
+		out = {"type": "string"}
+	if config.get("multiple"):
+		out = {"type": "array", "items": out}
+	return out
+
+
+def structure_schema(structure) -> dict:
+	"""A task's ``structure`` (a voluptuous schema of selectors) as JSON schema.
+
+	Written here rather than with ``voluptuous_openapi``: that package comes
+	with Core's OpenAI and Google integrations, not with Core itself, so on
+	a home without them importing it fails (found on staging, 4 Nov 2026).
+	"""
+	import voluptuous as vol
+
+	properties, required = {}, []
+	for key, value in getattr(structure, "schema", structure).items():
+		name = str(getattr(key, "schema", key))
+		prop = _selector_schema(value)
+		description = getattr(key, "description", None)
+		if description:
+			prop["description"] = str(description)
+		properties[name] = prop
+		if isinstance(key, vol.Required):
+			required.append(name)
+	return {"type": "object", "properties": properties, "required": required}
 
 
 class VomeAITaskEntity(ai_task.AITaskEntity):

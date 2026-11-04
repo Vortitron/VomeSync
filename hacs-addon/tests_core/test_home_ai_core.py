@@ -216,3 +216,26 @@ async def test_a_failed_hearing_is_an_error_result_not_a_crash(hass):
 	with patch.object(home_ai, "async_hear", hear):
 		result = await entity.async_process_audio_stream(metadata, chunks())
 	assert result.result == stt.SpeechResultState.ERROR
+
+
+def test_structure_needs_nothing_core_does_not_ship():
+	# voluptuous_openapi comes with Core's OpenAI and Google integrations,
+	# not with Core: a home without them failed every structured task.
+	from pathlib import Path
+	from custom_components.vomesync import ai_task
+	assert "voluptuous_openapi" not in Path(ai_task.__file__).read_text().split('"""')[-1]
+
+
+def test_selectors_become_json_schema():
+	from custom_components.vomesync.ai_task import structure_schema
+	schema = structure_schema(vol.Schema({
+		vol.Required("seen", description="Anything there?"): selector.BooleanSelector(),
+		vol.Required("count"): selector.NumberSelector({"min": 0, "max": 20}),
+		vol.Optional("kind"): selector.SelectSelector({"options": ["fox", "cat", "person"]}),
+		vol.Required("tags"): selector.TextSelector({"multiple": True}),
+	}))
+	assert schema["required"] == ["seen", "count", "tags"]
+	assert schema["properties"]["seen"] == {"type": "boolean", "description": "Anything there?"}
+	assert schema["properties"]["count"] == {"type": "number"}
+	assert schema["properties"]["kind"] == {"type": "string", "enum": ["fox", "cat", "person"]}
+	assert schema["properties"]["tags"] == {"type": "array", "items": {"type": "string"}}

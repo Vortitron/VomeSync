@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.77 — 4 November 2026
+
+**Vome AI answers in a structure again on every Home Assistant.** An AI task
+with a `structure` (say `animal_seen`, `count`) failed on homes without the
+OpenAI or Google integrations installed; it no longer needs anything Home
+Assistant doesn't ship.
+
 ## 0.3.76 — 4 November 2026
 
 **Vome can look at your camera pictures and hear your voice commands** (early
