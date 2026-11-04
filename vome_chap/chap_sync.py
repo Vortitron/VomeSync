@@ -1062,6 +1062,26 @@ def _addon_info(call, slug: str) -> Optional[dict]:
 	return data if status == 200 and isinstance(data, dict) else None
 
 
+OS_REBOOT_RETRY_SECONDS = 3600
+
+
+def _reboot_into(target: str, have: str, state: dict, state_path: Path, now: float, call) -> Optional[str]:
+	"""Restart this standby into the operating system version installed and
+	waiting. At most hourly, so a machine that will not restart is not asked
+	every pass; saved before asking, because it restarts while we wait."""
+	last = state.get("os_reboot") if isinstance(state.get("os_reboot"), dict) else {}
+	if last.get("version") == target and now - float(last.get("at") or 0) < OS_REBOOT_RETRY_SECONDS:
+		return None
+	state["os_reboot"] = {"version": target, "at": now}
+	save_json(state_path, state)
+	note = f"the operating system {target} is installed; restarting into it from {have}"
+	LOG.info("%s", note)
+	status, _ = call("POST", "/host/reboot", None, timeout=120)
+	if status not in (200, 0):
+		return f"could not restart into the operating system {target} (HTTP {status}); trying again within the hour"
+	return note
+
+
 def follow_updates(instruction, state: dict, state_path: Path, now: float,
                    call=None, clock: Callable[[], float] = time.monotonic) -> Optional[list]:
 	"""Update this standby's add-ons and operating system to the versions
@@ -1179,6 +1199,12 @@ def follow_updates(instruction, state: dict, state_path: Path, now: float,
 			last = state.get("os_update") if isinstance(state.get("os_update"), dict) else {}
 			if have == os_target or not want or not h or want <= h:
 				state.pop("os_update", None)  # there, or never downwards
+				state.pop("os_reboot", None)
+			elif str(data.get("version_pending") or "") == os_target:
+				# Installed, waiting for a restart nobody gives a standby.
+				note = _reboot_into(os_target, have, state, state_path, now, call)
+				if note:
+					notes.append(note)
 			elif last.get("version") == os_target and \
 					now - float(last.get("at") or 0) < OS_UPDATE_RETRY_SECONDS:
 				if last.get("problem"):
@@ -1194,6 +1220,17 @@ def follow_updates(instruction, state: dict, state_path: Path, now: float,
 				# 0: no answer, which is what a machine restarting gives.
 				if status in (200, 0):
 					notes.append(note)
+					# The Supervisor may install it and leave the restart for
+					# later (chap-test2 on staging, 4 Nov 2026: 18.4 sat in
+					# boot slot B as version_pending, the standby on 18.3).
+					status, body = call("GET", "/os/info", None, timeout=30)
+					after = (body or {}).get("data") if isinstance(body, dict) else None
+					if status == 200 and isinstance(after, dict) and \
+							str(after.get("version_pending") or "") == os_target and \
+							str(after.get("version") or "") != os_target:
+						rebooted = _reboot_into(os_target, have, state, state_path, now, call)
+						if rebooted:
+							notes.append(rebooted)
 				else:
 					said = supervisor_says(body)
 					problem = (f"could not update the operating system to {os_target} (HTTP {status}"

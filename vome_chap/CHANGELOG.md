@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.12 — 4 November 2026
+
+**A standby restarts into the operating system update it took.** Asked to
+update its operating system, a standby could have the update installed and
+then left waiting for a restart that never came, so it stayed on the old
+version. It now restarts into it, and does the same for an update it finds
+installed and waiting.
+
 ## 0.2.11 — 4 November 2026
 
 **A standby keeps up with your main install's updates.** A standby never took

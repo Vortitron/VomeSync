@@ -1719,13 +1719,15 @@ class FakeSupervisor:
 	"""A Supervisor with add-ons and an operating system that update."""
 
 	def __init__(self, addons, os_version=None, store=None, update_status=200, os_status=200,
-	             update_starts=True):
+	             update_starts=True, os_pending=None, os_installs_only=False):
 		self.addons = addons          # slug -> {name, version, version_latest, state}
 		self.os_version = os_version  # None: not Home Assistant OS
 		self.store = store or {}      # slug -> version_latest after a refresh
 		self.update_status = update_status
 		self.os_status = os_status
 		self.update_starts = update_starts
+		self.os_pending = os_pending              # installed, not yet booted
+		self.os_installs_only = os_installs_only  # /os/update leaves the restart for later
 		self.calls = []
 
 	def __call__(self, method, path, body=None, timeout=60):
@@ -1738,9 +1740,14 @@ class FakeSupervisor:
 		if path == "/os/info":
 			if self.os_version is None:
 				return 400, {"result": "error", "message": "not supported"}
-			return 200, {"data": {"version": self.os_version, "version_latest": "17.0"}}
+			return 200, {"data": {"version": self.os_version, "version_latest": "17.0",
+			                      "version_pending": self.os_pending}}
 		if path == "/os/update":
+			if self.os_status == 200 and self.os_installs_only:
+				self.os_pending = (body or {}).get("version")
 			return self.os_status, {}
+		if path == "/host/reboot":
+			return 200, {}
 		if parts[0] == "addons" and parts[-1] == "info":
 			a = self.addons.get(parts[1])
 			return (200, {"data": dict(a)}) if a else (400, {"result": "error"})
@@ -1902,6 +1909,27 @@ class TestTheStandbyFollowsTheMainsOperatingSystem:
 		assert [p for p, _ in sup.posted()].count("/os/update") == 1
 		cs.follow_updates({"os": "17.0"}, state, path, T + cs.OS_UPDATE_RETRY_SECONDS, sup)
 		assert [p for p, _ in sup.posted()].count("/os/update") == 2
+
+	def test_installed_but_not_restarted_it_restarts_into_it(self, tmp_path):
+		"""chap-test2 on staging, 4 Nov 2026: the Supervisor installed 18.4 into
+		boot slot B and left it pending; the standby stayed on 18.3."""
+		sup = FakeSupervisor({}, os_version="16.2", os_installs_only=True)
+		state, path = {}, tmp_path / "s.json"
+		notes = cs.follow_updates({"os": "17.0"}, state, path, T, sup)
+		assert notes == ["updating the operating system from 16.2 to 17.0; restarting",
+		                 "the operating system 17.0 is installed; restarting into it from 16.2"]
+		assert sup.posted()[-1] == ("/host/reboot", None)
+		assert json.loads(path.read_text())["os_reboot"]["version"] == "17.0"
+
+	def test_one_left_pending_earlier_is_restarted_into_hourly_at_most(self, tmp_path):
+		sup = FakeSupervisor({}, os_version="16.2", os_pending="17.0")
+		state, path = {}, tmp_path / "s.json"
+		assert cs.follow_updates({"os": "17.0"}, state, path, T, sup) == \
+			["the operating system 17.0 is installed; restarting into it from 16.2"]
+		assert ("/os/update", {"version": "17.0"}) not in sup.posted()
+		assert cs.follow_updates({"os": "17.0"}, state, path, T + 600, sup) is None
+		cs.follow_updates({"os": "17.0"}, state, path, T + cs.OS_REBOOT_RETRY_SECONDS, sup)
+		assert [p for p, _ in sup.posted()].count("/host/reboot") == 2
 
 	def test_a_refused_update_is_reported(self, tmp_path):
 		sup = FakeSupervisor({}, os_version="16.2", os_status=400)
