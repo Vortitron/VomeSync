@@ -91,8 +91,15 @@ when it stands in. The rest stay stopped there.
   Install the same add-ons on both.
 - SSH, File editor, Studio Code Server and Samba keep running on the standby,
   so you can still reach it.
-- If you also use CHAP through Vome, leave local_pair `off`: Vome's pair
-  decides, and the two would disagree.
+- Using CHAP through Vome as well (a hosted standby too)? The two work side
+  by side (from 0.2.13). When Vome moves your home to its hosted standby,
+  the main install's Home Assistant stays stopped whatever the local pair
+  says, and it tells the local standby, which stands by rather than take
+  over. If the main install's machine dies outright, the local standby
+  stands in as usual.
+- If Home Assistant will not start on the install that should run your
+  home, this add-on tries again for half an hour, less and less often, then
+  stops and says so: start it by hand, or restart that machine.
 
 ## Licence
 

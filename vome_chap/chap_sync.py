@@ -521,17 +521,87 @@ def _supervisor_post(path: str, body: Optional[dict] = None,
 		return 0
 
 
+def core_answers(opener=urllib.request.urlopen) -> bool:
+	"""Is Home Assistant Core up, whatever the Supervisor's jobs say?
+
+	Asked of Core itself, through the Supervisor's proxy (the add-on has
+	``homeassistant_api``): any answer from Core -- 200, or 401 -- means it
+	is up. The Supervisor's own word can lag: on chap-test2 (4 Nov 2026) its
+	start job sat at "Still waiting for Home Assistant Core to start" with
+	Core running, and refused every other Core job meanwhile.
+	"""
+	status, _ = _supervisor_get("/core/api/", opener)
+	return status in (200, 401)
+
+
 def set_core_running(running: bool, opener=urllib.request.urlopen) -> bool:
 	"""Start or stop Core, with the boot flag to match (as the portal does
-	for a hosted standby), so a reboot mid-failover does not bring it back."""
+	for a hosted standby), so a reboot mid-failover does not bring it back.
+
+	A start finds Core up first if it is (core_answers), and then only sets
+	the boot flag: asking /core/start of a running Core only queues another
+	job behind whatever the Supervisor is stuck on (chap-test2, 4 Nov 2026)."""
 	if _supervisor_post("/core/options", {"boot": running}, opener) != 200:
 		return False
+	if running and core_answers(opener):
+		return True
 	return _supervisor_post("/core/start" if running else "/core/stop", None, opener) == 200
+
+
+# Starting Core, and when to stop asking (owner, 4 Nov 2026: "it should
+# stop after a while"). On chap-test2 the local pair asked /core/start every
+# ten seconds for over half an hour while the Supervisor's start job hung,
+# and every other Core job on that box was refused ("Another job is running
+# for job group home_assistant_core") until a reboot. Now the gaps grow, and
+# after half an hour of failing it gives up and says so, until something
+# changes: the home moves, Core is found up (the owner started it), or this
+# add-on restarts.
+CORE_START_GAPS = (10, 30, 60, 120, 300, 600)
+CORE_START_GIVE_UP = 30 * 60
+CORE_START_GAVE_UP = ("could not start Home Assistant for 30 minutes; start it by hand, "
+                      "or restart this machine")
+_RUN_ID = secrets.token_hex(4)   # this run of the add-on: a restart tries afresh
+
+
+def core_start_step(record: Optional[dict], now: float, answers: Callable[[], bool],
+                    start: Callable[[], bool], why: str = "") -> tuple[bool, Optional[str], Optional[dict]]:
+	"""One go at starting Core, if one is due. ``(started, note, record)``.
+
+	``record`` is the caller's memory of the tries (None at first); keep the
+	one returned. ``why`` names what the start is for (the local pair's
+	move, say): a different one starts the count again. Between tries, and
+	after giving up, only asks whether Core has come up (``answers``), and
+	then lets ``start`` set it to start at boot as well (set_core_running
+	does no more than that for a Core already up).
+	"""
+	rec = dict(record) if isinstance(record, dict) else {}
+	if rec.get("run") != _RUN_ID or rec.get("why") != why:
+		rec = {"run": _RUN_ID, "why": why, "since": now, "tries": 0, "next_at": now}
+	waiting = rec.get("gave_up") or now < float(rec.get("next_at") or 0)
+	if waiting and not answers():
+		if rec.get("gave_up"):
+			return False, CORE_START_GAVE_UP, rec
+		when = time.strftime("%H:%M", time.localtime(float(rec["next_at"])))
+		return False, f"could not start Home Assistant ({rec['tries']} tries); trying again at {when}", rec
+	if start():
+		return True, None, None
+	rec["tries"] = int(rec.get("tries") or 0) + 1
+	since = float(rec.get("since") or now)
+	if now - since >= CORE_START_GIVE_UP:
+		rec["gave_up"] = True
+		LOG.warning("%s", CORE_START_GAVE_UP)
+		return False, CORE_START_GAVE_UP, rec
+	gap = CORE_START_GAPS[min(rec["tries"], len(CORE_START_GAPS)) - 1]
+	rec["next_at"] = min(now + gap, since + CORE_START_GIVE_UP)
+	return False, f"could not start Home Assistant; trying again in {gap} s", rec
 
 
 def enforce_core(directive, state: dict, state_path: Path,
                  core_stopped: Callable[[], bool],
-                 set_running: Callable[[bool], bool] = set_core_running) -> Optional[str]:
+                 set_running: Callable[[bool], bool] = set_core_running,
+                 now: Optional[float] = None,
+                 core_up: Callable[[], bool] = core_answers,
+                 local_hold: Callable[[], bool] = lambda: False) -> Optional[str]:
 	"""Act on the portal's instruction for this install's own Core.
 
 	Only ever sent to a home the portal cannot reach itself, and only in two
@@ -540,11 +610,20 @@ def enforce_core(directive, state: dict, state_path: Path,
 	handback. ``start`` afterwards — acted on only if this worker was the one
 	that stopped it, so a Core its owner stopped stays stopped.
 
-	The instruction arrives with every successful poll; when the portal
-	cannot be reached nothing arrives and nothing changes.
+	``local_hold``: this install is also in a local pair, which has the home
+	on its partner (or is moving it). Vome's ``start`` then waits: Vome says
+	only that this install may run the home, and the local pair starts Core
+	here when the home comes back (local_pair module, "Beside a Vome pair").
+	``stop`` always wins.
+
+	A start that fails is tried again with growing gaps and given up after
+	half an hour (core_start_step). The instruction arrives with every
+	successful poll; when the portal cannot be reached nothing arrives and
+	nothing changes.
 	"""
 	stopped_by_us = bool(state.get("core_stopped_by_vome"))
 	if directive == "stop":
+		state.pop("core_start", None)
 		if stopped_by_us and core_stopped():
 			return None
 		# Take it over even if Core is already down (it crashed, say): the
@@ -556,11 +635,19 @@ def enforce_core(directive, state: dict, state_path: Path,
 		save_json(state_path, state)
 		return "stopped Core: the hosted standby is the active install"
 	if directive == "start" and stopped_by_us:
-		if not set_running(True):
-			return "could not start Core after the handback; will retry"
-		state["core_stopped_by_vome"] = False
+		if local_hold():
+			return ("Vome says this install may run the home, but its local pair has the home on "
+			        "the other install; Home Assistant starts here when the home comes back")
+		started, note, record = core_start_step(state.get("core_start"), time.time() if now is None else now,
+		                                        core_up, lambda: set_running(True), why="vome")
+		if started:
+			state["core_stopped_by_vome"] = False
+			state.pop("core_start", None)
+			save_json(state_path, state)
+			return "started Core: this install is the active one again"
+		state["core_start"] = record
 		save_json(state_path, state)
-		return "started Core: this install is the active one again"
+		return note
 	return None
 
 
@@ -1996,8 +2083,16 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
              local_version: Callable[[], str] = core_version,
              set_running: Callable[[bool], bool] = set_core_running,
              probe: Callable[[str], bool] = probe_primary,
-             edge_probe: Callable[[str], bool] = probe_edge) -> tuple[str, int]:
-	"""Do whatever this side's role calls for. Returns (what happened, next wait)."""
+             edge_probe: Callable[[str], bool] = probe_edge,
+             core_up: Callable[[], bool] = core_answers,
+             local_hold: Callable[[], bool] = lambda: False) -> tuple[str, int]:
+	"""Do whatever this side's role calls for. Returns (what happened, next wait).
+
+	``local_hold``: this install is also in a local pair that has the home
+	on its partner just now (local_pair.holds_core_stopped). Vome's word to
+	run the home here then waits for the local pair -- Core, the held
+	add-ons and the home's address alike; its word to stop never does.
+	"""
 	state_path = data_dir / STATE_FILE
 	state = load_json(state_path)
 	now = time.time()
@@ -2026,8 +2121,11 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	if not state["fallback"]:
 		for key in ("primary_reachable", "primary_unreachable_since", "edge_reachable"):
 			state.pop(key, None)
-	save_json(state_path, state)
 	role = info.get("role")
+	# What Vome said, for a local pair beside this one (vome_runs_home_elsewhere).
+	state.update({"vome_role": role or "none", "vome_role_at": now, "vome_core": info.get("core"),
+	              "vome_names": info.get("names") or state.get("vome_names")})
+	save_json(state_path, state)
 	interval = int(info.get("interval_seconds") or DEFAULT_INTERVAL)
 	set_excludes(info.get("exclude"))
 	update_note = ensure_auto_update(state, state_path)
@@ -2037,10 +2135,16 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	if current_note:
 		LOG.info("%s", current_note)
 
-	core_note = enforce_core(info.get("core"), state, state_path, core_stopped, set_running)
+	core_note = enforce_core(info.get("core"), state, state_path, core_stopped, set_running,
+	                         now=now, core_up=core_up, local_hold=local_hold)
 	if core_note:
 		LOG.info("%s", core_note)
-	addons_note = enforce_addons(role, state, state_path, allowed=info.get("standby_addons"))
+	held_locally = role == ROLE_ACTIVE and local_hold()
+	# Held by the local pair: the home's add-ons stay stopped as on a standby,
+	# and start when the local pair brings the home back (then Vome's
+	# "active" is new again to enforce_addons).
+	addons_note = enforce_addons(ROLE_STANDBY if held_locally else role, state, state_path,
+	                             allowed=info.get("standby_addons"))
 	if addons_note:
 		LOG.info("%s", addons_note)
 	started_note = maybe_start_addons(info, state, state_path)
@@ -2049,7 +2153,7 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	announce_note = maybe_announce(info, state, state_path, now)
 	if announce_note:
 		LOG.info("%s", announce_note)
-	address_note = enforce_home_address(info, state, state_path)
+	address_note = enforce_home_address(info, state, state_path, hold=False if held_locally else None)
 	if address_note:
 		LOG.info("%s", address_note)
 	forward_note = ensure_forward_ui(info, state, state_path)
@@ -2228,7 +2332,8 @@ def vome_pair_role(binding: dict, now: float, data_dir: Path = DATA_DIR,
 
 	An install connected to Vome but in no Vome pair ("none") may be in a
 	local pair: Vome for the relay and the rest, the two installs deciding
-	between themselves (chap_plan §11).
+	between themselves (chap_plan §11). One in a Vome pair runs its local
+	pair beside it (run_beside_vome).
 	"""
 	state_path = data_dir / STATE_FILE
 	state = load_json(state_path)
@@ -2236,9 +2341,68 @@ def vome_pair_role(binding: dict, now: float, data_dir: Path = DATA_DIR,
 		info = (portal_factory or Portal)(binding).role()
 		state["vome_role_at"] = now
 		if info is not None:
-			state["vome_role"] = info.get("role")
+			state.update({"vome_role": info.get("role"), "vome_core": info.get("core"),
+			              "vome_names": info.get("names") or state.get("vome_names")})
 		save_json(state_path, state)
 	return state.get("vome_role")
+
+
+def vome_runs_home_elsewhere(state: dict) -> Optional[str]:
+	"""The name of the install Vome runs the home on, when Vome says this one
+	must not: its standby, or told to keep Core stopped. Else None.
+
+	From what Vome said last (run_once, vome_pair_role), so it holds while
+	Vome cannot be reached -- except after this install took the home on
+	its own with nobody to ask (maybe_take_over_locally): then it runs it.
+	"""
+	if state.get("took_over_locally"):
+		return None
+	role = state.get("vome_role")
+	if role == ROLE_STANDBY or (role == ROLE_ACTIVE and state.get("vome_core") == "stop"):
+		names = state.get("vome_names") if isinstance(state.get("vome_names"), dict) else {}
+		return str(names.get("other") or "the other install in its Vome CHAP pair")
+	return None
+
+
+def run_beside_vome(options: dict, binding: Optional[dict], env, lp, now: float,
+                    next_vome: float, data_dir: Path = DATA_DIR,
+                    vome_pass: Optional[Callable[..., tuple[str, int]]] = None) -> tuple[str, int, float, Optional[str]]:
+	"""One pass for an install with ``local_pair`` set, in a Vome pair or not.
+
+	Owner, 4 Nov 2026, after chap-test2 was in both and its local pair was
+	switched off for it: "If it can stand in then it should, just make sure
+	it doesn't get confused, and it should stop after a while." So the local
+	pair runs every pass, and Vome's pass beside it when due (``next_vome``).
+	Vome goes first, so a "stop" it brings is in force before the local pair
+	looks; the local pair is then told whether Vome runs the home elsewhere
+	(the rules: local_pair module, "Beside a Vome pair").
+
+	Returns ``(local outcome, seconds to wait, when Vome is next due, Vome's
+	outcome or None)``.
+	"""
+	vome_pass = vome_pass or (lambda: run_once(Portal(binding), local_hold=lambda: lp.holds_core_stopped(data_dir)))
+	role = vome_pair_role(binding, now, data_dir) if binding else None
+	in_vome = role in (ROLE_ACTIVE, ROLE_STANDBY)
+	vome_outcome = None
+	if in_vome and now >= next_vome:
+		try:
+			vome_outcome, wait = vome_pass()
+		except Exception:  # noqa: BLE001 - one bad pass must not end the service
+			LOG.exception("CHAP sync pass failed")
+			vome_outcome, wait = "pass failed", IDLE_INTERVAL
+		next_vome = now + max(5, wait)
+		# The pass may have heard the pair has gone.
+		role = load_json(data_dir / STATE_FILE).get("vome_role")
+		in_vome = role in (ROLE_ACTIVE, ROLE_STANDBY)
+	elsewhere = vome_runs_home_elsewhere(load_json(data_dir / STATE_FILE)) if in_vome else None
+	try:
+		outcome, wait = lp.run_local_once(options, env, vome_runs_on=elsewhere)
+	except Exception:  # noqa: BLE001 - one bad pass must not end the service
+		LOG.exception("local pair pass failed")
+		outcome, wait = "local pair pass failed", 30
+	if in_vome:
+		wait = max(1, min(wait, int(next_vome - now)))
+	return outcome, wait, next_vome, vome_outcome
 
 
 def main() -> None:
@@ -2248,7 +2412,7 @@ def main() -> None:
 	env = local_pair.Env(sys.modules[__name__], DATA_DIR, CONFIG_DIR)
 	env.server = local_pair.LanServer(DATA_DIR, lambda: local_pair.my_status(local_pair.load_pair(DATA_DIR), env))
 	local_pair.start_panel(DATA_DIR)
-	last_local, told_both = None, False
+	last_local, last_vome, next_vome = None, None, 0.0
 	while True:
 		paired = redeem_pairing()
 		if paired:
@@ -2256,29 +2420,25 @@ def main() -> None:
 		binding = load_binding()
 		options = local_pair.read_options(DATA_DIR)
 		if options["mode"] != local_pair.OFF:
-			if binding and vome_pair_role(binding, time.time()) in (ROLE_ACTIVE, ROLE_STANDBY):
-				# A Vome CHAP pair decides for itself; the two would disagree.
-				if not told_both:
-					LOG.warning("local_pair is set, but this install is in a Vome CHAP pair, "
-					            "which decides; local pairing stays off")
-					told_both = True
-			else:
-				try:
-					outcome, wait = local_pair.run_local_once(options, env)
-				except Exception:  # noqa: BLE001 - one bad pass must not end the service
-					LOG.exception("local pair pass failed")
-					outcome, wait = "local pair pass failed", 30
-				if outcome != last_local:  # every 10 s; the log is for changes
-					LOG.info("%s", outcome)
-					last_local = outcome
-				try:
-					summary = local_pair.summary(DATA_DIR)
-				except Exception:  # noqa: BLE001 - a status line must not stop the pass
-					summary = None
-				publish_status(outcome, local=summary)
-				sleep_unless_nudged(wait)
-				continue
-		elif env.server:
+			outcome, wait, next_vome, vome_outcome = run_beside_vome(
+				options, binding, env, local_pair, time.time(), next_vome)
+			if vome_outcome:
+				LOG.info("%s", vome_outcome)
+				last_vome = vome_outcome
+			if outcome != last_local:  # every 10 s; the log is for changes
+				LOG.info("%s", outcome)
+				last_local = outcome
+			try:
+				summary = local_pair.summary(DATA_DIR)
+			except Exception:  # noqa: BLE001 - a status line must not stop the pass
+				summary = None
+			in_vome = load_json(DATA_DIR / STATE_FILE).get("vome_role") in (ROLE_ACTIVE, ROLE_STANDBY)
+			publish_status(outcome + (f"; Vome CHAP: {last_vome}" if in_vome and last_vome else ""),
+			               local=summary)
+			if sleep_unless_nudged(wait):
+				next_vome = 0.0  # Vome asked to hear from this install now
+			continue
+		if env.server:
 			env.server.stop()
 		if not binding:
 			publish_status(paired or "not paired")

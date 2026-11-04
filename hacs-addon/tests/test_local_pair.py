@@ -67,6 +67,10 @@ class Install(lp.Env):
 		self.notices = {}
 		self.holding = "never asked"
 		self.lan = lp.LanServer(data, lambda: lp.my_status(lp.load_pair(data), self))
+		self.vome = None          # a Vome CHAP pair as well (Vome, below)
+		self.starts = []          # /core/start asked, and when
+		self.start_fails = False  # the Supervisor's start job stuck (chap-test2, 4 Nov 2026)
+		self.outcome = None
 		house.installs[ip] = self
 
 	def set_options(self, mode, code="", name=""):
@@ -75,7 +79,11 @@ class Install(lp.Env):
 
 	def run(self):
 		assert self.on
-		return lp.run_local_once(lp.read_options(self.data_dir), self)
+		runs_on = None
+		if self.vome:
+			runs_on = self.vome.run()
+		self.outcome = lp.run_local_once(lp.read_options(self.data_dir), self, vome_runs_on=runs_on)
+		return self.outcome
 
 	@property
 	def pair(self):
@@ -107,8 +115,16 @@ class Install(lp.Env):
 		return not self.core_running
 
 	def set_core(self, running):
+		# As chap_sync.set_core_running: a Core already up is not asked to start.
+		if running and not self.core_running:
+			self.starts.append(self.house.now)
+			if self.start_fails:
+				return False
 		self.core_running = running
 		return True
+
+	def core_up(self):
+		return self.core_running
 
 	def core_version(self):
 		return "2026.9.4"
@@ -161,6 +177,34 @@ class Install(lp.Env):
 		pair["auto_update_on"] = True
 		self.auto_update_turned_on = True
 		return "turned on automatic updates"
+
+
+class Vome:
+	"""An install in a Vome CHAP pair as well: what Vome last said to it, and
+	chap_sync acting on that before each local pass (run_beside_vome)."""
+
+	def __init__(self, install, role="active", core="start", other="Hosted"):
+		self.install, self.role, self.core, self.other = install, role, core, other
+		self.notes = []
+		install.vome = self
+
+	@property
+	def state_path(self):
+		return self.install.data_dir / cs.STATE_FILE
+
+	def run(self):
+		i = self.install
+		state = cs.load_json(self.state_path)
+		state.update({"vome_role": self.role, "vome_core": self.core,
+		              "vome_names": {"this": i.name, "other": self.other}})
+		cs.save_json(self.state_path, state)
+		if self.role in ("active", "standby"):
+			note = cs.enforce_core(self.core, state, self.state_path, i.core_stopped, i.set_core,
+			                       now=i.house.now, core_up=i.core_up,
+			                       local_hold=lambda: lp.holds_core_stopped(i.data_dir))
+			if note:
+				self.notes.append(note)
+		return cs.vome_runs_home_elsewhere(cs.load_json(self.state_path)) if self.role in ("active", "standby") else None
 
 
 def tick(house, *installs, seconds=lp.PASS_SECONDS):
@@ -815,3 +859,161 @@ def test_the_real_backup_and_restore_ask_the_supervisor_for_the_right_things(tmp
 	restore = next(b for m, p, b in calls if p.endswith("/restore/partial"))
 	assert restore["homeassistant"] is False and restore["addons"] == ["core_mosquitto"]
 	assert ("DELETE", "/backups/xyz", None) in calls and not (FakeCs.BACKUP_DIR / "vome-chap-lan-1.tar").exists()
+
+
+# ── Beside a Vome pair (0.2.13) ───────────────────────────────────────────
+#
+# chap-test2 on staging, 4 Nov 2026: the local main of a pair with chap-test,
+# and in a Vome CHAP pair with a hosted standby. The local pair switched
+# itself off for Vome; when Vome moved the home to the hosted standby and
+# stopped chap-test2's Core, chap-test saw nothing of chap-test2 and took
+# over with its configuration: two installs running the home besides the
+# hosted one. Then the Supervisor's start job hung and the local pair asked
+# /core/start every ten seconds for over half an hour.
+
+def _both_running(*installs):
+	return [i.name for i in installs if i.on and i.core_running]
+
+
+def test_staging_a_vome_switch_does_not_make_the_local_standby_take_over(pair, house):
+	main, spare = pair
+	vome = Vome(main, role="active", core="start", other="chap-test2 Hosted")
+	tick(house, main, spare)
+	assert main.core_running and not spare.core_running
+	epoch = main.pair["epoch"]
+	# Vome moves the home to its hosted standby and stops the main's Core.
+	vome.role, vome.core = "standby", "stop"
+	for _ in range(3 * lp.T_TAKE // lp.PASS_SECONDS):
+		tick(house, main, spare)
+		assert not main.core_running and not spare.core_running
+	assert not lp.is_holder(spare.pair) and spare.pair["epoch"] == epoch == main.pair["epoch"]
+	assert "Main install says the home runs on chap-test2 Hosted (Vome); standing by" in spare.outcome[0]
+	assert "held by Vome" in main.outcome[0] and "Standby is told so" in main.outcome[0]
+	# The main's add-on keeps answering, and says where the home is.
+	status, body, _ = main.lan.answer("GET", "/v1/status", None)
+	assert status == 200 and body["vome_runs_on"] == "chap-test2 Hosted" and body["holder"] == main.pair["id"]
+	assert lp.summary(main.data_dir)["vome_runs_on"] == "chap-test2 Hosted"
+
+
+def test_an_old_standby_that_ignores_the_field_still_stands_by(pair, house, monkeypatch):
+	"""0.2.12 on the standby knows nothing of vome_runs_on: the main's add-on
+	answering is what keeps it standing by."""
+	main, spare = pair
+	vome = Vome(main, role="standby", core="stop")
+	monkeypatch.setattr(lp, "my_status", lambda pair, env, real=lp.my_status: {
+		k: v for k, v in real(pair, env).items() if k != "vome_runs_on"})
+	for _ in range(3 * lp.T_TAKE // lp.PASS_SECONDS):
+		tick(house, main, spare)
+	assert not main.core_running and not spare.core_running and not lp.is_holder(spare.pair)
+
+
+def test_a_standby_never_stands_in_while_the_main_s_add_on_answers_at_all(pair, house, monkeypatch):
+	main, spare = pair
+	main.core_running = False   # Home Assistant gone, the add-on still there...
+	monkeypatch.setattr(main.lan, "answer", lambda *a, **k: (503, {"error": "busy"}, {}))  # ...and unhappy
+	for _ in range(3 * lp.T_TAKE // lp.PASS_SECONDS):
+		tick(house, spare)
+	assert not lp.is_holder(spare.pair) and not spare.core_running
+
+
+def test_a_dead_main_box_is_stood_in_for_whatever_vome_said(pair, house):
+	"""Owner: "If it can stand in then it should"."""
+	main, spare = pair
+	Vome(main, role="standby", core="stop")
+	tick(house, main, spare)
+	main.on = main.core_running = False   # the box itself: add-on and Home Assistant gone
+	for _ in range(20):
+		tick(house, spare)
+	assert lp.is_holder(spare.pair) and spare.core_running
+
+
+def test_a_main_back_after_a_stand_in_follows_the_local_handback_not_vome(pair, house):
+	"""Vome says "run" (it never moved the home), the local pair says the
+	home is on the standby: one brain, then the usual way home."""
+	main, spare = pair
+	vome = Vome(main, role="active", core="start")
+	tick(house, main, spare)
+	_taken_over(house, main, spare)
+	main.on = main.core_running = True   # back, and Core comes up at boot
+	tick(house, main, spare)
+	assert not main.core_running and spare.core_running and lp.is_holder(spare.pair)
+	# Had Vome stopped this Core itself before, its "start" would act on it:
+	# it waits for the local pair instead.
+	state = cs.load_json(vome.state_path)
+	cs.save_json(vome.state_path, {**state, "core_stopped_by_vome": True})
+	tick(house, main, spare)
+	assert not main.core_running and main.starts == []
+	assert any("starts here when the home comes back" in n for n in vome.notes)
+	for _ in range((lp.SNAPSHOT_EVERY + lp.BACK_AFTER) // lp.PASS_SECONDS + 20):
+		tick(house, spare, main)
+		assert len(_both_running(main, spare)) <= 1
+		if main.core_running:
+			break
+	assert lp.is_holder(main.pair) and main.core_running and not spare.core_running
+	tick(house, main, spare)   # Vome's own record catches up: Core found up, no start asked
+	assert cs.load_json(vome.state_path)["core_stopped_by_vome"] is False
+	assert len(main.starts) == 1
+
+
+def test_vome_s_stop_wins_over_a_local_run(pair, house):
+	main, spare = pair
+	vome = Vome(main, role="active", core="start")
+	tick(house, main, spare)
+	vome.core = "stop"   # a house back before its install took over (chap_reverse.recall_pending)
+	tick(house, main, spare)
+	assert not main.core_running and lp.is_holder(main.pair)
+	# Even where the local pair would start it again itself.
+	lp.save_pair(main.data_dir, {**main.pair, "core_stopped_by_pair": True})
+	for _ in range(30):
+		tick(house, main, spare)
+	assert not main.core_running and not spare.core_running and main.starts == []
+	vome.core = "start"   # Vome lets go: one start, from whichever acts first
+	tick(house, main, spare)
+	tick(house, main, spare)
+	assert main.core_running and len(main.starts) == 1 and not spare.core_running
+
+
+def test_a_vome_pair_removed_mid_failover_leaves_the_local_main_running_the_home(pair, house):
+	main, spare = pair
+	vome = Vome(main, role="standby", core="stop")
+	tick(house, main, spare)
+	assert not main.core_running
+	vome.role, vome.core = "none", None   # the Vome pair is no more
+	tick(house, main, spare)
+	assert main.core_running and not spare.core_running and lp.is_holder(main.pair)
+
+
+def _stuck_start(house, main):
+	"""The main runs the home but its Core is down, stopped by the pair, and
+	the Supervisor refuses every start."""
+	lp.save_pair(main.data_dir, {**main.pair, "core_stopped_by_pair": True})
+	main.core_running, main.start_fails = False, True
+
+
+def test_starting_home_assistant_backs_off_and_gives_up_after_half_an_hour(pair, house):
+	main, spare = pair
+	_stuck_start(house, main)
+	t0 = house.now + lp.PASS_SECONDS
+	for _ in range(60 * 60 // lp.PASS_SECONDS):
+		tick(house, main)
+	assert [int(t - t0) for t in main.starts] == [0, 10, 40, 100, 220, 520, 1120, 1720, 1800]
+	assert "could not start Home Assistant for 30 minutes; start it by hand, or restart this machine" in main.outcome[0]
+	# The owner starts it by hand: seen, and nothing more asked.
+	main.core_running, main.start_fails = True, False
+	tick(house, main)
+	assert "started Home Assistant" in main.outcome[0] and not main.pair.get("core_start")
+	assert not main.pair.get("core_stopped_by_pair") and len(main.starts) == 9
+
+
+def test_a_restart_of_the_add_on_tries_again(pair, house, monkeypatch):
+	main, spare = pair
+	_stuck_start(house, main)
+	for _ in range(45 * 60 // lp.PASS_SECONDS):
+		tick(house, main)
+	tried = len(main.starts)
+	tick(house, main, seconds=600)
+	assert len(main.starts) == tried   # given up
+	monkeypatch.setattr(cs, "_RUN_ID", "restarted")
+	tick(house, main)
+	assert len(main.starts) == tried + 1
+
