@@ -562,6 +562,49 @@ class TestCoreDirective:
 		            set_running=lambda r: False)
 		assert not cs.load_json(data / cs.STATE_FILE).get("core_stopped_by_vome")
 
+	def test_a_failing_start_backs_off_and_gives_up_after_half_an_hour(self, tmp_path):
+		"""chap-test2, 4 Nov 2026: never hammer /core/start again."""
+		path = tmp_path / cs.STATE_FILE
+		state = {"core_stopped_by_vome": True}
+		tried, notes = [], []
+		for t in range(0, 3600, 5):
+			note = cs.enforce_core("start", state, path, lambda: True,
+			                       lambda r: tried.append(t) or False, now=1000 + t, core_up=lambda: False)
+			notes.append(note)
+		assert tried == [0, 10, 40, 100, 220, 520, 1120, 1720, 1800]
+		assert notes[-1] == cs.CORE_START_GAVE_UP and state["core_stopped_by_vome"] is True
+		# Found up (the owner started it): taken as started, the boot flag set.
+		note = cs.enforce_core("start", state, path, lambda: True, lambda r: tried.append("boot") or True,
+		                       now=5000, core_up=lambda: True)
+		assert note.startswith("started Core") and state["core_stopped_by_vome"] is False
+		assert "core_start" not in state and tried[-1] == "boot"
+
+	def test_stop_ends_the_tries(self, tmp_path):
+		path = tmp_path / cs.STATE_FILE
+		state = {"core_stopped_by_vome": True}
+		cs.enforce_core("start", state, path, lambda: True, lambda r: not r, now=1000, core_up=lambda: False)
+		assert state["core_start"]["tries"] == 1
+		cs.enforce_core("stop", state, path, lambda: True, lambda r: True, now=1010)
+		assert "core_start" not in state
+
+	def test_start_waits_while_the_local_pair_has_the_home_elsewhere(self, tmp_path):
+		path = tmp_path / cs.STATE_FILE
+		state = {"core_stopped_by_vome": True}
+		note = cs.enforce_core("start", state, path, lambda: True, lambda r: pytest.fail("started"),
+		                       now=1000, local_hold=lambda: True)
+		assert "starts here when the home comes back" in note and state["core_stopped_by_vome"] is True
+		# Stop is Vome's word whatever the local pair thinks.
+		state = {}
+		calls = []
+		cs.enforce_core("stop", state, path, lambda: False, lambda r: calls.append(r) or True,
+		                local_hold=lambda: False)
+		assert calls == [False]
+
+	def test_run_once_remembers_what_vome_said_for_a_local_pair(self, tmp_path):
+		_, state = self._run(tmp_path, "stop", stopped=False)
+		assert state["vome_role"] == "standby" and state["vome_core"] == "stop"
+		assert cs.vome_runs_home_elsewhere(state) == "the other install in its Vome CHAP pair"
+
 	def test_re_pairing_keeps_the_fact_that_this_worker_stopped_core(self, tmp_path):
 		cs.save_json(tmp_path / "chap.json", {"portal_url": "https://p", "pairing_code": "vcp_x.y"})
 		cs.save_json(tmp_path / "chap_state.json", {"core_stopped_by_vome": True, "applied_id": "old"})
@@ -571,11 +614,16 @@ class TestCoreDirective:
 
 
 class TestSetCoreRunning:
-	def _opener(self, calls, fail_options=False):
+	def _opener(self, calls, fail_options=False, core="down"):
 		def opener(req, timeout=None):
 			calls.append((req.get_method(), req.full_url.rsplit("supervisor", 1)[1], json.loads(req.data or b"{}")))
 			if fail_options and req.full_url.endswith("/core/options"):
 				raise urllib.error.HTTPError(req.full_url, 403, "no", {}, io.BytesIO(b"{}"))
+			if req.full_url.endswith("/core/api/"):
+				if core == "down":  # the Supervisor's proxy, with no Core behind it
+					raise urllib.error.HTTPError(req.full_url, 502, "bad gateway", {}, io.BytesIO(b""))
+				if core == "401":
+					raise urllib.error.HTTPError(req.full_url, 401, "no", {}, io.BytesIO(b""))
 			return FakeResponse(200, b"{}")
 		return opener
 
@@ -587,7 +635,22 @@ class TestSetCoreRunning:
 	def test_start_turns_boot_on_then_starts(self):
 		calls = []
 		assert cs.set_core_running(True, self._opener(calls)) is True
-		assert calls == [("POST", "/core/options", {"boot": True}), ("POST", "/core/start", {})]
+		assert calls == [("POST", "/core/options", {"boot": True}), ("GET", "/core/api/", {}),
+		                 ("POST", "/core/start", {})]
+
+	@pytest.mark.parametrize("core", ["200", "401"])
+	def test_a_core_already_answering_is_not_asked_to_start(self, core):
+		"""chap-test2, 4 Nov 2026: the Supervisor's start job hung with Core
+		up, and every /core/start after it was refused. Any answer from Core
+		is Core up: only the boot flag is set."""
+		calls = []
+		assert cs.set_core_running(True, self._opener(calls, core=core)) is True
+		assert calls == [("POST", "/core/options", {"boot": True}), ("GET", "/core/api/", {})]
+
+	def test_core_answers_only_for_core_itself(self):
+		assert cs.core_answers(self._opener([], core="200")) is True
+		assert cs.core_answers(self._opener([], core="401")) is True
+		assert cs.core_answers(self._opener([], core="down")) is False
 
 	def test_a_refused_boot_flag_stops_there(self):
 		calls = []
@@ -2046,3 +2109,58 @@ class TestVersionsAreReported:
 		# Older callers still work.
 		assert portal.report_addons([], None)
 		assert captured["body"] == {"addons": [], "network": [], "update_problem": None}
+
+
+class TestBesideAVomePair:
+	"""A local pair beside a Vome CHAP pair (0.2.13; local_pair's docstring,
+	"Beside a Vome pair"). Before, the local pair switched itself off, and
+	on staging (4 Nov 2026) its standby took the home over from a main that
+	Vome had stopped."""
+
+	@pytest.mark.parametrize("state, says", [
+		({"vome_role": "standby", "vome_core": "stop", "vome_names": {"other": "GamlaBio Hosted"}}, "GamlaBio Hosted"),
+		({"vome_role": "active", "vome_core": "stop"}, "the other install in its Vome CHAP pair"),
+		({"vome_role": "active", "vome_core": "start"}, None),
+		({"vome_role": "none", "vome_core": "stop"}, None),   # the Vome pair has gone
+		({"vome_role": "standby", "vome_core": "stop", "took_over_locally": 1}, None),
+	])
+	def test_when_vome_runs_the_home_elsewhere(self, state, says):
+		assert cs.vome_runs_home_elsewhere(state) == says
+
+	class _LP:
+		def __init__(self):
+			self.told = []
+
+		def run_local_once(self, options, env, vome_runs_on=None):
+			self.told.append(vome_runs_on)
+			return "local pair, standing by: nothing to do", 10
+
+		def holds_core_stopped(self, data_dir):
+			return False
+
+	def test_the_local_pair_runs_every_pass_and_vome_when_due(self, tmp_path):
+		cs.save_json(tmp_path / cs.STATE_FILE, {"vome_role": "standby", "vome_role_at": 1000, "vome_core": "stop",
+		                                        "vome_names": {"other": "Hosted"}})
+		lp, passes = self._LP(), []
+
+		def vome_pass():
+			passes.append(1)
+			return "standby: already in step", 300
+
+		out, wait, next_vome, said = cs.run_beside_vome({}, {"token": "x"}, None, lp, 1000, 0, tmp_path, vome_pass)
+		assert passes == [1] and said == "standby: already in step" and next_vome == 1300
+		assert lp.told == ["Hosted"] and wait == 10 and out.startswith("local pair")
+		out, wait, next_vome, said = cs.run_beside_vome({}, {"token": "x"}, None, lp, 1010, next_vome, tmp_path, vome_pass)
+		assert passes == [1] and said is None and lp.told == ["Hosted", "Hosted"]
+
+	def test_without_a_vome_pair_the_local_pair_alone_decides(self, tmp_path):
+		cs.save_json(tmp_path / cs.STATE_FILE, {"vome_role": "none", "vome_role_at": 1000, "vome_core": "stop"})
+		lp = self._LP()
+		cs.run_beside_vome({}, {"token": "x"}, None, lp, 1000, 0, tmp_path, lambda: pytest.fail("Vome pass"))
+		cs.run_beside_vome({}, None, None, lp, 1000, 0, tmp_path, lambda: pytest.fail("Vome pass"))
+		assert lp.told == [None, None]
+
+	def test_the_main_loop_no_longer_switches_the_local_pair_off(self):
+		src = (ROOT / "vome_chap" / "chap_sync.py").read_text()
+		assert "local pairing stays off" not in src and "run_beside_vome(" in src.split("def main()")[1]
+

@@ -52,6 +52,61 @@ they move it back.
 which of the standby's add-ons it runs when it stands in; the rest stay
 stopped (all, until they choose).
 
+Beside a Vome pair
+------------------
+
+An install can be in a local pair and in a Vome CHAP pair at once (a house
+pair with a hosted standby as well). Until 0.2.13 the local pair switched
+itself off then, and that went wrong on staging (chap-test2, 4 Nov 2026):
+Vome moved the home to the hosted standby and stopped chap-test2's Core;
+its local standby, chap-test, could then reach neither this add-on (its
+LAN server was never started) nor its Home Assistant, took over with
+chap-test2's configuration -- the same Vome relay identity -- and the home
+ran in two places besides the hosted one. Owner, 4 Nov 2026: "If it can
+stand in then it should, just make sure it doesn't get confused, and it
+should stop after a while." The rules since:
+
+1. **The local pair always runs**, and its LAN server always answers.
+
+2. **Vome's word wins only where it speaks.** When Vome says this install
+   must not run the home -- it is Vome's standby, or Vome tells it to keep
+   Core stopped (chap_sync.vome_runs_home_elsewhere) -- Core here stays
+   stopped, whatever the local pair thinks: Core is Vome's alone then, the
+   local pair starts none of the home's add-ons (it still stops them when
+   its partner runs the home), does not take over, and does not hold the
+   home's address. The epochs carry on as before (a holder held stopped by
+   Vome is still the local holder), so nothing has to be untangled once
+   Vome lets go.
+
+3. **Otherwise the local pair decides**, exactly as without Vome --
+   including, on a main that comes back after its partner stood in, "the
+   home moved (higher epoch): stop Core, take the partner's configuration,
+   move the home back after BACK_AFTER". Vome's "start" waits for that:
+   chap_sync.enforce_core leaves Core stopped while this install's local
+   pair has the home on its partner or is moving it (holds_core_stopped),
+   and the local pair starts it when the home is back. A Core Vome stopped
+   counts as one the pair may start (``core_held_by_vome``), so a Vome pair
+   removed mid-failover does not leave the local holder dark.
+
+4. **A main whose home Vome runs elsewhere tells its partner so**: its
+   status carries ``vome_runs_on``, the name of the Vome install running the
+   home. A partner that is told so stands by and says why. An older partner
+   ignores the field; it still sees this add-on answering, which alone
+   keeps it from taking over -- better than 0.2.12, which did not answer.
+
+5. **A standby never takes over while the running install's add-on
+   answers**, whatever Vome is doing: any answer at all counts, not only a
+   good one. If neither the add-on nor its Home Assistant answers (the box
+   is dead), it stands in as it always has -- also when Vome has moved the
+   home to its hosted standby, which then runs it too until the main is
+   back (the owner's "if it can stand in then it should").
+
+6. **Starting Core stops after a while.** Every start first asks Core
+   itself whether it is up (chap_sync.core_answers); a failed start is tried
+   again after 10 s, 30 s, 1, 2, 5 and then every 10 minutes, and after half
+   an hour it gives up and says so (chap_sync.core_start_step), until the
+   home moves, Core is found up, or the add-on restarts.
+
 Stdlib only, like the rest of the add-on. TLS with a pre-shared key needs
 Python 3.13 (the add-on's base image); the rules here are plain functions.
 """
@@ -286,6 +341,19 @@ def take_hello(pair: dict, data_dir: Path, now: float) -> Optional[str]:
 
 def is_holder(pair: dict) -> bool:
 	return bool(pair.get("holder")) and pair.get("holder") == pair.get("id")
+
+
+def holds_core_stopped(data_dir: Path) -> bool:
+	"""Does this install's local pair keep its Core stopped just now? (The
+	home is on the partner, or on its way to it.) Vome's "start" waits while
+	it does (chap_sync.enforce_core); rule 3 in the module's docstring."""
+	options = read_options(data_dir)
+	if options["mode"] == OFF:
+		return False
+	pair = load_pair(data_dir)
+	if not pair.get("id") or pair.get("settings") != _settings_digest(options):
+		return False  # not this pair's state yet: the first pass makes it
+	return not is_holder(pair) or bool(pair.get("moving_to"))
 
 
 def takeover_due(pair: dict, now: float, router_ok: bool, peer_ok: bool, wait: int = T_TAKE) -> Optional[str]:
@@ -674,6 +742,9 @@ class Env:
 	def set_core(self, running: bool) -> bool:
 		return self.cs.set_core_running(running)
 
+	def core_up(self) -> bool:
+		return self.cs.core_answers()
+
 	def core_version(self) -> str:
 		return self.cs.core_version()
 
@@ -818,26 +889,37 @@ def my_status(pair: dict, env: Env) -> dict:
 	        "epoch": pair.get("epoch"), "address": pair.get("address"), "ha_port": pair.get("ha_port"),
 	        "ha_version": pair.get("ha_version"), "applied_sha256": pair.get("applied_sha256"),
 	        "moving_to": pair.get("moving_to"), "applied_seed_id": pair.get("applied_seed_id"),
+	        # Vome runs the home on this install (rule 4): the partner stands by.
+	        "vome_runs_on": pair.get("vome_runs_on"),
 	        "seed": ({k: seed_meta.get(k) for k in ("id", "created_at", "addons")}
 	                 if is_holder(pair) and seed_meta.get("id") else None),
 	        "snapshot": {k: meta.get(k) for k in ("sha256", "created_at", "ha_version", "file_count")}
 	        if is_holder(pair) and meta.get("sha256") else None}
 
 
-def _hold_core(pair: dict, env: Env, running: bool) -> Optional[str]:
+def _hold_core(pair: dict, env: Env, running: bool, now: float) -> Optional[str]:
 	"""Core running here only on the install that runs the home.
 
-	Started again only if the pair stopped it: a Core the owner stopped
-	stays stopped. Stopping also turns its boot off, so a restart of a
-	standby does not bring it back (chap_sync.set_core_running).
+	Started again only if the pair stopped it, or Vome did while beside it
+	(``core_held_by_vome``): a Core the owner stopped stays stopped. A start
+	that fails backs off and gives up after half an hour (rule 6). Stopping
+	also turns its boot off, so a restart of a standby does not bring it
+	back (chap_sync.set_core_running).
 	"""
 	if running:
-		if not pair.get("core_stopped_by_pair"):
+		if not (pair.get("core_stopped_by_pair") or pair.get("core_held_by_vome")):
 			return None
-		if not env.set_core(True):
-			return "could not start Home Assistant; will retry"
-		pair["core_stopped_by_pair"] = False
+		started, note, record = env.cs.core_start_step(
+			pair.get("core_start"), now, env.core_up, lambda: env.set_core(True),
+			why=f"move {pair.get('epoch')}")
+		if not started:
+			pair["core_start"] = record
+			return note
+		for k in ("core_stopped_by_pair", "core_held_by_vome", "core_start"):
+			pair.pop(k, None)
 		return "started Home Assistant: this install runs the home"
+	pair.pop("core_start", None)
+	pair.pop("core_held_by_vome", None)
 	if pair.get("core_stopped_by_pair") and env.core_stopped():
 		return None
 	if not env.set_core(False):
@@ -1115,8 +1197,13 @@ def _say_running_here(pair: dict, env: Env) -> None:
 		pair.pop("say_running_here", None)
 
 
-def run_local_once(options: dict, env: Env) -> tuple[str, int]:
-	"""One pass of the local pair. Returns ``(what happened, seconds to wait)``."""
+def run_local_once(options: dict, env: Env, vome_runs_on: Optional[str] = None) -> tuple[str, int]:
+	"""One pass of the local pair. Returns ``(what happened, seconds to wait)``.
+
+	``vome_runs_on``: the install Vome runs the home on, when this one is in
+	a Vome pair too and Vome says it must not (chap_sync.run_beside_vome);
+	the rules for that are in the module's docstring, "Beside a Vome pair".
+	"""
 	now = env.clock()
 	pair = current_pair(env.data_dir, options, now)
 	if pair is None:
@@ -1124,6 +1211,10 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 			env.server.stop()
 		return "local pair off", 60
 	notes: list[str] = []
+	if vome_runs_on:
+		pair["vome_runs_on"] = vome_runs_on
+	else:
+		pair.pop("vome_runs_on", None)
 
 	network = env.network()
 	address, gateway = _house_address(network)
@@ -1161,13 +1252,16 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 	if joined:
 		notes.append(joined)
 
-	# Talk to the other install.
-	peer_status = None
+	# Talk to the other install. Any answer from its add-on counts as it
+	# being there (rule 5), a good one or not: a standby never takes over
+	# from an add-on that answers.
+	peer_status, heard = None, False
 	if pair.get("peer"):
 		if options["mode"] == STANDBY and not pair.get("introduced"):
 			status, body, _ = env.peer(pair, "POST", "/v1/hello",
 			                           {"id": pair["id"], "name": pair["name"], "address": address,
 			                            "port": LAN_PORT, "ha_port": pair.get("ha_port")})
+			heard = bool(status)
 			if status == 200 and isinstance(body, dict):
 				pair["introduced"] = now
 				notes.append(f"paired with {peer_name(pair)}")
@@ -1177,10 +1271,11 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 				return "standby: the main install says this one is a copy of it; change the settings and save again", 60
 		if peer_status is None:
 			status, body, _ = env.peer(pair, "GET", "/v1/status")
+			heard = heard or bool(status)
 			peer_status = body if status == 200 and isinstance(body, dict) else None
 	if peer_status:
 		if peer_status.get("id") == pair.get("id"):
-			peer_status = None  # a copy of this install answering: not the other one
+			peer_status, heard = None, False  # a copy of this install answering: not the other one
 		else:
 			pair["peer_seen_at"] = now
 			pair["peer_applied_sha256"] = peer_status.get("applied_sha256")
@@ -1207,8 +1302,17 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 		peer_ok = env.ha_ok(peer.get("address") or "", peer.get("ha_port"))
 	router_ok = env.router_ok(gateway)
 	pair["router_ok"] = router_ok
+	# The running install says Vome runs the home elsewhere (rule 4).
+	told = (peer_status or {}).get("vome_runs_on") if not is_holder(pair) else None
+	if told:
+		notes.append(f"{peer_name(pair)} says the home runs on {told} (Vome); standing by")
 
-	reason = takeover_due(pair, now, router_ok, peer_ok, options.get("takeover_after", T_TAKE))
+	if vome_runs_on:
+		# Held stopped by Vome (rule 2): never this install's to take.
+		pair.pop("peer_lost_since", None)
+		reason = None
+	else:
+		reason = takeover_due(pair, now, router_ok, peer_ok or heard, options.get("takeover_after", T_TAKE))
 	if reason:
 		pair.update({"holder": pair["id"], "epoch": int(pair.get("epoch") or 0) + 1,
 		             "took_over_at": now, "took_over": True, "say_running_here": True})
@@ -1227,11 +1331,26 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 	if moved:
 		notes.append(moved)
 	running_here = is_holder(pair)
-	# Mid-move Home Assistant stays stopped here; the add-ons run until the home goes.
-	core = None if pair.get("moving_to") else _hold_core(pair, env, running_here)
-	for step in (core, _hold_addons(pair, env, running_here)):
-		if step:
-			notes.append(step)
+	# Runs the home here in fact: the local holder, unless Vome says not (rule 2).
+	runs = running_here and not vome_runs_on
+	if vome_runs_on:
+		# Core and the home's add-ons are Vome's to keep stopped; a Core
+		# stopped that way is the pair's to start once Vome lets go.
+		pair["core_held_by_vome"] = True
+		pair.pop("core_start", None)
+		notes.append(f"Vome runs the home on {vome_runs_on}; Home Assistant here stays stopped"
+		             + (f", and {peer_name(pair)} is told so" if running_here and pair.get("peer") else ""))
+		# Stopping agrees with Vome: the home's add-ons stay off here while
+		# the partner runs them (two Zigbee2MQTTs on one coordinator).
+		stopped = None if running_here else _hold_addons(pair, env, False)
+		if stopped:
+			notes.append(stopped)
+	else:
+		# Mid-move Home Assistant stays stopped here; the add-ons run until the home goes.
+		core = None if pair.get("moving_to") else _hold_core(pair, env, running_here, now)
+		for step in (core, _hold_addons(pair, env, running_here)):
+			if step:
+				notes.append(step)
 	# The home's address at home follows whichever install runs the home, so
 	# the app and dashboards need no change after a takeover. Held only when
 	# Home Assistant here is (or is about to be) the one running the home.
@@ -1240,14 +1359,17 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 		notes.append(why)
 	pair["home_address_why"] = why
 	if home:
-		held = env.hold_home_address(pair, home, running_here and not pair.get("moving_to"))
+		held = env.hold_home_address(pair, home, runs and not pair.get("moving_to"))
 		if held:
 			notes.append(held)
 
 	if running_here and not pair.get("moving_to"):
+		# Held by Vome, the configuration here is still the home's (Vome's
+		# standby sync keeps it so): the partner keeps taking it.
 		made = _snapshot_if_due(pair, env, now)
 		if made:
 			notes.append(made)
+	if runs and not pair.get("moving_to"):
 		if peer_ok and pair.get("peer_applied_sha256"):  # someone to take it, already in step
 			seeded = _seed_if_due(pair, env, now)
 			if seeded:
@@ -1294,7 +1416,7 @@ def run_local_once(options: dict, env: Env) -> tuple[str, int]:
 				notes.append(stopped)
 
 	save_pair(env.data_dir, pair)
-	who = "running the home" if running_here else "standing by"
+	who = "running the home" if runs else ("held by Vome" if running_here else "standing by")
 	return f"local pair, {who}: " + ("; ".join(notes) if notes else "nothing to do"), PASS_SECONDS
 
 
@@ -1359,6 +1481,7 @@ def summary(data_dir: Path) -> Optional[dict]:
 	        "router_ok", "moving", "peer_answering", "peer_seen_at", "in_step", "took_over")
 	out = {k: view.get(k) for k in keep}
 	out["pair_key"] = bool(pair.get("pair_key_ok"))
+	out["vome_runs_on"] = pair.get("vome_runs_on")
 	return out
 
 

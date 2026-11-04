@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.13 — 4 November 2026
+
+**A local pair works beside a Vome pair.** If your main install was in a
+local pair and in a Vome CHAP pair at once, the local pair switched itself
+off. Then, when Vome moved your home to its hosted standby and stopped the
+main install's Home Assistant, the local standby could no longer see the main
+install and took over too, with the same configuration: your home ran in two
+places besides the hosted one. Now the local pair keeps running. Where Vome
+says the main install must not run your home, its Home Assistant stays
+stopped, and it tells the local standby where your home is running, so the
+standby stands by and says why. If the main install's machine dies outright,
+the local standby still stands in. When the main install comes back after a
+stand-in, the local pair brings the home back to it the usual way, and Vome
+waits for that rather than start a second Home Assistant.
+
+**Starting Home Assistant stops after a while.** If Home Assistant would not
+start, the local pair asked the Supervisor again every ten seconds, for as
+long as it took. When the Supervisor's own start had hung, that kept every
+other Home Assistant job on the machine waiting until it was restarted. This
+app now first checks whether Home Assistant is in fact up, and counts that as
+started. Otherwise it tries again less and less often, and after half an hour
+it stops and says so: start Home Assistant by hand, or restart the machine.
+It notices if you start it yourself, and tries again when your home moves or
+when this app restarts.
+
 ## 0.2.12 — 4 November 2026
 
 **A standby restarts into the operating system update it took.** Asked to

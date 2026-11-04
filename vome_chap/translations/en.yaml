@@ -5,7 +5,7 @@ configuration:
       Pair this Home Assistant with another one in your house, so one takes
       over when the other stops -- no Vome account needed. "main" on the one
       running your home (it then shows a pairing code), "standby" on the
-      other. Leave "off" if you use CHAP through Vome.
+      other. Works beside CHAP through Vome too.
   pair_code:
     name: Pairing code
     description: >-
