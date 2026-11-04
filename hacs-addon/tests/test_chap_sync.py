@@ -1076,7 +1076,7 @@ class TestSeedRestore:
 	def test_the_add_on_list_is_reported_when_it_changes(self, tmp_path):
 		sent = []
 		class P:
-			def report_addons(self, addons, network=None, ha_port=None):
+			def report_addons(self, addons, network=None, ha_port=None, **extra):
 				sent.append((addons, network))
 				return True
 		listing = {"data": {"addons": [{"slug": "a", "name": "A", "state": "started"}]}}
@@ -1110,7 +1110,7 @@ class TestSeedRestore:
 			return 200, {"data": {"addons": [{"slug": "a", "name": "A", "state": "started"}]}}
 
 		class P:
-			def report_addons(self, addons, network=None, ha_port=None):
+			def report_addons(self, addons, network=None, ha_port=None, **extra):
 				sent.append(ha_port)
 				return True
 
@@ -1713,3 +1713,308 @@ class TestLeftOut:
 		cs.set_excludes([".storage", "../etc", ".HA_VERSION", "*.jpg"])
 		assert cs._chosen_excludes == ("*.jpg",)
 		assert cs.is_synced(".storage/core.config_entries")
+
+
+class FakeSupervisor:
+	"""A Supervisor with add-ons and an operating system that update."""
+
+	def __init__(self, addons, os_version=None, store=None, update_status=200, os_status=200,
+	             update_starts=True):
+		self.addons = addons          # slug -> {name, version, version_latest, state}
+		self.os_version = os_version  # None: not Home Assistant OS
+		self.store = store or {}      # slug -> version_latest after a refresh
+		self.update_status = update_status
+		self.os_status = os_status
+		self.update_starts = update_starts
+		self.calls = []
+
+	def __call__(self, method, path, body=None, timeout=60):
+		self.calls.append((method, path, body))
+		parts = path.strip("/").split("/")
+		if path == "/refresh_updates":
+			for slug, latest in self.store.items():
+				self.addons[slug]["version_latest"] = latest
+			return 200, {}
+		if path == "/os/info":
+			if self.os_version is None:
+				return 400, {"result": "error", "message": "not supported"}
+			return 200, {"data": {"version": self.os_version, "version_latest": "17.0"}}
+		if path == "/os/update":
+			return self.os_status, {}
+		if parts[0] == "addons" and parts[-1] == "info":
+			a = self.addons.get(parts[1])
+			return (200, {"data": dict(a)}) if a else (400, {"result": "error"})
+		if parts[0] == "store" and parts[-1] == "update":
+			if self.update_status != 200:
+				return self.update_status, {"result": "error", "message": "No space left"}
+			a = self.addons[parts[2]]
+			a["version"] = a["version_latest"]
+			if self.update_starts:
+				a["state"] = "started"
+			return 200, {}
+		if parts[0] == "addons" and parts[-1] == "stop":
+			self.addons[parts[1]]["state"] = "stopped"
+			return 200, {}
+		return 404, {}
+
+	def posted(self):
+		return [(c[1], c[2]) for c in self.calls if c[0] == "POST"]
+
+
+def addon(version, latest=None, state="stopped", name="Matter Server"):
+	return {"name": name, "version": version, "version_latest": latest or version, "state": state}
+
+
+class TestTheStandbyFollowsTheMainsUpdates:
+	"""GamlaBio, 3 Nov 2026: the house standby took over and showed a pile of
+	operating system and add-on updates, because a standby never took any
+	while it stood by. Vome now says which versions the main is on."""
+
+	def test_an_add_on_is_updated_to_the_mains_version(self, tmp_path):
+		sup = FakeSupervisor({"core_matter_server": addon("8.0.0", "8.1.0", state="started")})
+		state = {}
+		notes = cs.follow_updates({"addons": {"core_matter_server": "8.1.0"}, "os": None},
+		                          state, tmp_path / "s.json", T, sup)
+		assert notes == ["updated Matter Server from 8.0.0 to 8.1.0"]
+		assert ("/store/addons/core_matter_server/update", {"backup": False}) in sup.posted()
+		assert "update_problem" not in state
+		# It was running, so it is left running.
+		assert not any(p.endswith("/stop") for p, _ in sup.posted())
+
+	def test_it_waits_until_the_store_offers_exactly_the_mains_version(self, tmp_path):
+		"""The update button takes an add-on to whatever the store has: a
+		standby must never get ahead of the main."""
+		sup = FakeSupervisor({"core_matter_server": addon("8.0.0", "8.2.0")})
+		state = {}
+		notes = cs.follow_updates({"addons": {"core_matter_server": "8.1.0"}}, state, tmp_path / "s.json", T, sup)
+		assert notes == ["the store does not offer Matter Server 8.1.0 yet"]
+		assert state["update_problem"] == "the store does not offer Matter Server 8.1.0 yet"
+		assert not any("/store/addons" in p for p, _ in sup.posted())
+
+	def test_a_stale_store_is_refreshed_once_and_then_updated(self, tmp_path):
+		sup = FakeSupervisor({"a_one": addon("1.0", name="One"), "a_two": addon("2.0", name="Two")},
+		                     store={"a_one": "1.1", "a_two": "2.1"})
+		state = {}
+		notes = cs.follow_updates({"addons": {"a_one": "1.1", "a_two": "2.1"}}, state, tmp_path / "s.json", T, sup)
+		assert notes == ["updated One from 1.0 to 1.1", "updated Two from 2.0 to 2.1"]
+		assert [p for p, _ in sup.posted()].count("/refresh_updates") == 1
+
+	def test_the_store_is_refreshed_at_most_hourly(self, tmp_path):
+		sup = FakeSupervisor({"a_one": addon("1.0", name="One")})
+		state, path = {}, tmp_path / "s.json"
+		cs.follow_updates({"addons": {"a_one": "1.1"}}, state, path, T, sup)
+		cs.follow_updates({"addons": {"a_one": "1.1"}}, state, path, T + 600, sup)
+		assert [p for p, _ in sup.posted()].count("/refresh_updates") == 1
+		# keep_self_current's look counts too.
+		state = {"store_reloaded_at": T}
+		sup2 = FakeSupervisor({"a_one": addon("1.0", name="One")})
+		cs.follow_updates({"addons": {"a_one": "1.1"}}, state, path, T + 60, sup2)
+		assert ("/refresh_updates", None) not in sup2.posted()
+		cs.follow_updates({"addons": {"a_one": "1.1"}}, state, path, T + cs.STANDBY_REFRESH_SECONDS, sup2)
+		assert ("/refresh_updates", None) in sup2.posted()
+
+	def test_a_waiting_problem_is_said_once_not_every_pass(self, tmp_path):
+		sup = FakeSupervisor({"a_one": addon("1.0", name="One")})
+		state, path = {}, tmp_path / "s.json"
+		assert cs.follow_updates({"addons": {"a_one": "1.1"}}, state, path, T, sup)
+		assert cs.follow_updates({"addons": {"a_one": "1.1"}}, state, path, T + 300, sup) is None
+		assert state["update_problem"] == "the store does not offer One 1.1 yet"
+
+	def test_an_add_on_already_there_is_left_alone(self, tmp_path):
+		sup = FakeSupervisor({"core_matter_server": addon("8.1.0", "8.2.0")})
+		state = {"update_problem": "old trouble"}
+		assert cs.follow_updates({"addons": {"core_matter_server": "8.1.0"}}, state,
+		                         tmp_path / "s.json", T, sup) is None
+		assert sup.posted() == []
+		assert "update_problem" not in state
+
+	def test_one_already_past_the_main_is_never_taken_down(self, tmp_path):
+		sup = FakeSupervisor({"core_matter_server": addon("8.2.0")})
+		assert cs.follow_updates({"addons": {"core_matter_server": "8.1.0"}}, {},
+		                         tmp_path / "s.json", T, sup) is None
+		assert sup.posted() == []
+
+	def test_a_stopped_add_on_stays_stopped(self, tmp_path):
+		sup = FakeSupervisor({"core_matter_server": addon("8.0.0", "8.1.0", state="stopped")})
+		cs.follow_updates({"addons": {"core_matter_server": "8.1.0"}}, {}, tmp_path / "s.json", T, sup)
+		assert sup.posted()[-1] == ("/addons/core_matter_server/stop", None)
+		assert sup.addons["core_matter_server"]["state"] == "stopped"
+
+	def test_ours_are_not_touched(self, tmp_path):
+		sup = FakeSupervisor({"x_vome_chap": addon("0.2.1", "0.2.11"), "x_vome": addon("0.3.1", "0.3.75")})
+		assert cs.follow_updates({"addons": {"x_vome_chap": "0.2.11", "x_vome": "0.3.75"}}, {},
+		                         tmp_path / "s.json", T, sup) is None
+		assert sup.calls == []
+
+	def test_a_failed_update_is_reported_and_retried_hourly(self, tmp_path):
+		sup = FakeSupervisor({"core_matter_server": addon("8.0.0", "8.1.0")}, update_status=400)
+		state, path = {}, tmp_path / "s.json"
+		instruction = {"addons": {"core_matter_server": "8.1.0"}}
+		notes = cs.follow_updates(instruction, state, path, T, sup)
+		problem = "could not update Matter Server to 8.1.0 (HTTP 400: No space left)"
+		assert notes == [problem] and state["update_problem"] == problem
+		# Within the hour: not tried, still failing.
+		assert cs.follow_updates(instruction, state, path, T + 600, sup) is None
+		assert state["update_problem"] == problem
+		assert [p for p, _ in sup.posted()].count("/store/addons/core_matter_server/update") == 1
+		# Kept on disk, so a restart does not try again at once.
+		assert json.loads(path.read_text())["update_problem"] == problem
+		sup.update_status = 200
+		notes = cs.follow_updates(instruction, state, path, T + cs.STANDBY_UPDATE_RETRY_SECONDS, sup)
+		assert notes == ["updated Matter Server from 8.0.0 to 8.1.0"]
+		assert "update_problem" not in state
+
+	def test_a_pass_stops_starting_updates_when_its_time_is_up(self, tmp_path):
+		sup = FakeSupervisor({"a_one": addon("1.0", "1.1", name="One"), "a_two": addon("2.0", "2.1", name="Two")})
+		ticks = iter([0, 0, cs.STANDBY_UPDATE_PASS_SECONDS + 1])
+		notes = cs.follow_updates({"addons": {"a_one": "1.1", "a_two": "2.1"}, "os": "17.0"}, {},
+		                          tmp_path / "s.json", T, sup, clock=lambda: next(ticks))
+		assert notes == ["updated One from 1.0 to 1.1"]
+		# The operating system waits until the add-ons are done.
+		assert ("GET", "/os/info", None) not in sup.calls
+
+
+class TestTheStandbyFollowsTheMainsOperatingSystem:
+	def test_the_operating_system_goes_last_and_up(self, tmp_path):
+		sup = FakeSupervisor({"core_matter_server": addon("8.0.0", "8.1.0")}, os_version="16.2")
+		state, path = {}, tmp_path / "s.json"
+		notes = cs.follow_updates({"addons": {"core_matter_server": "8.1.0"}, "os": "17.0"}, state, path, T, sup)
+		assert notes[-1] == "updating the operating system from 16.2 to 17.0; restarting"
+		assert sup.posted()[-1] == ("/os/update", {"version": "17.0"})
+		assert [p for p, _ in sup.posted()].index("/os/update") > \
+			[p for p, _ in sup.posted()].index("/store/addons/core_matter_server/update")
+		# Saved before the call: the machine restarts during it.
+		assert json.loads(path.read_text())["os_update"]["version"] == "17.0"
+
+	def test_never_downwards_or_sideways(self, tmp_path):
+		for have in ("17.0", "17.1"):
+			sup = FakeSupervisor({}, os_version=have)
+			assert cs.follow_updates({"addons": {}, "os": "17.0"}, {}, tmp_path / "s.json", T, sup) is None
+			assert sup.posted() == []
+
+	def test_an_unanswered_update_is_the_restart_and_is_not_retried_for_six_hours(self, tmp_path):
+		sup = FakeSupervisor({}, os_version="16.2", os_status=0)
+		state, path = {}, tmp_path / "s.json"
+		assert cs.follow_updates({"os": "17.0"}, state, path, T, sup) == \
+			["updating the operating system from 16.2 to 17.0; restarting"]
+		assert "update_problem" not in state
+		assert cs.follow_updates({"os": "17.0"}, state, path, T + 3600, sup) is None
+		assert [p for p, _ in sup.posted()].count("/os/update") == 1
+		cs.follow_updates({"os": "17.0"}, state, path, T + cs.OS_UPDATE_RETRY_SECONDS, sup)
+		assert [p for p, _ in sup.posted()].count("/os/update") == 2
+
+	def test_a_refused_update_is_reported(self, tmp_path):
+		sup = FakeSupervisor({}, os_version="16.2", os_status=400)
+		state = {}
+		notes = cs.follow_updates({"os": "17.0"}, state, tmp_path / "s.json", T, sup)
+		assert notes[0].startswith("could not update the operating system to 17.0 (HTTP 400")
+		assert state["update_problem"] == notes[0]
+
+	def test_not_home_assistant_os_says_so(self, tmp_path):
+		sup = FakeSupervisor({}, os_version=None)
+		state = {}
+		cs.follow_updates({"os": "17.0"}, state, tmp_path / "s.json", T, sup)
+		assert "operating system" in state["update_problem"]
+		assert ("/os/update", {"version": "17.0"}) not in sup.posted()
+
+
+class TestOnlyTheStandbyFollows:
+	def _run(self, tmp_path, monkeypatch, role, core_stopped=True, state=None):
+		seen = []
+		monkeypatch.setattr(cs, "follow_updates", lambda instr, *a, **k: seen.append(instr) or ["updated X"])
+		monkeypatch.setattr(cs, "_supervisor_call", lambda *a, **k: (0, None))
+		data = tmp_path / "data"
+		data.mkdir()
+		if state:
+			(data / cs.STATE_FILE).write_text(json.dumps(state))
+		cfg = make_config(tmp_path / "cfg")
+		portal = FakePortal({"role": role, "latest": {"sha256": cs.build_snapshot(cfg)[1]["sha256"],
+		                                              "created_at": __import__("time").time()},
+		                     "standby_update": {"addons": {"core_matter_server": "8.1.0"}, "os": "17.0"}})
+		cs.run_once(portal, cfg, data, core_stopped=lambda: core_stopped, local_version=lambda: "2026.9.1")
+		return seen, json.loads((data / cs.STATE_FILE).read_text())
+
+	def test_the_standby_follows(self, tmp_path, monkeypatch):
+		seen, _ = self._run(tmp_path, monkeypatch, "standby")
+		assert seen == [{"addons": {"core_matter_server": "8.1.0"}, "os": "17.0"}]
+
+	def test_the_active_install_ignores_it_and_has_no_problem(self, tmp_path, monkeypatch):
+		seen, state = self._run(tmp_path, monkeypatch, "active", state={"update_problem": "old"})
+		assert seen == [] and "update_problem" not in state
+
+	def test_not_while_its_home_assistant_runs(self, tmp_path, monkeypatch):
+		seen, _ = self._run(tmp_path, monkeypatch, "standby", core_stopped=False)
+		assert seen == []
+
+
+class TestVersionsAreReported:
+	def _call(self, listing, os_ok=True):
+		def call(method, path, body=None, timeout=60):
+			if path == "/addons":
+				return 200, {"data": {"addons": listing}}
+			if path == "/os/info":
+				return (200, {"data": {"version": "16.2", "version_latest": "17.0"}}) if os_ok \
+					else (400, {"result": "error"})
+			if path == "/supervisor/info":
+				return 200, {"data": {"version": "2026.10.5", "version_latest": "2026.10.5"}}
+			if path == "/core/info":
+				return 200, {"data": {"version": "2026.11.0", "version_latest": "2026.11.1", "port": 8123}}
+			return 200, {"data": {"interfaces": []}}
+		return call
+
+	class P:
+		def __init__(self):
+			self.sent = []
+
+		def report_addons(self, addons, network=None, ha_port=None, system=None, update_problem=None):
+			self.sent.append({"addons": addons, "system": system, "update_problem": update_problem})
+			return True
+
+	def test_versions_and_the_system_go_to_vome(self, tmp_path):
+		listing = [{"slug": "core_matter_server", "name": "Matter Server", "state": "started",
+		            "version": "8.0.0", "version_latest": "8.1.0"},
+		           {"slug": "x_local", "name": "Local", "state": "stopped"}]
+		p = self.P()
+		cs.maybe_report_addons(p, {"update_problem": "the store does not offer X 1 yet"},
+		                       tmp_path / "s.json", 1000, self._call(listing))
+		sent = p.sent[0]
+		assert sent["addons"] == [
+			{"slug": "core_matter_server", "name": "Matter Server", "state": "started",
+			 "version": "8.0.0", "version_latest": "8.1.0"},
+			{"slug": "x_local", "name": "Local", "state": "stopped"}]
+		assert sent["system"] == {"os": {"version": "16.2", "version_latest": "17.0"},
+		                          "supervisor": {"version": "2026.10.5", "version_latest": "2026.10.5"},
+		                          "core": {"version": "2026.11.0", "version_latest": "2026.11.1"}}
+		assert sent["update_problem"] == "the store does not offer X 1 yet"
+
+	def test_no_os_when_it_is_not_home_assistant_os(self, tmp_path):
+		p = self.P()
+		cs.maybe_report_addons(p, {}, tmp_path / "s.json", 1000, self._call([], os_ok=False))
+		assert set(p.sent[0]["system"]) == {"supervisor", "core"}
+
+	def test_a_version_change_is_reported_on_the_next_pass(self, tmp_path):
+		listing = [{"slug": "a", "name": "A", "state": "stopped", "version": "1.0", "version_latest": "1.1"}]
+		p, state, path = self.P(), {}, tmp_path / "s.json"
+		assert cs.maybe_report_addons(p, state, path, 1000, self._call(listing))
+		assert cs.maybe_report_addons(p, state, path, 1300, self._call(listing)) is None
+		listing[0]["version"] = "1.1"
+		assert cs.maybe_report_addons(p, state, path, 1600, self._call(listing))
+		state["update_problem"] = "could not update A to 1.2"
+		assert cs.maybe_report_addons(p, state, path, 1900, self._call(listing))
+		assert len(p.sent) == 3
+
+	def test_the_portal_client_sends_the_new_keys(self):
+		captured = {}
+
+		def opener(req, timeout=None):
+			captured["body"] = json.loads(req.data.decode())
+			return FakeResponse(200, b"{}")
+
+		portal = cs.Portal({"portal_url": "https://vome.example", "server_id": "s", "token": "t"}, opener)
+		assert portal.report_addons([{"slug": "a"}], [], 8123, system={"core": {"version": "2026.11.0"}},
+		                            update_problem=None)
+		assert captured["body"] == {"addons": [{"slug": "a"}], "network": [], "update_problem": None,
+		                            "ha_port": 8123, "system": {"core": {"version": "2026.11.0"}}}
+		# Older callers still work.
+		assert portal.report_addons([], None)
+		assert captured["body"] == {"addons": [], "network": [], "update_problem": None}

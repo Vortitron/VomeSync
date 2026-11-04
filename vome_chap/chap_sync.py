@@ -1034,6 +1034,188 @@ def keep_self_current(state: dict, state_path: Path, now: float, call=None) -> O
 	return f"updated Vome CHAP from {have} to {latest}"
 
 
+# ── A standby's add-ons and operating system, at the main's versions ─────
+#
+# GamlaBio, 3 Nov 2026: the house standby took over and greeted its owner
+# with a pile of operating system and add-on updates. A standby never takes
+# those while it stands by -- its Home Assistant is stopped and nobody opens
+# it -- so it was months behind the install it stood in for, running old
+# add-ons against the main's newer data. Each install now reports its
+# versions (maybe_report_addons), and Vome tells the standby which updates
+# the main has taken. Only to the main's exact version, never past it: a
+# standby ahead of the main is as wrong as one behind.
+
+STANDBY_UPDATE_RETRY_SECONDS = 3600
+STANDBY_REFRESH_SECONDS = 3600
+OS_UPDATE_RETRY_SECONDS = 6 * 3600
+# How long one pass may spend starting add-on updates. Each can take minutes,
+# and a standby busy updating cannot hear a takeover; the rest wait for the
+# next pass (the GamlaBio fallback once missed "stop" for a quarter of an
+# hour starting add-ons, 25 Sept 2026: see ADDON_PASS_SECONDS).
+STANDBY_UPDATE_PASS_SECONDS = 10 * 60
+_SLUG_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
+
+
+def _addon_info(call, slug: str) -> Optional[dict]:
+	status, body = call("GET", f"/addons/{slug}/info", None, timeout=60)
+	data = (body or {}).get("data") if isinstance(body, dict) else None
+	return data if status == 200 and isinstance(data, dict) else None
+
+
+def follow_updates(instruction, state: dict, state_path: Path, now: float,
+                   call=None, clock: Callable[[], float] = time.monotonic) -> Optional[list]:
+	"""Update this standby's add-ons and operating system to the versions
+	Vome says the main is on: ``{"addons": {slug: version}, "os": version}``.
+
+	Only for the standby (run_once sees to that). An add-on is updated only
+	when the store offers exactly the main's version; an add-on that was
+	stopped stays stopped. The operating system goes last, because it
+	restarts the machine, and only upwards. Each target is tried at most
+	hourly (the operating system six-hourly), so a failing update is not
+	retried every pass. Returns what happened, or None.
+
+	Whatever is failing is kept in ``state["update_problem"]`` for Vome
+	(maybe_report_addons), and cleared by a pass with nothing failing.
+	"""
+	if not isinstance(instruction, dict):
+		return None
+	call = call or _supervisor_call
+	notes, problems = [], []
+	tried = state.get("standby_updates") if isinstance(state.get("standby_updates"), dict) else {}
+	refreshed_now = False
+	deadline = clock() + STANDBY_UPDATE_PASS_SECONDS
+	deferred = False
+
+	def refresh() -> bool:
+		"""Have the Supervisor look at the store again: once a pass, at most
+		hourly, and keep_self_current's six-hourly look counts."""
+		nonlocal refreshed_now
+		last = max(float(state.get("store_reloaded_at") or 0), float(state.get("updates_refreshed_at") or 0))
+		if refreshed_now or now - last < STANDBY_REFRESH_SECONDS:
+			return False
+		refreshed_now = True
+		state["updates_refreshed_at"] = now
+		save_json(state_path, state)
+		status, _ = call("POST", "/refresh_updates", None, timeout=300)
+		return status == 200
+
+	addons = instruction.get("addons") if isinstance(instruction.get("addons"), dict) else {}
+	for slug, target in sorted(addons.items()):
+		if not isinstance(slug, str) or not _SLUG_RE.match(slug) or not isinstance(target, str):
+			continue
+		target = target.strip()
+		# Ours are kept current by keep_self_current and the owner, not here.
+		if not target or slug.endswith(("_vome", "_vome_chap")):
+			continue
+		info = _addon_info(call, slug)
+		if info is None:
+			problems.append(f"could not ask the Supervisor about {slug}")
+			continue
+		name = str(info.get("name") or slug)
+		have = str(info.get("version") or "")
+		if have == target:
+			tried.pop(slug, None)
+			continue
+		h, w = parse_version(have), parse_version(target)
+		if h and w and h > w:
+			continue  # already past the main: never taken back down
+		last = tried.get(slug) if isinstance(tried.get(slug), dict) else {}
+		if last.get("version") == target and now - float(last.get("at") or 0) < STANDBY_UPDATE_RETRY_SECONDS:
+			if last.get("problem"):
+				problems.append(last["problem"])
+			continue
+		latest = str(info.get("version_latest") or "")
+		if latest != target and refresh():
+			info = _addon_info(call, slug) or info
+			latest = str(info.get("version_latest") or "")
+		if latest != target:
+			# The update button would take it to whatever the store has, so
+			# not until the store has the main's version.
+			problems.append(f"the store does not offer {name} {target} yet")
+			continue
+		if clock() > deadline:
+			deferred = True  # the next pass carries on from here
+			continue
+		before = info.get("state")
+		tried[slug] = {"version": target, "at": now}
+		state["standby_updates"] = tried
+		save_json(state_path, state)
+		LOG.info("Updating %s from %s to %s, the version the main install runs", name, have, target)
+		status, body = call("POST", f"/store/addons/{slug}/update", {"backup": False}, timeout=1800)
+		if status != 200:
+			said = supervisor_says(body)
+			problem = f"could not update {name} to {target} (HTTP {status}" + (f": {said}" if said else "") + ")"
+			tried[slug]["problem"] = problem
+			save_json(state_path, state)
+			problems.append(problem)
+			notes.append(problem)
+			continue
+		note = f"updated {name} from {have} to {target}"
+		# An update restarts an add-on; one stopped on this standby (it is
+		# the main's to run) stays stopped.
+		after = _addon_info(call, slug) or {}
+		if before != "started" and after.get("state") == "started":
+			status, _ = call("POST", f"/addons/{slug}/stop", None, timeout=ADDON_ASK_SECONDS)
+			if status != 200:
+				problem = f"updated {name} to {target}, but could not stop it again"
+				tried[slug]["problem"] = problem
+				save_json(state_path, state)
+				problems.append(problem)
+				note = problem
+		notes.append(note)
+	for slug in [s for s in tried if s not in addons]:
+		tried.pop(slug)  # no longer asked for
+
+	os_target = instruction.get("os")
+	if isinstance(os_target, str) and os_target.strip() and not deferred:
+		os_target = os_target.strip()
+		status, body = call("GET", "/os/info", None, timeout=30)
+		data = (body or {}).get("data") if isinstance(body, dict) else None
+		if status != 200 or not isinstance(data, dict):
+			problems.append("could not ask the Supervisor which operating system version this is")
+		else:
+			have = str(data.get("version") or "")
+			want, h = parse_version(os_target), parse_version(have)
+			last = state.get("os_update") if isinstance(state.get("os_update"), dict) else {}
+			if have == os_target or not want or not h or want <= h:
+				state.pop("os_update", None)  # there, or never downwards
+			elif last.get("version") == os_target and \
+					now - float(last.get("at") or 0) < OS_UPDATE_RETRY_SECONDS:
+				if last.get("problem"):
+					problems.append(last["problem"])
+			else:
+				# Saved before asking: when it works, the machine restarts
+				# while this call is still waiting.
+				state["os_update"] = {"version": os_target, "at": now}
+				save_json(state_path, state)
+				note = f"updating the operating system from {have} to {os_target}; restarting"
+				LOG.info("%s", note)
+				status, body = call("POST", "/os/update", {"version": os_target}, timeout=1800)
+				# 0: no answer, which is what a machine restarting gives.
+				if status in (200, 0):
+					notes.append(note)
+				else:
+					said = supervisor_says(body)
+					problem = (f"could not update the operating system to {os_target} (HTTP {status}"
+					           + (f": {said}" if said else "") + "); trying again in 6 hours")
+					state["os_update"]["problem"] = problem
+					problems.append(problem)
+					notes.append(problem)
+
+	state["standby_updates"] = tried
+	problem = "; ".join(problems) or None
+	if problem != state.get("update_problem"):
+		# A waiting problem (the store has not caught up yet) is said once,
+		# not every pass.
+		notes.extend(p for p in problems if p not in notes)
+	if problem:
+		state["update_problem"] = problem
+	else:
+		state.pop("update_problem", None)
+	save_json(state_path, state)
+	return notes or None
+
+
 def core_version(opener=urllib.request.urlopen) -> str:
 	status, body = _supervisor_get("/core/info", opener)
 	if status == 200 and isinstance(body, dict):
@@ -1114,14 +1296,44 @@ ADDON_REPORT_SECONDS = 3600
 
 
 def addon_list(call=_supervisor_call) -> Optional[list]:
-	"""This install's add-ons as ``[{slug, name, state}]``; None if unknown."""
+	"""This install's add-ons as ``[{slug, name, state, version,
+	version_latest}]`` (the versions when the Supervisor gives them); None
+	if unknown. The versions let Vome tell a standby which updates the main
+	has taken (follow_updates)."""
 	_, listed = call("GET", "/addons", None, timeout=60)
 	found = ((listed or {}).get("data") or {}).get("addons") if isinstance(listed, dict) else None
 	if found is None:
 		return None
-	return sorted(({"slug": a["slug"], "name": a.get("name") or a["slug"], "state": a.get("state") or ""}
-	               for a in found if isinstance(a, dict) and a.get("slug")),
-	              key=lambda a: a["slug"])
+	out = []
+	for a in found:
+		if not isinstance(a, dict) or not a.get("slug"):
+			continue
+		entry = {"slug": a["slug"], "name": a.get("name") or a["slug"], "state": a.get("state") or ""}
+		for key in ("version", "version_latest"):
+			if a.get(key):
+				entry[key] = str(a[key])
+		out.append(entry)
+	return sorted(out, key=lambda a: a["slug"])
+
+
+def system_versions(call=None) -> dict:
+	"""The versions of this install's operating system, Supervisor and Home
+	Assistant, as ``{os|supervisor|core: {version, version_latest}}``.
+
+	Any the Supervisor cannot say are left out: on an install that is not
+	Home Assistant OS, ``/os/info`` fails, so there is no ``os``.
+	"""
+	call = call or _supervisor_call
+	out = {}
+	for key, path in (("os", "/os/info"), ("supervisor", "/supervisor/info"), ("core", "/core/info")):
+		status, body = call("GET", path, None, timeout=30)
+		data = (body or {}).get("data") if isinstance(body, dict) else None
+		if status != 200 or not isinstance(data, dict):
+			continue
+		entry = {k: str(data[k]) for k in ("version", "version_latest") if data.get(k)}
+		if entry:
+			out[key] = entry
+	return out
 
 
 def network_addresses(call=_supervisor_call) -> list:
@@ -1157,18 +1369,25 @@ def core_port(call=_supervisor_call) -> Optional[int]:
 def maybe_report_addons(portal: "Portal", state: dict, state_path: Path, now: float,
                         call=_supervisor_call, asked: bool = False) -> Optional[str]:
 	"""Tell Vome which add-ons this install has, so the owner can choose
-	which the standby runs, and its addresses. When something changed, when
-	Vome asks (``asked``: its copy is missing or stale), or hourly."""
+	which the standby runs, its addresses, and the versions of its add-ons,
+	operating system, Supervisor and Home Assistant (so Vome can tell a
+	standby what to update, and why it could not). When something changed,
+	when Vome asks (``asked``: its copy is missing or stale), or hourly."""
 	listed = addon_list(call)
 	if listed is None:
 		return None
 	network = network_addresses(call)
 	port = core_port(call)
-	digest = hashlib.sha256(json.dumps([listed, network, port], sort_keys=True).encode()).hexdigest()
+	system = system_versions(call)
+	# Versions and the standby's update problem count as a change: Vome
+	# hears of an update taken (or failed) on the next pass, not an hour on.
+	problem = state.get("update_problem") or None
+	digest = hashlib.sha256(json.dumps([listed, network, port, system, problem],
+	                                   sort_keys=True).encode()).hexdigest()
 	if not asked and state.get("addons_reported") == digest and \
 			now - float(state.get("addons_reported_at") or 0) < ADDON_REPORT_SECONDS:
 		return None
-	if not portal.report_addons(listed, network, port):
+	if not portal.report_addons(listed, network, port, system=system, update_problem=problem):
 		return None  # tried again next pass
 	state.update({"addons_reported": digest, "addons_reported_at": now})
 	save_json(state_path, state)
@@ -1536,10 +1755,15 @@ class Portal:
 			LOG.info("Portal not reachable for role: %s", exc)
 			return None
 
-	def report_addons(self, addons: list, network: Optional[list] = None, ha_port: Optional[int] = None) -> bool:
-		report = {"addons": addons, "network": network or []}
+	def report_addons(self, addons: list, network: Optional[list] = None, ha_port: Optional[int] = None,
+	                  system: Optional[dict] = None, update_problem: Optional[str] = None) -> bool:
+		report = {"addons": addons, "network": network or [],
+		          # Always sent, so a problem that has cleared clears on Vome too.
+		          "update_problem": update_problem or None}
 		if ha_port:
 			report["ha_port"] = ha_port
+		if system:
+			report["system"] = system
 		body = json.dumps(report).encode()
 		try:
 			with self._request("POST", API_ADDONS, body=body, timeout=30,
@@ -1794,6 +2018,16 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	forward_note = ensure_forward_ui(info, state, state_path)
 	if forward_note:
 		LOG.info("%s", forward_note)
+	# Only a standby with its Home Assistant stopped: never the install
+	# running the home, which is its owner's to update (and an operating
+	# system update restarts the machine). Before the report, so Vome hears
+	# the new versions this pass.
+	standby_update = info.get("standby_update")
+	if role == ROLE_STANDBY and isinstance(standby_update, dict) and core_stopped():
+		for note in follow_updates(standby_update, state, state_path, now) or []:
+			LOG.info("%s", note)
+	elif state.pop("update_problem", None) is not None:
+		save_json(state_path, state)  # nothing asked of this install, so nothing failing
 	report_note = maybe_report_addons(portal, state, state_path, now, asked=bool(info.get("report_addons")))
 	if report_note:
 		LOG.info("%s", report_note)
