@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.79 — 4 November 2026
+
+**Vome can look at your camera pictures and hear your voice commands** (early
+access). Turn on "AI for cameras and voice" in the Vome integration's
+Configure menu and two things appear:
+
+- an AI task, `ai_task.vome_ai`, for automations such as "when the doorbell
+  rings, is it a person or a parcel?" It answers in words, or as data when
+  the task gives a structure (`animal_seen`, `count`, ...).
+- **Vome hearing**, a speech-to-text engine for your voice assistant. The
+  names of your rooms and devices go along as hints.
+
+Both are paid from the home's **Brainpower** at Vome, with a few kronor free
+each month. A picture costs well under one öre, a command less than one.
+Pictures are shrunk to 1024 pixels in your own Home Assistant before they go
+anywhere; they go to Anthropic and audio to Deepgram, and Vome keeps no copy.
+
+Vome can also carry a short recording into this Home Assistant's
+speech-to-text, so a voice assistant's hearing can be tested from anywhere.
+Only speech-to-text accepts audio this way.
+
 ## 0.3.74 — 25 October 2026
 
 **Every YAML change the app makes is in your logbook.** When the Vome app

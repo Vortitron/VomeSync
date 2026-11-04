@@ -3050,3 +3050,54 @@ class TestNoCredentialMintingOverWebSocket:
 		assert status == 0 and body is None
 		assert "credential" in err
 		session.ws_connect.assert_not_called()
+
+
+class TestAudioIntoTheHome:
+	"""Speech-to-text takes raw audio and one header; the relay carries JSON
+	and its backend forwards only the fields it knows, so the audio arrives
+	wrapped in the body, and only for POST /api/stt/."""
+
+	@staticmethod
+	def _wrapped(**overrides):
+		import base64 as b64
+		wrapped = {"base64": b64.b64encode(b"\0\1" * 100).decode(), "content_type": "audio/wav",
+		           "headers": {"X-Speech-Content": "format=wav; codec=pcm; sample_rate=16000; "
+		                                           "bit_rate=16; channel=1; language=sv"}}
+		wrapped.update(overrides)
+		return {"$binary": wrapped}
+
+	@pytest.mark.asyncio
+	async def test_audio_is_sent_as_bytes_with_the_speech_header(self):
+		session, _ = _mock_session_with_response(status=200, text='{"text": "hej", "result": "success"}')
+		client = _client(session, local_token="llt", local_url="http://127.0.0.1:8123")
+		status, body, error = await client.execute("POST", "/api/stt/stt.vome_hearing", self._wrapped())
+		assert status == 200 and error is None
+		kwargs = session.request.call_args.kwargs
+		assert kwargs["data"] == b"\0\1" * 100 and "json" not in kwargs
+		assert kwargs["headers"]["Content-Type"] == "audio/wav"
+		assert kwargs["headers"]["X-Speech-Content"].startswith("format=wav")
+		assert kwargs["headers"]["Authorization"] == "Bearer llt"
+
+	@pytest.mark.parametrize("method,path,body,why", [
+		("POST", "/api/services/light/turn_on", None, "except to POST /api/stt/"),
+		("GET", "/api/stt/stt.vome_hearing", None, "except to POST /api/stt/"),
+		("POST", "/api/stt/stt.x", {"headers": {"Authorization": "Bearer other"}}, "header"),
+		("POST", "/api/stt/stt.x", {"headers": {"X-Speech-Content": "a\r\nX-Evil: 1"}}, "header"),
+		("POST", "/api/stt/stt.x", {"content_type": "text/html"}, "type"),
+		("POST", "/api/stt/stt.x", {"base64": "!!!"}, "base64"),
+	])
+	@pytest.mark.asyncio
+	async def test_nothing_else_may_send_bytes_or_headers(self, method, path, body, why):
+		session, _ = _mock_session_with_response(status=200, text="{}")
+		client = _client(session, local_token="llt", local_url="http://127.0.0.1:8123")
+		status, _, error = await client.execute(method, path, self._wrapped(**(body or {})))
+		assert status == 0 and why in error
+		session.request.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_an_ordinary_json_body_is_untouched(self):
+		session, _ = _mock_session_with_response(status=200, text="[]")
+		client = _client(session, local_token="llt", local_url="http://127.0.0.1:8123")
+		await client.execute("POST", "/api/services/light/turn_on", {"entity_id": "light.hall"})
+		kwargs = session.request.call_args.kwargs
+		assert kwargs["json"] == {"entity_id": "light.hall"} and "data" not in kwargs
