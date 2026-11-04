@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.11 — 4 November 2026
+
+**A standby keeps up with your main install's updates.** A standby never took
+add-on or operating system updates while it stood by, because its Home
+Assistant is stopped and nobody opens it. So when it took over, it came up
+months behind, with a pile of updates waiting. This app now tells Vome which
+versions this install runs, and a standby takes the updates your main install
+has taken, when Vome asks: each add-on only to the exact version the main
+runs, never past it, and an add-on that was stopped stays stopped. The
+operating system goes last, since it restarts the machine. When an update
+cannot be done (the app store does not offer that version yet, say), Vome
+hears why and shows it on the CHAP page.
+
 ## 0.2.10 — 31 October 2026
 
 **Vome hears when a disk is filling up.** Each version of Home Assistant a
