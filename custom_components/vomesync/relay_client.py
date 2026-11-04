@@ -649,6 +649,44 @@ def _ws_reply_timeout(command: dict) -> float:
 	return min(max(RELAY_RPC_TIMEOUT, asked + 5), RELAY_WS_MAX_REPLY_TIMEOUT)
 
 
+
+# A relayed call's body is JSON, and the relay backend forwards only the
+# fields it knows. Speech-to-text needs raw audio and one header, so its body
+# arrives wrapped: {"$binary": {"base64", "content_type", "headers"}}, and
+# only for POST /api/stt/<engine>. Nothing else may send bytes or headers.
+BINARY_BODY_KEY = "$binary"
+_BINARY_PATH_PREFIXES = ("/api/stt/",)
+_BINARY_HEADERS = frozenset({"X-Speech-Content"})
+_BINARY_TYPES = ("audio/", "application/octet-stream")
+BINARY_BODY_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _binary_body(method: str, portion: str, body: Any):
+	"""``(bytes, headers)`` for a wrapped binary body, ``None`` for an ordinary
+	one, or a string saying why it is refused."""
+	if not (isinstance(body, dict) and BINARY_BODY_KEY in body):
+		return None
+	if method != "POST" or not portion.startswith(_BINARY_PATH_PREFIXES):
+		return "Refusing a binary body except to POST /api/stt/."
+	wrapped = body.get(BINARY_BODY_KEY)
+	if len(body) != 1 or not isinstance(wrapped, dict):
+		return "A binary body must be the only thing in the request."
+	content_type = str(wrapped.get("content_type") or "application/octet-stream")
+	if not content_type.startswith(_BINARY_TYPES):
+		return f"Refusing a binary body of type {content_type}."
+	headers = {"Content-Type": content_type}
+	for name, value in (wrapped.get("headers") or {}).items():
+		if name not in _BINARY_HEADERS or not isinstance(value, str) or "\n" in value or "\r" in value:
+			return f"Refusing the header {name!r} on a binary body."
+		headers[name] = value
+	try:
+		data = base64.b64decode(str(wrapped.get("base64") or ""), validate=True)
+	except (ValueError, TypeError):
+		return "The binary body is not valid base64."
+	if not data or len(data) > BINARY_BODY_MAX_BYTES:
+		return f"A binary body must be between 1 byte and {BINARY_BODY_MAX_BYTES} bytes."
+	return data, headers
+
 class RelayClient:
 	"""A single outbound relay connection for one Vome-linked HA instance."""
 
@@ -2194,14 +2232,22 @@ class RelayClient:
 			)
 		url = base + path
 		headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+		send: dict[str, Any] = {"json": body if body is not None else None}
+		binary = _binary_body(method, portion, body)
+		if isinstance(binary, str):
+			return 0, None, binary
+		if binary is not None:
+			data, extra = binary
+			headers.update(extra)
+			send = {"data": data}
 		session = self._get_session()
 		try:
 			async with session.request(
 				method,
 				url,
 				headers=headers,
-				json=body if body is not None else None,
 				timeout=aiohttp.ClientTimeout(total=_core_call_timeout(timeout)),
+				**send,
 			) as resp:
 				if expect == "base64":
 					raw = await resp.read()

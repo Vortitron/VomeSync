@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.78 — 4 November 2026
+
+**A voice assistant's hearing can be tested from anywhere.** Vome can now
+carry a short recording into this Home Assistant's speech-to-text, so a
+coding agent can check that "Tänd i köket" is heard right without anyone
+standing at the microphone. Only speech-to-text accepts audio this way.
+
 ## 0.3.77 — 4 November 2026
 
 **Vome AI answers in a structure again on every Home Assistant.** An AI task
