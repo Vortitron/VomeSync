@@ -2227,7 +2227,9 @@ const cu = document.getElementById("copy-url");
 				<h2>Prefer Home Assistant's own Assist?</h2>
 				<p class="muted">The same tools are offered to any assistant you set up in Home Assistant:
 				Settings → Voice assistants → your assistant → <strong>Control Home Assistant</strong> → tick <strong>Vome</strong>.
-				That works from the phone app and by voice too.</p>
+				That works from the phone app and by voice too. Only an administrator can tick it,
+				and Home Assistant shares it nowhere else until they do: an AI app that connects to
+				Home Assistant's own MCP server gets Vome's tools once Vome is ticked in that integration's settings.</p>
 			</div>`;
 		const save = document.getElementById("chat-key-save");
 		const input = document.getElementById("chat-key");

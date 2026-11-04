@@ -112,9 +112,14 @@ class VomeBackupAgent(BackupAgent):
 	async def async_upload_backup(
 		self, *, open_stream, backup: AgentBackup, **kwargs: Any
 	) -> None:
+		# Home Assistant 2026.3+ passes ``on_progress`` so its progress bar
+		# fills while the archive goes up; older Cores pass nothing.
+		on_progress = kwargs.get("on_progress")
+		report = (lambda sent: on_progress(bytes_uploaded=sent)) if on_progress else None
 		try:
 			await self._client.async_upload(
-				backup.backup_id, backup.as_dict(), await open_stream()
+				backup.backup_id, backup.as_dict(), await open_stream(),
+				on_progress=report,
 			)
 		except VomeBackupError as err:
 			raise BackupAgentError(str(err)) from err

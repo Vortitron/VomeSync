@@ -141,6 +141,29 @@ class TestUpload:
 		assert body[4 + length:] == b"aabbcc"
 
 	@pytest.mark.asyncio
+	async def test_progress_is_reported_about_every_megabyte_and_at_the_end(self, monkeypatch):
+		"""Home Assistant 2026.3+ fills its progress bar from these (4 Nov 2026)."""
+		from custom_components.vomesync import backup_client
+		monkeypatch.setattr(backup_client, "PROGRESS_STEP", 4)
+
+		async def _chunks():
+			for part in (b"aaa", b"bbb", b"cc"):
+				yield part
+
+		seen = []
+		session = _session_with(_response(payload={"backup": {}}))
+		await _client(session).async_upload("a", {"x": 1}, _chunks(), on_progress=seen.append)
+		await self._sent_body(session)
+		# archive bytes only, never the metadata frame; the last one is the total
+		assert seen == [6, 8]
+
+	@pytest.mark.asyncio
+	async def test_no_progress_callback_is_fine(self):
+		session = _session_with(_response(payload={"backup": {}}))
+		await _client(session).async_upload("a", {}, b"tar")
+		assert (await self._sent_body(session)).endswith(b"tar")
+
+	@pytest.mark.asyncio
 	async def test_upload_timeout_allows_a_large_archive(self):
 		"""A default 5-minute client timeout would abort real backups."""
 		session = _session_with(_response(payload={"backup": {}}))

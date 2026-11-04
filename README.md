@@ -63,7 +63,11 @@ Cursor and VS Code.
 To chat without the app, use Home Assistant's own Assist: set up an
 assistant (the OpenRouter integration takes your key), then under
 **Settings → Voice assistants → your assistant → Control Home Assistant**
-tick **Vome**. What it may do is on **Configure → AI chat**.
+tick **Vome**. What it may do is on **Configure → AI chat**. Since Home
+Assistant 2026.11 only an administrator can tick it, and Home Assistant
+shares it nowhere else until they do: for an AI app that connects to Home
+Assistant's own MCP server, tick **Vome** in the *Model Context Protocol
+Server* integration's settings too.
 
 ---
 

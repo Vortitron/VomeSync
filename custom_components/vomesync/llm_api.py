@@ -10,9 +10,11 @@ Home Assistant only grew LLM APIs in 2024.6, and this integration still
 loads on 2024.1, so the import is tried and a Core without it simply has
 no Vome entry in that list.
 
-From 2026.10 Home Assistant's own MCP server offers every registered LLM
-API to AI apps by default, so these tools are also read by programs that
-take a tool's self-description at its word.  A tool that declares nothing
+Home Assistant's own MCP server can offer these tools to AI apps too, which
+take a tool's self-description at its word.  In 2026.10 it offered every
+registered LLM API by default; from 2026.11 an LLM API is offered nowhere —
+no assistant, no MCP server — until an administrator ticks it there, and the
+MCP server can be limited to read-only tools.  A tool that declares nothing
 is taken to write, destroy and reach outside the house, so each one says
 what it does (:func:`tool_annotations`).  ``ToolResult``, ``ToolAnnotations``
 and ``Tool.integration`` arrived in that release; an older Core gets the

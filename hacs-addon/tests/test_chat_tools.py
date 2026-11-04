@@ -71,6 +71,7 @@ def test_anyone_not_an_administrator_only_reads(user_id):
 	("homeassistant", "restart", []),
 	("homeassistant", "turn_on", ["lock.front_door"]),
 	("shell_command", "anything", []),
+	("debugpy", "start", []),  # a remote Python debugger: arbitrary code (HA 2026.11 review)
 	("vomesync", "agent_key_issue", []),
 ])
 def test_physical_security_and_system_actions_are_refused(domain, service, targets):

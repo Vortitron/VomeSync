@@ -64,7 +64,7 @@ DEFAULT_SCOPES = ALL_SCOPES
 DENY_DOMAINS = frozenset({
 	"lock", "alarm_control_panel", "cover", "valve", "camera",
 	"hassio", "shell_command", "python_script", "pyscript", "rest_command",
-	"command_line", DOMAIN,
+	"command_line", "debugpy", DOMAIN,
 })
 DENY_SERVICES = frozenset({
 	("homeassistant", "stop"), ("homeassistant", "restart"),

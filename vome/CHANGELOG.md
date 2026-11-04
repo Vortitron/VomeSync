@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.79 — 4 November 2026
+
+**Vome backups show their progress.** Home Assistant's backup page now fills
+its progress bar while a backup goes up to Vome, as it already did for
+Dropbox, SFTP and the others. Before, it sat empty until the upload ended.
+
+**Home Assistant 2026.11: tick Vome where you want it.** From 2026.11, Home
+Assistant shares an assistant's tools nowhere until an administrator ticks
+them. For Assist, that is **Control Home Assistant** on your voice assistant,
+as before. For an AI app connected to Home Assistant's own MCP server, tick
+**Vome** in the *Model Context Protocol Server* integration's settings too.
+The Vome panel's Chat page now says so.
+
+**The chat cannot start Home Assistant's remote Python debugger.**
+`debugpy.start` runs arbitrary code, so it joins the actions the chat
+always refuses.
+
+Bundles the Vome integration 0.9.64.
+
 ## 0.3.78 — 4 November 2026
 
 **A voice assistant's hearing can be tested from anywhere.** Vome can now
