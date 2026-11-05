@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.79 — 4 November 2026
+## 0.3.80 — 5 November 2026
 
 **Vome backups show their progress.** Home Assistant's backup page now fills
 its progress bar while a backup goes up to Vome, as it already did for
@@ -17,7 +17,7 @@ The Vome panel's Chat page now says so.
 `debugpy.start` runs arbitrary code, so it joins the actions the chat
 always refuses.
 
-Bundles the Vome integration 0.9.64.
+Bundles the Vome integration 0.9.65.
 
 ## 0.3.78 — 4 November 2026
 
