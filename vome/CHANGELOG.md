@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.81 — 6 November 2026
+
+**Vome CHAP is kept up to date on a standby.** If you use Vome CHAP, this app
+now updates it on the install whose Home Assistant is stopped, which nothing
+else could do: an app may not update itself, and Home Assistant's automatic
+updates need Home Assistant running. It does so only while Home Assistant is
+stopped and only if automatic updates are on for Vome CHAP. For this, the
+app now asks for the Supervisor's *manager* role; it uses it for nothing
+else. If you don't use Vome CHAP, it does nothing.
+
 ## 0.3.80 — 5 November 2026
 
 **Vome backups show their progress.** Home Assistant's backup page now fills

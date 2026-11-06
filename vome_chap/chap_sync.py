@@ -1071,16 +1071,20 @@ SUPERVISOR_SETTLE_SECONDS = 600
 
 
 def keep_self_current(state: dict, state_path: Path, now: float, call=None) -> Optional[str]:
-	"""Look for updates every few hours; take a newer Supervisor, then a
-	newer Vome CHAP.
+	"""Look for updates every few hours, and take a newer Supervisor.
 
 	GamlaBio.local, 5 and 29 Oct 2026: automatic updates were on, but its
 	Supervisor never refreshed its version list or its copy of the app
 	store by itself, so it never learnt a newer anything existed; the owner
 	had to update by hand on the house box. Nobody opens a standby, so it
-	does it itself (the Supervisor restarts on its new version, and this app
-	on its; a pass is never half done here, as this runs before the pass
-	does anything).
+	does it itself (the Supervisor restarts on its new version; a pass is
+	never half done here, as this runs before the pass does anything).
+
+	It no longer updates this app: no app may update itself (the Supervisor
+	answers 403, "can't update itself!"), so from 0.2.7 to 0.2.13 every try
+	failed, and GamlaBio.local sat on 0.2.8 (6 Nov 2026). The Vome app does
+	it from 0.3.81 (vome/panel/chap_updater.py); the refreshed store is what
+	tells it a newer one is out.
 	"""
 	if now - float(state.get("store_reloaded_at") or 0) < STORE_RELOAD_SECONDS:
 		return None
@@ -1099,26 +1103,15 @@ def keep_self_current(state: dict, state_path: Path, now: float, call=None) -> O
 		have, latest = sup.get("version"), sup.get("version_latest")
 		LOG.info("Supervisor %s is out (this is %s); updating", latest, have)
 		status, body = call("POST", "/supervisor/update", {}, timeout=900)
-		# It restarts; this app's own update is looked at again in a few
-		# minutes, not in six hours.
+		# It restarts; look again in a few minutes, not in six hours, so the
+		# store is refreshed by the new one.
 		state["store_reloaded_at"] = now - STORE_RELOAD_SECONDS + SUPERVISOR_SETTLE_SECONDS
 		save_json(state_path, state)
 		if status == 200:
 			return f"updated the Supervisor from {have} to {latest}"
 		said = supervisor_says(body)
 		return f"could not update the Supervisor to {latest} (HTTP {status}" + (f": {said}" if said else "") + ")"
-	status, body = call("GET", "/addons/self/info", None, timeout=30)
-	data = (body or {}).get("data") if isinstance(body, dict) else None
-	if status != 200 or not isinstance(data, dict) or not data.get("update_available"):
-		return None
-	slug, have, latest = data.get("slug"), data.get("version"), data.get("version_latest")
-	if not slug or not latest:
-		return None
-	LOG.info("Vome CHAP %s is out (this is %s); updating", latest, have)
-	status, _ = call("POST", f"/store/addons/{slug}/update", {"backup": False}, timeout=1800)
-	if status != 200:
-		return f"could not update Vome CHAP to {latest} (the Supervisor answered {status}); trying again in 6 hours"
-	return f"updated Vome CHAP from {have} to {latest}"
+	return None
 
 
 # ── A standby's add-ons and operating system, at the main's versions ─────
@@ -1211,8 +1204,10 @@ def follow_updates(instruction, state: dict, state_path: Path, now: float,
 		if not isinstance(slug, str) or not _SLUG_RE.match(slug) or not isinstance(target, str):
 			continue
 		target = target.strip()
-		# Ours are kept current by keep_self_current and the owner, not here.
-		if not target or slug.endswith(("_vome", "_vome_chap")):
+		# Not this app itself: the Supervisor refuses that, and the Vome app
+		# does it. The Vome app is updated here like any other (6 Nov 2026:
+		# nothing else updates an app while Home Assistant is stopped).
+		if not target or slug.endswith("_vome_chap"):
 			continue
 		info = _addon_info(call, slug)
 		if info is None:

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.14 — 6 November 2026
+
+**A standby's apps are kept up to date by each other.** We found that a
+standby never updated this app after all. Home Assistant's Supervisor does
+not let an app update itself, so every try since 0.2.7 was refused, and its
+automatic updates are carried out by Home Assistant, which a standby keeps
+stopped. GamlaBio.local was still on 0.2.8 a week after 0.2.13. Now the Vome
+app (0.3.81 and later) updates this one while Home Assistant is stopped, if
+automatic updates are on for it, and this app updates the Vome app to the
+version your main install runs, as it already did for your other apps. This
+app no longer tries to update itself. If Vome sees a standby on an older
+Vome CHAP than your main install, the CHAP page and an email say so, with the
+command to update it by hand.
+
 ## 0.2.13 — 4 November 2026
 
 **A local pair works beside a Vome pair.** If your main install was in a
@@ -85,6 +99,9 @@ someone ran `ha store reload` on it. Nobody opens a standby, so this app now
 refreshes the store every six hours and, when a newer Vome CHAP is waiting,
 updates itself. This applies on both installs and in both kinds of pair.
 From 0.2.7 on, no one has to do it by hand.
+
+*Correction, 6 November 2026:* the update of this app itself never worked.
+The Supervisor does not let an app update itself. See 0.2.14.
 
 ## 0.2.6 — 28 October 2026
 

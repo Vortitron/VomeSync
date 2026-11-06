@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import chap_updater  # noqa: E402 - Vome CHAP on a stopped install
 import chat  # noqa: E402 - the Chat page, next to this file
 import integration_channel  # noqa: E402 - the YAML the integration hands over
 import mcp_server  # noqa: E402 - Vome on Home Assistant's MCP page
@@ -841,6 +842,7 @@ def main() -> None:
 		config_root=_config_root,
 	)
 	mcp_server.start(call_service=call_service, unwrap=_unwrap, supervisor_token=SUPERVISOR_TOKEN)
+	chap_updater.start()
 	server.serve_forever()
 
 
