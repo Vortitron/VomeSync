@@ -26,6 +26,14 @@ from .const import (
 	UPDATE_INTERVAL_SECONDS,
 	DEFAULT_SWITCH_NAME,
 	FREE_TIER_MAX_SUBSCRIPTIONS,
+	CONF_CLAIM_REWARDS,
+	EVENT_STATE_CHANGED,
+)
+from .switch_extras import (
+	clean_commerce,
+	clean_properties,
+	clean_reward,
+	reward_qualifies,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -55,6 +63,9 @@ _SUB_MISSES_BEFORE_BACKOFF = 3
 _SUB_BACKOFF_MAX_SECONDS = 1800.0
 
 _TOGGLE_COOLDOWN_SECONDS = 1.0
+
+# The server takes 1-50 linked entities on a reward claim.
+_REWARD_CLAIM_MAX_ENTITIES = 50
 
 _LINK_CFG_ENTITIES = "entities"
 _LINK_CFG_MODE = "mode"
@@ -150,6 +161,14 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		# Backoff for subscriptions the server no longer knows about.
 		self._sub_misses: Dict[str, int] = {}
 		self._sub_next_poll: Dict[str, float] = {}
+
+		# The last change each switch's WebSocket pushed, as (changeAt, state).
+		# The server replays the current state whenever a socket (re)connects;
+		# a replay is not a new change, so it fires no event.
+		self._last_pushed_change: Dict[str, tuple] = {}
+		# The change each subscribed switch's reward was last claimed for, so
+		# a replay never claims the same change twice.
+		self._reward_claimed: Dict[str, Any] = {}
 
 	async def _async_update_data(self) -> Dict[str, Any]:
 		"""Fetch data from API."""
@@ -359,18 +378,31 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		message_type = message.get("type")
 		
 		if message_type == "state_update":
+			state = message["state"]
+			change_at = self._change_at(message)
+			replay = self._last_pushed_change.get(uid) == (change_at, state)
+
 			# Update local state
-			if uid in self.switches:
-				self.switches[uid]["state"] = message["state"]
-				self.switches[uid]["lastToggled"] = message["timestamp"]
-			
-			if uid in self.subscriptions:
-				self.subscriptions[uid]["state"] = message["state"]
-				self.subscriptions[uid]["lastToggled"] = message["timestamp"]
+			for store in (self.switches, self.subscriptions):
+				data = store.get(uid)
+				if data is None:
+					continue
+				known = change_at is not None and change_at == data.get("lastToggled") and state == data.get("state")
+				data["state"] = state
+				data["lastToggled"] = message["timestamp"]
+				self._apply_change_extras(data, message, change_at, keep_missing=replay or known)
+			self._last_pushed_change[uid] = (change_at, state)
 			
 			# Trigger linked entities
 			params = message.get("params") or {}
-			await self._trigger_linked_entities(uid, message["state"], params)
+			switched = await self._trigger_linked_entities(uid, state, params)
+
+			if not replay:
+				self._fire_state_changed(uid, state, message)
+			try:
+				self._maybe_claim_reward(uid, state, change_at, switched)
+			except Exception as ex:  # noqa: BLE001 - a claim must never break the update
+				_LOGGER.debug("Reward claim for %s not attempted: %s", uid, ex)
 			
 			# Trigger entity updates
 			self.async_update_listeners()
@@ -388,6 +420,131 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				message.get("message")
 			)
 
+	@staticmethod
+	def _change_at(message: Dict[str, Any]) -> Any:
+		"""When the pushed change happened (ms), as the server records it."""
+		change_at = message.get("lastChangeAt")
+		if change_at is None:
+			change_at = message.get("timestamp")
+		return change_at
+
+	@staticmethod
+	def _apply_change_extras(
+		data: Dict[str, Any],
+		message: Dict[str, Any],
+		change_at: Any,
+		keep_missing: bool = False,
+	) -> None:
+		"""Copy a change's note, params, source and payment onto the switch's data.
+
+		Each change replaces the last one's: a change without a note clears
+		it, so stale "now playing" text cannot linger.  A replay of a change
+		already known (the server resends the current state on every
+		reconnect) only adds what it carries.
+		"""
+		params = message.get("params")
+		fields = {
+			"note": (message.get("note") or "", "note" in message),
+			"lastParams": (dict(params) if isinstance(params, dict) else {}, "params" in message),
+			"lastSource": (message.get("source"), "source" in message),
+			"lastPaid": (message.get("paid"), "paid" in message),
+		}
+		for key, (value, present) in fields.items():
+			if present or not keep_missing:
+				data[key] = value
+		if change_at is not None:
+			data["lastChangeAt"] = change_at
+
+	def _entity_id_for_uid(self, uid: str) -> Optional[str]:
+		"""The switch entity for a uid, or its status sensor for a watched switch."""
+		try:
+			from homeassistant.helpers import entity_registry as er
+			registry = er.async_get(self.hass)
+			return (
+				registry.async_get_entity_id("switch", DOMAIN, f"vomesync_{uid}")
+				or registry.async_get_entity_id("sensor", DOMAIN, f"vomesync_sensor_{uid}")
+			)
+		except Exception:  # noqa: BLE001 - the event still goes out without it
+			return None
+
+	def _fire_state_changed(self, uid: str, state: Any, message: Dict[str, Any]) -> None:
+		"""Fire ``vomesync_state_changed`` for a pushed change."""
+		params = message.get("params")
+		try:
+			self.hass.bus.async_fire(EVENT_STATE_CHANGED, {
+				"uid": uid,
+				"entity_id": self._entity_id_for_uid(uid),
+				"state": "on" if state else "off",
+				"note": message.get("note") or "",
+				"params": dict(params) if isinstance(params, dict) else {},
+				"source": message.get("source"),
+				"paid": message.get("paid"),
+			})
+		except Exception as ex:  # noqa: BLE001
+			_LOGGER.debug("Could not fire %s for %s: %s", EVENT_STATE_CHANGED, uid, ex)
+
+	def _maybe_claim_reward(self, uid: str, state: Any, change_at: Any, switched: int) -> bool:
+		"""Claim a subscribed switch's reward once its linked entities really switched.
+
+		Only when the owner turned ``claim_rewards`` on, the offer covers this
+		direction, the change is still inside the offer's window and has not
+		been claimed already.  The claim runs in the background: the server
+		checks it again, and a refusal costs nothing but a log line.
+		"""
+		if not switched or switched < 1:
+			return False
+		if not (self.config_entry.options or {}).get(CONF_CLAIM_REWARDS):
+			return False
+		data = self.subscriptions.get(uid)
+		if not isinstance(data, dict) or data.get("is_owner"):
+			return False
+		reward = data.get("reward")
+		if not reward_qualifies(reward, bool(state)):
+			return False
+		if not self.crypto_enabled:
+			log_throttled(
+				_LOGGER.warning,
+				self._warning_throttle,
+				"reward_no_key",
+				3600,
+				"Cannot claim the reward for %s: claims are signed, and this entry has no signing key",
+				uid,
+			)
+			return False
+		if isinstance(change_at, bool) or not isinstance(change_at, (int, float)):
+			_LOGGER.debug("Reward for %s not claimed: the change has no time", uid)
+			return False
+		change_at = int(change_at)
+		if self._reward_claimed.get(uid) == change_at:
+			return False
+		window = reward.get("windowSeconds")
+		if isinstance(window, (int, float)) and not isinstance(window, bool):
+			if time.time() * 1000 - change_at > float(window) * 1000:
+				_LOGGER.debug("Reward for %s not claimed: the change is older than its window", uid)
+				return False
+		self._reward_claimed[uid] = change_at
+		entities = max(1, min(int(switched), _REWARD_CLAIM_MAX_ENTITIES))
+		self._schedule_hass_task(self._async_claim_reward(uid, change_at, entities))
+		return True
+
+	async def _async_claim_reward(self, uid: str, change_at: int, entities: int) -> None:
+		"""Send one reward claim; never raises."""
+		try:
+			await self.api_client.claim_reward(uid, change_at, entities)
+			_LOGGER.info("Claimed the reward for %s (change at %s, %d entities)", uid, change_at, entities)
+		except VomeSyncAPIError as ex:
+			log_throttled(
+				_LOGGER.warning,
+				self._warning_throttle,
+				f"reward_claim:{uid}",
+				600,
+				"Reward claim for %s refused: %s",
+				uid,
+				ex,
+			)
+		except Exception as ex:  # noqa: BLE001
+			_LOGGER.debug("Reward claim for %s failed: %s", uid, ex)
+
 	async def toggle_switch(self, uid: str) -> bool:
 		"""Toggle a switch with rate limiting."""
 		current = bool(self.get_switch_data(uid) and self.get_switch_data(uid).get("state", False))
@@ -398,16 +555,24 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		uid: str,
 		access_key: str,
 		desired_state: Optional[bool] = None,
+		note: Optional[str] = None,
+		params: Optional[Dict[str, Any]] = None,
 	) -> bool:
-		"""Toggle a switch via a delegated access key (non-owner)."""
+		"""Toggle a switch via a delegated access key (non-owner).
+
+		With a note or params the change is sent even when the switch is
+		already in ``desired_state``: the server sets the state given rather
+		than flipping it, and the note is the point of the call.
+		"""
 		if not uid or not access_key:
 			return False
 		if self.is_switch_owner(uid):
 			_LOGGER.warning("Refusing access-key toggle for owner switch %s", uid)
 			return False
 
+		extras = bool(note or params)
 		current = bool(self.get_switch_data(uid) and self.get_switch_data(uid).get("state", False))
-		if desired_state is not None and current == bool(desired_state):
+		if desired_state is not None and current == bool(desired_state) and not extras:
 			return True
 
 		current_time = time.time()
@@ -421,7 +586,13 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 
 		self._last_toggle_time[uid] = current_time
 		try:
-			result = await self.api_client.toggle_switch_with_access_key(uid, access_key)
+			if extras:
+				target = (not current) if desired_state is None else bool(desired_state)
+				result = await self.api_client.toggle_switch_with_access_key(
+					uid, access_key, state=target, note=note or None, params=params or None,
+				)
+			else:
+				result = await self.api_client.toggle_switch_with_access_key(uid, access_key)
 			timestamp = result.get("timestamp", current_time)
 			new_state = result.get("state", not current)
 			if uid in self.subscriptions:
@@ -429,6 +600,12 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				self.subscriptions[uid]["lastToggled"] = timestamp
 				if "toggleCount" in result:
 					self.subscriptions[uid]["toggleCount"] = result["toggleCount"]
+				if extras:
+					self.subscriptions[uid].update({
+						"note": note or "",
+						"lastParams": dict(params or {}),
+						"lastSource": "key",
+					})
 			self.async_update_listeners()
 			return True
 		except VomeSyncAPIError as ex:
@@ -450,8 +627,14 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			return idx2
 		return None
 
-	async def set_switch_state(self, uid: str, state: bool, params: Optional[Dict[str, Any]] = None) -> bool:
-		"""Set a switch state (v2 signed endpoint)."""
+	async def set_switch_state(
+		self,
+		uid: str,
+		state: bool,
+		params: Optional[Dict[str, Any]] = None,
+		note: Optional[str] = None,
+	) -> bool:
+		"""Set a switch state (v2 signed endpoint), with an optional note for the change."""
 		import time
 
 		if not self.is_switch_owner(uid):
@@ -479,7 +662,10 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				if idx is None:
 					_LOGGER.error("Cannot set state for %s: missing crypto index", uid)
 					return False
-				result = await self.api_client.set_switch_state_v2(uid, idx, state, params=params)
+				if note:
+					result = await self.api_client.set_switch_state_v2(uid, idx, state, params=params, note=note)
+				else:
+					result = await self.api_client.set_switch_state_v2(uid, idx, state, params=params)
 			else:
 				# Legacy path: only toggle when change is required (toggle endpoint flips)
 				current = bool(self.get_switch_data(uid) and self.get_switch_data(uid).get("state", False))
@@ -496,6 +682,13 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 			if uid in self.switches:
 				self.switches[uid]["state"] = new_state
 				self.switches[uid]["lastToggled"] = timestamp
+				if self.crypto_enabled:
+					# This change's note and params replace the last one's.
+					self.switches[uid].update({
+						"note": note or "",
+						"lastParams": dict(params or {}),
+						"lastSource": "owner",
+					})
 			
 			if uid in self.subscriptions:
 				self.subscriptions[uid]["state"] = new_state
@@ -747,6 +940,17 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					endpoint_updates["captchaToken"] = captcha_token
 				updated = await self.api_client.update_switch(uid, endpoint_updates)
 
+			# The webhook secret is in this one response and never again.  It
+			# goes back to the caller and nowhere else: not into the cache,
+			# which is saved in the entry's options.
+			webhook_secret = None
+			if isinstance(updated, dict):
+				updated = dict(updated)
+				webhook_secret = updated.pop("webhookSecret", None)
+				if isinstance(updated.get("commerce"), dict) and "webhookSecret" in updated["commerce"]:
+					updated["commerce"] = dict(updated["commerce"])
+					webhook_secret = updated["commerce"].pop("webhookSecret") or webhook_secret
+
 			# Merge back into local cache, preserving local-only fields
 			local_name = (switch_data or {}).get("name") or DEFAULT_SWITCH_NAME
 			updated_name = None
@@ -775,6 +979,8 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				await self._async_update_entry_options(options)
 
 			self.async_update_listeners()
+			if webhook_secret:
+				return {**merged, "webhookSecret": webhook_secret}
 			return merged
 		except VomeSyncAPIError as ex:
 			_LOGGER.error("Failed to update switch metadata uid=%s: %s", uid, ex)
@@ -865,6 +1071,78 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		except VomeSyncAPIError as ex:
 			_LOGGER.error("Failed to update v2 access key permissions uid=%s: %s", uid, ex)
 			return False
+
+	def _require_signed_owner(self, uid: str) -> Dict[str, Any]:
+		"""The data of an owned v2 switch, or a clear reason why not."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("This needs a signing key: the entry was set up without one")
+		if not self.is_switch_owner(uid):
+			raise VomeSyncAPIError("Only the switch's owner can change that")
+		return self.switches.get(uid) or {}
+
+	async def _update_extras(self, uid: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+		result = await self.update_switch_metadata(uid, updates)
+		if result is None:
+			raise VomeSyncAPIError("Vome did not take the change; the log says why")
+		return result
+
+	async def set_properties(
+		self, uid: str, properties: Dict[str, Any], replace: bool = False,
+	) -> Dict[str, Any]:
+		"""Set a switch's fixed properties.
+
+		The signed update replaces the whole map, so unless ``replace`` the
+		given keys are merged onto what the switch has (``None`` removes one).
+		"""
+		data = self._require_signed_owner(uid)
+		merged = clean_properties(properties, current=data.get("properties"), replace=replace)
+		result = await self._update_extras(uid, {"properties": merged})
+		return result.get("properties", merged) if isinstance(result, dict) else merged
+
+	async def set_commerce(
+		self, uid: str, fields: Dict[str, Any], rotate_webhook_secret: bool = False,
+	) -> Dict[str, Any]:
+		"""Change a switch's commerce settings; returns ``{commerce, webhookSecret?}``."""
+		data = self._require_signed_owner(uid)
+		commerce = clean_commerce(fields, current=data.get("commerce"))
+		updates: Dict[str, Any] = {"commerce": commerce}
+		if rotate_webhook_secret:
+			updates["rotateWebhookSecret"] = True
+		result = await self._update_extras(uid, updates)
+		answer: Dict[str, Any] = {"commerce": result.get("commerce", commerce)}
+		if result.get("webhookSecret"):
+			answer["webhookSecret"] = result["webhookSecret"]
+		return answer
+
+	async def set_reward(self, uid: str, reward: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+		"""Offer a reward to a switch's subscribers, or withdraw it with ``None``."""
+		self._require_signed_owner(uid)
+		cleaned = clean_reward(reward)
+		result = await self._update_extras(uid, {"reward": cleaned})
+		return result.get("reward", cleaned) if isinstance(result, dict) else cleaned
+
+	async def start_connect_onboarding(self) -> Dict[str, Any]:
+		"""Start or resume taking payments (Stripe Connect); returns ``{url}``."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("This needs a signing key: the entry was set up without one")
+		return await self.api_client.start_connect_onboarding() or {}
+
+	async def get_connect_status(self) -> Dict[str, Any]:
+		"""Whether this owner can take payments yet."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("This needs a signing key: the entry was set up without one")
+		return await self.api_client.get_connect_status() or {}
+
+	async def list_reward_claims(self, uid: str) -> Dict[str, Any]:
+		"""The claims against one of this owner's reward offers."""
+		self._require_signed_owner(uid)
+		return await self.api_client.list_reward_claims(uid) or {}
+
+	async def get_my_rewards(self) -> Dict[str, Any]:
+		"""The rewards this Home Assistant has claimed."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("This needs a signing key: the entry was set up without one")
+		return await self.api_client.get_my_rewards() or {}
 
 	async def owner_is_premium(self) -> bool:
 		"""True when this install's owner has a live premium tier."""
@@ -1132,8 +1410,11 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		"""Whether this entry is configured for crypto auth."""
 		return bool(self.config_entry.data.get(CONF_AUTH_MODE) == AUTH_MODE_CRYPTO and self.config_entry.data.get(CONF_CRYPTO_SEED))
 
-	async def _trigger_linked_entities(self, uid: str, state: bool, params: Optional[Dict[str, Any]] = None) -> None:
-		"""Trigger linked entities when switch state changes."""
+	async def _trigger_linked_entities(self, uid: str, state: bool, params: Optional[Dict[str, Any]] = None) -> int:
+		"""Trigger linked entities when switch state changes.
+
+		Returns how many linked entities were switched (a reward claim says so).
+		"""
 		options = self.config_entry.options or {}
 		linked_entities = options.get("linked_entities", {}) or {}
 		
@@ -1143,12 +1424,12 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		direction = cfg.get(_LINK_CFG_DIRECTION, _LINK_DIR_BOTH)
 		if direction == _LINK_DIR_ENTITIES_TO_SWITCH:
 			_LOGGER.debug("Linked entities direction for %s is entities->switch; skipping switch->entities triggers", uid)
-			return
+			return 0
 		
 		entities_to_trigger = cfg.get(_LINK_CFG_ENTITIES, [])
 		if not entities_to_trigger:
 			_LOGGER.debug("No linked entities found for switch %s", uid)
-			return
+			return 0
 		
 		now = time.monotonic()
 		blocked_until = self._linked_trigger_blocked_until.get(uid, 0.0)
@@ -1159,7 +1440,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				uid,
 				remaining,
 			)
-			return
+			return 0
 		
 		history = self._linked_trigger_history.setdefault(uid, deque())
 		cutoff = now - _LINKED_TRIGGER_BURST_WINDOW_SECONDS
@@ -1177,7 +1458,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 				_LINKED_TRIGGER_BURST_MAX,
 				_LINKED_TRIGGER_BURST_WINDOW_SECONDS,
 			)
-			return
+			return 0
 		
 		_LOGGER.info(
 			"Triggering %d linked entities for switch %s (state: %s): %s",
@@ -1189,6 +1470,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		
 		# Call turn_on or turn_off for each linked entity (with graceful fallback if params not supported)
 		service = "turn_on" if state else "turn_off"
+		switched = 0
 		
 		for entity_id in entities_to_trigger:
 			try:
@@ -1211,6 +1493,7 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 					service_data=service_data,
 					blocking=False
 				)
+				switched += 1
 			except Exception as err:
 				_LOGGER.warning("Failed to trigger linked entity %s with params (%s); retrying without params", entity_id, err)
 				try:
@@ -1221,8 +1504,10 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 						service_data={"entity_id": entity_id},
 						blocking=False
 					)
+					switched += 1
 				except Exception as err2:
 					_LOGGER.error("Failed to trigger linked entity %s (fallback): %s", entity_id, err2)
+		return switched
 
 	def _extract_linked_entity_ids(self, raw_value: Any) -> list[str]:
 		"""Normalise linked entity config value to a list of entity_ids."""

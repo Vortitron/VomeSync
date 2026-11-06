@@ -42,6 +42,15 @@ EXPECTED_SERVICES = frozenset({
 	"agent_key_revoke",
 	# Where the Vome app listens, for the YAML this integration may not write.
 	"app_check_in",
+	# Switch extras: notes, properties, commerce, payments and rewards.
+	"set_state",
+	"set_properties",
+	"set_commerce",
+	"set_reward",
+	"connect_payments",
+	"payments_status",
+	"reward_claims",
+	"my_rewards",
 })
 
 

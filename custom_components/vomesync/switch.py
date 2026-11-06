@@ -34,6 +34,7 @@ from .const import (
 from .coordinator import VomeSyncCoordinator
 from .device_compat import async_get_device_by_identifier
 from .naming import format_device_model, format_device_name
+from .switch_extras import extras_attributes
 from .time_utils import format_timestamp_ms
 
 _LOGGER = logging.getLogger(__name__)
@@ -301,6 +302,12 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 			attributes[ATTR_CREATED_AT_TS] = created_at_raw
 			attributes[ATTR_CREATED_AT] = format_timestamp_ms(created_at_raw) or created_at_raw
 		
+		# Properties, the last change's note and params, and any commerce
+		# summary or reward offer (docs/SWITCH_EXTRAS.md).  Never the
+		# webhook address or its secret: every user of this Home Assistant
+		# can read state attributes.
+		attributes.update(extras_attributes(data))
+
 		# Add linked entities count and list
 		linked = self.async_get_linked_entities()
 		if linked:

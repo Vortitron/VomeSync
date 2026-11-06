@@ -16,7 +16,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 
 import aiohttp
 
@@ -47,6 +47,8 @@ AGENT_PATH = "/api/sync/agent/backups"
 # most add-ons.
 STREAM_CONTENT_TYPE = "application/vnd.vome.backup"
 _UPLOAD_CHUNK = 1024 * 1024
+# How often an upload says how far it has got (Home Assistant's progress bar).
+PROGRESS_STEP = 1024 * 1024
 
 # Uploads are streamed, so the timeout has to cover a multi-gigabyte archive on
 # a domestic uplink rather than a typical API call.
@@ -174,18 +176,34 @@ class VomeBackupClient:
 		return data.get("backup") if isinstance(data, dict) else None
 
 	async def async_upload(
-		self, backup_id: str, metadata: dict, stream: Any
+		self, backup_id: str, metadata: dict, stream: Any,
+		on_progress: Optional[Callable[[int], None]] = None,
 	) -> dict:
 		"""Stream ``stream`` up, metadata framed at the head of the body.
 
 		``stream`` may be an async iterator (what Home Assistant's backup
 		platform hands us) or a plain file-like; both are read a chunk at a
 		time, so the archive is never held in memory at either end.
+
+		``on_progress`` is told how many bytes of the archive have gone,
+		about every megabyte and once at the end.  The body is pulled by
+		the HTTP client, so a chunk counts once the next one is asked for.
 		"""
 		blob = json.dumps(metadata or {}).encode()
 
 		async def _body():
 			yield len(blob).to_bytes(4, "big") + blob
+			sent = reported = 0
+			async for chunk in _archive():
+				yield chunk
+				sent += len(chunk)
+				if on_progress is not None and sent - reported >= PROGRESS_STEP:
+					on_progress(sent)
+					reported = sent
+			if on_progress is not None and sent != reported:
+				on_progress(sent)
+
+		async def _archive():
 			if isinstance(stream, (bytes, bytearray, memoryview)):
 				# Not what Home Assistant sends, but a caller handing over a
 				# whole archive in memory should upload it, not raise

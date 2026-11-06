@@ -25,6 +25,11 @@ from .const import (
 	API_V2_OWNER_TIER,
 	API_V2_OWNER_PREMIUM,
 	API_V2_OWNER_BILLING_PORTAL,
+	API_V2_OWNER_CONNECT,
+	API_V2_OWNER_CONNECT_STATUS,
+	API_V2_OWNER_REWARD_CLAIMS,
+	API_V2_OWNER_MY_REWARDS,
+	API_V2_REWARD_CLAIM,
 	AUTH_MODE_CRYPTO,
 )
 
@@ -41,6 +46,11 @@ from .crypto import (
 	build_v2_revoke_access_key_request,
 	build_v2_pause_access_key_request,
 	build_v2_update_access_key_permissions_request,
+	build_v2_connect_onboard_request,
+	build_v2_connect_status_request,
+	build_v2_my_rewards_request,
+	build_v2_reward_claims_list_request,
+	build_v2_reward_claim_request,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -414,13 +424,32 @@ class VomeSyncAPIClient:
 		endpoint = API_TOGGLE_SWITCH.format(uid=uid)
 		return await self._make_request("POST", endpoint, {}, require_auth=True)
 
-	async def toggle_switch_with_access_key(self, uid: str, access_key: str) -> Dict[str, Any]:
-		"""Toggle a v2 switch using a delegated access key."""
+	async def toggle_switch_with_access_key(
+		self,
+		uid: str,
+		access_key: str,
+		state: Optional[bool] = None,
+		note: Optional[str] = None,
+		params: Optional[Dict[str, Any]] = None,
+	) -> Dict[str, Any]:
+		"""Toggle a v2 switch using a delegated access key.
+
+		With ``state`` the server sets that state instead of flipping it; a
+		``note`` and ``params`` describe the change.  Each is sent only when
+		given, so a plain toggle is the same empty body as before.
+		"""
+		body: Dict[str, Any] = {}
+		if state is not None:
+			body["state"] = bool(state)
+		if note:
+			body["note"] = note
+		if params:
+			body["params"] = params
 		endpoint = API_V2_TOGGLE.format(uid=uid)
 		return await self._make_request(
 			"POST",
 			endpoint,
-			{},
+			body,
 			require_auth=False,
 			extra_headers={"X-Api-Key": access_key},
 		)
@@ -431,8 +460,9 @@ class VomeSyncAPIClient:
 		index: int,
 		state: bool,
 		params: Optional[Dict[str, Any]] = None,
+		note: Optional[str] = None,
 	) -> Dict[str, Any]:
-		"""Set switch state using v2 crypto auth (supports params)."""
+		"""Set switch state using v2 crypto auth (supports params and a note)."""
 		if not self.crypto_enabled:
 			raise VomeSyncAPIError("Crypto mode is not enabled for this client")
 		
@@ -442,6 +472,7 @@ class VomeSyncAPIClient:
 			index=index,
 			state=state,
 			params=params or {},
+			note=note or None,
 		)
 		endpoint = API_V2_SET_STATE.format(uid=uid)
 		return await self._make_request("POST", endpoint, payload, require_auth=False)
@@ -487,6 +518,48 @@ class VomeSyncAPIClient:
 			raise VomeSyncAPIError("Crypto mode required")
 		payload = build_v2_billing_portal_request(self.crypto_seed)
 		return await self._make_request("POST", API_V2_OWNER_BILLING_PORTAL, payload, require_auth=False)
+
+	async def start_connect_onboarding(self) -> Dict[str, Any]:
+		"""Start or resume Stripe Connect onboarding; returns ``{url}``."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode required")
+		payload = build_v2_connect_onboard_request(self.crypto_seed)
+		return await self._make_request("POST", API_V2_OWNER_CONNECT, payload, require_auth=False)
+
+	async def get_connect_status(self) -> Dict[str, Any]:
+		"""``{connected, ready, requirementsDue, dashboardUrl?}`` for this owner."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode required")
+		payload = build_v2_connect_status_request(self.crypto_seed)
+		return await self._make_request("POST", API_V2_OWNER_CONNECT_STATUS, payload, require_auth=False)
+
+	async def claim_reward(self, uid: str, change_at: int, entities: int) -> Dict[str, Any]:
+		"""Claim a subscribed switch's reward for acting on its change at ``change_at``."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode required")
+		if not isinstance(uid, str) or not uid:
+			raise VomeSyncAPIError("UID required")
+		payload = build_v2_reward_claim_request(
+			self.crypto_seed, uid=uid, change_at=change_at, entities=entities,
+		)
+		endpoint = API_V2_REWARD_CLAIM.format(uid=uid)
+		return await self._make_request("POST", endpoint, payload, require_auth=False)
+
+	async def list_reward_claims(self, uid: str) -> Dict[str, Any]:
+		"""The claims against one of this owner's reward offers, with totals owed."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode required")
+		if not isinstance(uid, str) or not uid:
+			raise VomeSyncAPIError("UID required")
+		payload = build_v2_reward_claims_list_request(self.crypto_seed, uid=uid)
+		return await self._make_request("POST", API_V2_OWNER_REWARD_CLAIMS, payload, require_auth=False)
+
+	async def get_my_rewards(self) -> Dict[str, Any]:
+		"""The rewards this owner has claimed, across switches, with totals owed."""
+		if not self.crypto_enabled:
+			raise VomeSyncAPIError("Crypto mode required")
+		payload = build_v2_my_rewards_request(self.crypto_seed)
+		return await self._make_request("POST", API_V2_OWNER_MY_REWARDS, payload, require_auth=False)
 
 	async def get_public_switches(self) -> list[Dict[str, Any]]:
 		"""Get public switches."""

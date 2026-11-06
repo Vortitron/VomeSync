@@ -28,6 +28,7 @@ from .const import (
 )
 from .coordinator import VomeSyncCoordinator
 from .naming import format_device_model, format_device_name
+from .switch_extras import extras_attributes
 from .time_utils import format_timestamp_ms
 
 _LOGGER = logging.getLogger(__name__)
@@ -276,5 +277,9 @@ class VomeSyncSensor(CoordinatorEntity[VomeSyncCoordinator], SensorEntity):
 		if created_at_raw is not None:
 			attributes[ATTR_CREATED_AT_TS] = created_at_raw
 			attributes[ATTR_CREATED_AT] = format_timestamp_ms(created_at_raw) or created_at_raw
+
+		# Properties, the last change's note and params, commerce summary and
+		# any reward offer, as on the switch entity.
+		attributes.update(extras_attributes(data))
 
 		return attributes

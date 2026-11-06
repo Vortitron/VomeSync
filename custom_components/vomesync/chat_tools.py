@@ -64,7 +64,7 @@ DEFAULT_SCOPES = ALL_SCOPES
 DENY_DOMAINS = frozenset({
 	"lock", "alarm_control_panel", "cover", "valve", "camera",
 	"hassio", "shell_command", "python_script", "pyscript", "rest_command",
-	"command_line", DOMAIN,
+	"command_line", "debugpy", DOMAIN,
 })
 DENY_SERVICES = frozenset({
 	("homeassistant", "stop"), ("homeassistant", "restart"),
@@ -124,6 +124,10 @@ class ChatTool:
 	# system log and automation-config APIs all require admin), so a
 	# household member does not get it through a chat either.
 	admin_only: bool = False
+	# "vome": about Vome itself, not the home's devices.  Those are also
+	# offered on Home Assistant's MCP page by the Vome app
+	# (vome/panel/mcp_server.py), where Assist has no tools of its own for them.
+	group: str = "home"
 
 	def json_schema(self) -> dict:
 		"""The parameters as JSON Schema, for an OpenAI-style tools list."""
@@ -158,6 +162,7 @@ class ChatTool:
 			"parameters": self.json_schema(),
 			"scope": self.scope,
 			"confirm": self.confirm,
+			"group": self.group,
 		}
 
 
@@ -573,6 +578,137 @@ async def _delete_automation(hass, context, automation_id: str) -> dict:
 	}
 
 
+# ── Vome itself ─────────────────────────────────────────────────────────
+#
+# What Vome is doing for this home, from what the integration already holds:
+# nothing here asks for a secret or returns one (the relay secret, the guest
+# claim URL and the report's share token stay out), and only the backup list
+# goes to Vome to ask.
+
+
+def _iso(ts: Optional[float]) -> Optional[str]:
+	if not ts:
+		return None
+	return dt_util.utc_from_timestamp(float(ts)).isoformat()
+
+
+def _require_entry(hass: HomeAssistant):
+	entry = _entry(hass)
+	if entry is None:
+		raise ChatToolError("The Vome integration is not set up on this home.")
+	return entry
+
+
+async def _vome_status(hass, context) -> dict:
+	from . import agent_key, health_score
+	from .const import INTEGRATION_VERSION
+	from .relay_client import get_relay_client
+	from .services_remote import remote_status_payload
+
+	entry = _require_entry(hass)
+	status = remote_status_payload(hass, entry)
+	out: dict = {
+		"linked": bool(status.get("linked")),
+		"hosted": bool(status.get("hosted")),
+		"remote_url": health_score.remote_url(entry) or None,
+		"full_ui_remotely": bool(status.get("forward_ui")),
+		"integration_version": INTEGRATION_VERSION,
+	}
+	client = get_relay_client(hass, entry.entry_id)
+	if out["hosted"]:
+		out["remote_access"] = "Vome hosts this Home Assistant, so it is reached directly."
+	elif client is None:
+		out["remote_access"] = "Not linked to Vome, so there is no remote access." if not out["linked"] \
+			else "Linked, but the connection to Vome has not started."
+	else:
+		out["remote_access"] = (
+			"Connected to Vome." if client.connected
+			else "Vome refused this home's key; link it again from the Vome panel." if client.rejected
+			else "Not connected to Vome right now; it keeps retrying.")
+		out["connected"] = bool(client.connected)
+		out["connected_since"] = _iso(client.connected_since) if client.connected else None
+		out["disconnected_since"] = None if client.connected else _iso(client.disconnected_since)
+	if health_score.is_guest(entry):
+		out["temporary_link"] = (
+			f"This is a temporary link with no account; it ends in {health_score.clock_phrase(entry)} "
+			"unless the owner keeps it from the Vome panel.")
+	if agent_key.is_trial(entry):
+		left = agent_key.trial_seconds_left(entry)
+		out["agent_trial"] = f"Opened by an agent key, {max(1, left // 3600)} hours left." if left \
+			else "Opened by an agent key that has run out."
+	return out
+
+
+async def _vome_health_score(hass, context) -> dict:
+	from . import health_score
+
+	entry = _require_entry(hass)
+	report = health_score.stored_report(hass, entry.entry_id)
+	if not report:
+		return {"score": None, "note": (
+			"No health check has been run for this home yet. The owner can run one from the "
+			"Vome panel (Health score), with or without a Vome account.")}
+	return {
+		"score": report.get("score"),
+		"out_of": 100,
+		"summary": report.get("summary"),
+		"generated_at": report.get("generated_at"),
+		"categories": report.get("categories"),
+		"findings": report.get("findings"),
+	}
+
+
+CHAP_STATUS_FILE = ".vome_chap_status.json"
+
+
+async def _vome_chap_status(hass, context) -> dict:
+	from .diagnostics import redact
+
+	def _read() -> Optional[dict]:
+		try:
+			with open(hass.config.path(CHAP_STATUS_FILE), encoding="utf-8") as fh:
+				data = json.load(fh)
+		except (OSError, ValueError):
+			return None
+		return data if isinstance(data, dict) else None
+
+	data = await hass.async_add_executor_job(_read)
+	if data is None:
+		return {"installed": False, "note": (
+			"CHAP (a standby Home Assistant that takes over when this one fails) is not "
+			"set up here: the Vome CHAP app is not installed.")}
+	# The CHAP app never writes its credential here; redact anyway.
+	return {"installed": True, **redact(data)}
+
+
+async def _vome_backups(hass, context, limit: int = 5) -> dict:
+	from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+	from .backup_client import (
+		VomeBackupClient, VomeBackupError, credentials_for_entry, portal_url_for_entry)
+
+	entry = _require_entry(hass)
+	_server_id, secret = credentials_for_entry(entry)
+	if not secret:
+		return {"backups": [], "note": "This home is not linked to Vome, so it has no Vome backups."}
+	client = VomeBackupClient(
+		async_get_clientsession(hass), secret=secret, portal_url=portal_url_for_entry(entry))
+	try:
+		backups = await client.async_list()
+	except VomeBackupError as err:
+		raise ChatToolError(f"Vome did not list the backups: {err}") from err
+	backups = sorted(backups, key=lambda b: str(b.get("date") or ""), reverse=True)
+	limit = max(1, min(int(limit or 5), 50))
+	return {
+		"count": len(backups),
+		"latest": [
+			{"name": b.get("name"), "date": b.get("date"), "size_mb": round(float(b.get("size") or 0) / 1_048_576, 1),
+			 "protected": b.get("protected"), "backup_id": b.get("backup_id")}
+			for b in backups[:limit]
+		],
+	}
+
+
 TOOLS = (
 	ChatTool(
 		"find_entities",
@@ -624,6 +760,31 @@ TOOLS = (
 		SCOPE_READ, _render_template,
 		(Param("template", "string", "The template text.", True),),
 		admin_only=True,
+	),
+	ChatTool(
+		"vome_status",
+		"How Vome stands for this home: linked or not, hosted or not, whether remote access "
+		"is connected right now and since when, its remote address, and any temporary link's clock.",
+		SCOPE_READ, _vome_status, group="vome",
+	),
+	ChatTool(
+		"vome_health_score",
+		"This home's last Vome health score (out of 100) with its summary, categories and "
+		"findings: what is wrong or at risk in the setup and what to do about it.",
+		SCOPE_READ, _vome_health_score, group="vome",
+	),
+	ChatTool(
+		"vome_chap_status",
+		"Whether CHAP protects this home (a standby Home Assistant that takes over if this one "
+		"fails), its role, and what its last sync did.",
+		SCOPE_READ, _vome_chap_status, group="vome",
+	),
+	ChatTool(
+		"vome_backups",
+		"The backups this home keeps with Vome, newest first: name, date, size in MB.",
+		SCOPE_READ, _vome_backups,
+		(Param("limit", "integer", "How many (default 5, max 50)."),),
+		admin_only=True, group="vome",
 	),
 	ChatTool(
 		"call_service",
@@ -684,20 +845,28 @@ def async_register_chat_services(hass: HomeAssistant) -> None:
 
 	from .services_remote import _guard, async_register_admin
 
+	def _caller(call: ServiceCall) -> Optional[str]:
+		# ``anonymous`` only ever takes rights away: the Vome app's MCP
+		# server calls as the Supervisor (an administrator) on behalf of an
+		# Assist agent that does not say who is asking, so it asks for
+		# nobody's rights — the read tools a household member gets.
+		return None if call.data.get("anonymous") else call.context.user_id
+
 	async def _tools(call: ServiceCall):
+		user_id = _caller(call)
 		return {
-			"scopes": await async_effective_scopes(hass, call.context.user_id),
+			"scopes": await async_effective_scopes(hass, user_id),
 			"configured": configured_scopes(hass),
 			"prompt": PROMPT,
 			"tools": [t.describe() for t in
-			          await async_tools_for_user(hass, call.context.user_id)],
+			          await async_tools_for_user(hass, user_id)],
 		}
 
 	async def _call(call: ServiceCall):
 		try:
 			result = await async_call_tool(
 				hass, call.data["name"], call.data.get("arguments"),
-				call.context.user_id)
+				_caller(call))
 		except ChatToolError as err:
 			return {"ok": False, "error": str(err)}
 		return {"ok": True, "result": result}
@@ -712,7 +881,8 @@ def async_register_chat_services(hass: HomeAssistant) -> None:
 		return {"configured": chosen}
 
 	hass.services.async_register(
-		DOMAIN, "chat_tools", _guard(_tools), schema=vol.Schema({}),
+		DOMAIN, "chat_tools", _guard(_tools),
+		schema=vol.Schema({vol.Optional("anonymous", default=False): cv.boolean}),
 		supports_response=SupportsResponse.ONLY,
 	)
 	hass.services.async_register(
@@ -720,6 +890,7 @@ def async_register_chat_services(hass: HomeAssistant) -> None:
 		schema=vol.Schema({
 			vol.Required("name"): cv.string,
 			vol.Optional("arguments", default=dict): dict,
+			vol.Optional("anonymous", default=False): cv.boolean,
 		}),
 		supports_response=SupportsResponse.ONLY,
 	)

@@ -1,6 +1,38 @@
 # Changelog
 
-## 0.3.79 — 4 November 2026
+## 0.3.81 — 6 November 2026
+
+**Vome CHAP is kept up to date on a standby.** If you use Vome CHAP, this app
+now updates it on the install whose Home Assistant is stopped, which nothing
+else could do: an app may not update itself, and Home Assistant's automatic
+updates need Home Assistant running. It does so only while Home Assistant is
+stopped and only if automatic updates are on for Vome CHAP. For this, the
+app now asks for the Supervisor's *manager* role; it uses it for nothing
+else. If you don't use Vome CHAP, it does nothing.
+
+## 0.3.80 — 5 November 2026
+
+**Vome backups show their progress.** Home Assistant's backup page now fills
+its progress bar while a backup goes up to Vome, as it already did for
+Dropbox, SFTP and the others. Before, it sat empty until the upload ended.
+
+**Home Assistant 2026.11: tick Vome where you want it.** From 2026.11, Home
+Assistant shares an assistant's tools nowhere until an administrator ticks
+them. For Assist, that is **Control Home Assistant** on your voice assistant,
+as before. For an AI app connected to Home Assistant's own MCP server, tick
+**Vome** in the *Model Context Protocol Server* integration's settings too.
+The Vome panel's Chat page now says so.
+
+**The chat cannot start Home Assistant's remote Python debugger.**
+`debugpy.start` runs arbitrary code, so it joins the actions the chat
+always refuses.
+
+Bundles the Vome integration 0.9.65.
+
+## 0.3.79 — 4 November 2026 (main)
+
+Released from main with the Vome AI work of 0.3.76 to 0.3.78 below, on top of
+0.3.74; Develop's 0.3.75 and later followed in 0.3.80.
 
 **Vome can look at your camera pictures and hear your voice commands** (early
 access). Turn on "AI for cameras and voice" in the Vome integration's
@@ -20,6 +52,50 @@ anywhere; they go to Anthropic and audio to Deepgram, and Vome keeps no copy.
 Vome can also carry a short recording into this Home Assistant's
 speech-to-text, so a voice assistant's hearing can be tested from anywhere.
 Only speech-to-text accepts audio this way.
+
+## 0.3.78 — 4 November 2026
+
+**A voice assistant's hearing can be tested from anywhere.** Vome can now
+carry a short recording into this Home Assistant's speech-to-text, so a
+coding agent can check that "Tänd i köket" is heard right without anyone
+standing at the microphone. Only speech-to-text accepts audio this way.
+
+## 0.3.77 — 4 November 2026
+
+**Vome AI answers in a structure again on every Home Assistant.** An AI task
+with a `structure` (say `animal_seen`, `count`) failed on homes without the
+OpenAI or Google integrations installed; it no longer needs anything Home
+Assistant doesn't ship.
+
+## 0.3.76 — 4 November 2026
+
+**Vome can look at your camera pictures and hear your voice commands** (early
+access). Turn on "AI for cameras and voice" in the Vome integration's
+Configure menu and two things appear: an AI task, `ai_task.vome_ai`, for
+automations such as "when the doorbell rings, is it a person or a parcel?",
+and **Vome hearing**, a speech-to-text engine for your voice assistant. Both
+are paid from the home's **Brainpower** at Vome, with a few kronor free each
+month. A picture costs well under one öre, a command less than one. Pictures
+are shrunk to 1024 pixels in your own Home Assistant before they go anywhere;
+they go to Anthropic and audio to Deepgram, and Vome keeps no copy.
+
+## 0.3.75 — 3 November 2026
+
+**Vome is on Home Assistant's Model Context Protocol page.** Home Assistant
+2026.10 lists the MCP servers your apps offer under Settings → Devices &
+services, next to ESPHome Device Builder. The Vome app now offers one too.
+Click Add, and your Assist agents can answer "is my remote access up?",
+"what's my health score?" and "is CHAP protecting this home?" by choosing
+Vome under their "Control Home Assistant" setting. These tools only look.
+They show what anyone who is not an administrator may see, because Home
+Assistant does not tell an MCP server who is asking.
+
+**The AI chat knows about Vome.** The chat tools now include Vome's own:
+remote access status, the health score and its findings, CHAP, and (for
+administrators) the backups this home keeps with Vome. These work in the
+Vome panel's Chat page and in Assist through the "Vome" LLM API.
+
+Bundles the Vome integration 0.9.60.
 
 ## 0.3.74 — 25 October 2026
 

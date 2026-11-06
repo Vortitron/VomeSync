@@ -20,6 +20,8 @@ from typing import Any, Dict, Optional
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+from .switch_extras import normalise_json
+
 
 _CROCKFORD_BASE32_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
 _SWITCH_UID_PREFIX = "vs_"
@@ -603,6 +605,7 @@ def build_v2_set_state_request(
 	params: Optional[Dict[str, Any]] = None,
 	ts: Optional[int] = None,
 	nonce: Optional[str] = None,
+	note: Optional[str] = None,
 ) -> Dict[str, Any]:
 	if ts is None:
 		import time
@@ -610,7 +613,9 @@ def build_v2_set_state_request(
 	else:
 		ts_i = int(ts)
 	nonce_s = nonce or new_nonce()
-	params_obj = params or {}
+	# A whole float (a light's hs_color is often (30.0, 100.0)) would be
+	# signed as "30.0" and checked by the server as "30".
+	params_obj = normalise_json(params or {})
 
 	payload = {
 		"v": 2,
@@ -621,12 +626,129 @@ def build_v2_set_state_request(
 		"state": bool(state),
 		"params": params_obj,
 	}
+	# The note is signed only when there is one, so the canonical JSON of a
+	# change without one is exactly what older servers and clients expect.
+	if note:
+		payload["note"] = note
 	canon = canonical_json(payload)
 	sig_switch = sign_b64url(switch_private_key(master_seed_b64url, index), canon)
-	return {
+	req: Dict[str, Any] = {
 		"ts": ts_i,
 		"nonce": nonce_s,
 		"sigSwitch": sig_switch,
 		"state": bool(state),
 		"params": params_obj,
+	}
+	if note:
+		req["note"] = note
+	return req
+
+
+def build_v2_connect_onboard_request(
+	master_seed_b64url: str,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	"""Start or resume Stripe Connect onboarding for this owner."""
+	return _build_owner_signed_action(
+		master_seed_b64url, "connect_onboard", ts=ts, nonce=nonce
+	)
+
+
+def build_v2_connect_status_request(
+	master_seed_b64url: str,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	"""Whether this owner's connected account can take payments."""
+	return _build_owner_signed_action(
+		master_seed_b64url, "connect_status", ts=ts, nonce=nonce
+	)
+
+
+def build_v2_my_rewards_request(
+	master_seed_b64url: str,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	"""The rewards this owner has claimed, across every switch."""
+	return _build_owner_signed_action(
+		master_seed_b64url, "my_rewards", ts=ts, nonce=nonce
+	)
+
+
+def build_v2_reward_claims_list_request(
+	master_seed_b64url: str,
+	uid: str,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	"""The claims made against one of this owner's reward offers."""
+	if not isinstance(uid, str) or not uid:
+		raise ValueError("uid must be a non-empty string")
+	if ts is None:
+		import time
+		ts_i = int(time.time() * 1000)
+	else:
+		ts_i = int(ts)
+	nonce_s = nonce or new_nonce()
+	owner_pub = owner_pubkey_b64url(master_seed_b64url)
+	payload = {
+		"v": 2,
+		"action": "reward_claims_list",
+		"uid": uid,
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+	}
+	canon = canonical_json(payload)
+	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
+	return {
+		"uid": uid,
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"sigOwner": sig_owner,
+	}
+
+
+def build_v2_reward_claim_request(
+	master_seed_b64url: str,
+	uid: str,
+	change_at: int,
+	entities: int,
+	ts: Optional[int] = None,
+	nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+	"""Claim a reward for having acted on a change of someone else's switch."""
+	if not isinstance(uid, str) or not uid:
+		raise ValueError("uid must be a non-empty string")
+	if ts is None:
+		import time
+		ts_i = int(time.time() * 1000)
+	else:
+		ts_i = int(ts)
+	nonce_s = nonce or new_nonce()
+	owner_pub = owner_pubkey_b64url(master_seed_b64url)
+	change_at_i = int(change_at)
+	entities_i = int(entities)
+	payload = {
+		"v": 2,
+		"action": "reward_claim",
+		"uid": uid,
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"changeAt": change_at_i,
+		"entities": entities_i,
+	}
+	canon = canonical_json(payload)
+	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
+	return {
+		"ownerPubKey": owner_pub,
+		"ts": ts_i,
+		"nonce": nonce_s,
+		"sigOwner": sig_owner,
+		"changeAt": change_at_i,
+		"entities": entities_i,
 	}

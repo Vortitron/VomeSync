@@ -859,11 +859,13 @@ class TestVomePanelHandsOffToChap:
 		assert "vcs_x.secret" not in json.dumps(published)
 		assert not cs.is_synced(cs.STATUS_FILE_NAME)
 
-	def test_the_vome_add_on_asks_for_no_supervisor_role(self):
+	def test_the_vome_add_on_asks_for_manager_to_update_vome_chap(self):
+		"""Owner, 6 Nov 2026: nothing else can update Vome CHAP on a stopped
+		install (vome/panel/chap_updater.py)."""
 		import yaml
 		vome = yaml.safe_load((ROOT / "vome" / "config.yaml").read_text())
 		chap = yaml.safe_load((ROOT / "vome_chap" / "config.yaml").read_text())
-		assert "hassio_role" not in vome
+		assert vome["hassio_role"] == "manager"
 		assert chap["hassio_role"] == "manager" and chap["slug"] == "vome_chap"
 
 
@@ -1442,15 +1444,14 @@ class TestKeepsItselfCurrent:
 			return update, {}
 		return call
 
-	def test_it_looks_for_updates_and_takes_a_waiting_one(self, tmp_path):
+	def test_it_looks_for_updates_but_never_updates_itself(self, tmp_path):
+		"""The Supervisor refuses an app updating itself (403, "can't update
+		itself!"): GamlaBio.local tried every 6 hours from 0.2.8 and stayed
+		there (6 Nov 2026). The Vome app does it now."""
 		calls = []
 		info = {"slug": "b1bff62e_vome_chap", "version": "0.2.4", "version_latest": "0.2.8", "update_available": True}
-		note = cs.keep_self_current({}, tmp_path / "s.json", T, self._call(calls, info))
-		assert note == "updated Vome CHAP from 0.2.4 to 0.2.8"
-		assert [c[:2] for c in calls] == [("POST", "/refresh_updates"), ("GET", "/supervisor/info"),
-		                                  ("GET", "/addons/self/info"),
-		                                  ("POST", "/store/addons/b1bff62e_vome_chap/update")]
-		assert calls[-1][2] == {"backup": False}
+		assert cs.keep_self_current({}, tmp_path / "s.json", T, self._call(calls, info)) is None
+		assert [c[:2] for c in calls] == [("POST", "/refresh_updates"), ("GET", "/supervisor/info")]
 
 	def test_an_old_supervisor_is_updated_first_and_the_app_soon_after(self, tmp_path):
 		calls = []
@@ -1463,7 +1464,8 @@ class TestKeepsItselfCurrent:
 		# Not six hours: once the Supervisor has settled.
 		assert cs.keep_self_current(state, path, T + 60, self._call(calls, info)) is None
 		later = T + cs.SUPERVISOR_SETTLE_SECONDS
-		assert cs.keep_self_current(state, path, later, self._call(calls, info)) == "updated Vome CHAP from 0.2.4 to 0.2.8"
+		cs.keep_self_current(state, path, later, self._call(calls, info))
+		assert calls[-2:] == [("POST", "/refresh_updates", None), ("GET", "/supervisor/info", None)]
 
 	def test_a_failed_supervisor_update_says_why(self, tmp_path):
 		old = {"version": "2026.9.2", "version_latest": "2026.10.5", "update_available": True}
@@ -1474,7 +1476,7 @@ class TestKeepsItselfCurrent:
 		calls = []
 		info = {"slug": "x_vome_chap", "version": "0.2.8", "version_latest": "0.2.8", "update_available": False}
 		assert cs.keep_self_current({}, tmp_path / "s.json", T, self._call(calls, info)) is None
-		assert [c[1] for c in calls] == ["/refresh_updates", "/supervisor/info", "/addons/self/info"]
+		assert [c[1] for c in calls] == ["/refresh_updates", "/supervisor/info"]
 
 	def test_every_six_hours_not_every_pass(self, tmp_path):
 		calls = []
@@ -1482,9 +1484,9 @@ class TestKeepsItselfCurrent:
 		state, path, call = {}, tmp_path / "s.json", self._call(calls, info)
 		cs.keep_self_current(state, path, T, call)
 		cs.keep_self_current(state, path, T + cs.STORE_RELOAD_SECONDS - 1, call)
-		assert len(calls) == 3
+		assert len(calls) == 2
 		cs.keep_self_current(state, path, T + cs.STORE_RELOAD_SECONDS, call)
-		assert len(calls) == 6
+		assert len(calls) == 4
 		# Kept on disk, so a restart does not look again at once.
 		assert json.loads(path.read_text())["store_reloaded_at"] == T + cs.STORE_RELOAD_SECONDS
 
@@ -1495,11 +1497,6 @@ class TestKeepsItselfCurrent:
 		assert "could not look for updates" in note and "500" in note
 		assert cs.keep_self_current(state, tmp_path / "s.json", T + 60, self._call(calls, {})) is None
 		assert len(calls) == 1
-
-	def test_a_failed_update_says_so(self, tmp_path):
-		info = {"slug": "x_vome_chap", "version": "0.2.4", "version_latest": "0.2.8", "update_available": True}
-		note = cs.keep_self_current({}, tmp_path / "s.json", T, self._call([], info, update=400))
-		assert note.startswith("could not update Vome CHAP to 0.2.8") and "400" in note
 
 	def test_both_kinds_of_pair_do_it(self):
 		assert "current_note = keep_self_current(state, state_path, now)" in (ROOT / "vome_chap" / "chap_sync.py").read_text()
@@ -1910,11 +1907,14 @@ class TestTheStandbyFollowsTheMainsUpdates:
 		assert sup.posted()[-1] == ("/addons/core_matter_server/stop", None)
 		assert sup.addons["core_matter_server"]["state"] == "stopped"
 
-	def test_ours_are_not_touched(self, tmp_path):
+	def test_never_itself_but_the_vome_app_like_any_other(self, tmp_path):
+		"""The Supervisor refuses an app updating itself; and nothing else
+		updates the Vome app while Home Assistant is stopped (6 Nov 2026)."""
 		sup = FakeSupervisor({"x_vome_chap": addon("0.2.1", "0.2.11"), "x_vome": addon("0.3.1", "0.3.75")})
-		assert cs.follow_updates({"addons": {"x_vome_chap": "0.2.11", "x_vome": "0.3.75"}}, {},
-		                         tmp_path / "s.json", T, sup) is None
-		assert sup.calls == []
+		cs.follow_updates({"addons": {"x_vome_chap": "0.2.11", "x_vome": "0.3.75"}}, {},
+		                  tmp_path / "s.json", T, sup)
+		updates = [c for c in sup.calls if c[0] == "POST" and "/update" in c[1]]
+		assert [c[1] for c in updates] == ["/store/addons/x_vome/update"]
 
 	def test_a_failed_update_is_reported_and_retried_hourly(self, tmp_path):
 		sup = FakeSupervisor({"core_matter_server": addon("8.0.0", "8.1.0")}, update_status=400)
