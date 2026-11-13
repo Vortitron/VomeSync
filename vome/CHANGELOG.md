@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.82 — 13 November 2026
+
+**Firmware for a Vome-hosted home can build on Vome's build server.** If your
+home runs on Vome, Vome can now pair its ESPHome with a build server, so a
+firmware build runs there instead of using your home's own memory. The Vome
+integration now checks the build server's fingerprint before pairing and
+refuses one that doesn't match the server Vome started. With that check, a
+build server on a private address is allowed too, which a Vome-hosted home
+needs.
+
+Bundles the Vome integration 0.9.66.
+
 ## 0.3.81 — 6 November 2026
 
 **Vome CHAP is kept up to date on a standby.** If you use Vome CHAP, this app

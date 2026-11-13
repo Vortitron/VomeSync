@@ -142,7 +142,7 @@ from .const import (
 from .login_watch import LoginWatcher
 from .webhooks import is_forwardable_webhook, normalise_webhooks
 from . import remote_auth_guard
-from .esphome_ws import WS_PATH, EsphomeWsError, EsphomeWsSession
+from .esphome_ws import WS_PATH, EsphomeWsError, EsphomeWsSession, normalize_pin
 from .lan_routes import (
 	ROUTE_HOST,
 	ROUTE_PORT,
@@ -576,6 +576,17 @@ def _valid_public_build_host(hostname: str) -> bool:
 			return False
 		return all(0 <= int(part) <= 255 for part in host.split("."))
 	return bool(_FQDN_RE.match(host))
+
+
+def _private_v4_build_host(hostname: str) -> bool:
+	"""A private IPv4 address a build server may sit on (10/8, 172.16/12,
+	192.168/16) -- never loopback or link-local. Only with a fingerprint."""
+	host = (hostname or "").strip()
+	if not re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", host):
+		return False
+	if not all(0 <= int(part) <= 255 for part in host.split(".")):
+		return False
+	return bool(_PRIVATE_V4_RE.match(host)) and not host.startswith(("127.", "169.254."))
 
 
 async def async_ensure_local_access_token(hass: HomeAssistant) -> Optional[str]:
@@ -2334,7 +2345,11 @@ class RelayClient:
 		The house dashboard dials the compile host; we only send the local
 		``remote_build/preview_pair`` + ``request_pair`` commands. Hostname
 		must be a public FQDN — a LAN or loopback target would pair this
-		home with whatever answered, which is not a Vome compile box.
+		home with whatever answered, which is not a Vome compile box —
+		unless Vome also sends the box's fingerprint (``pin_sha256``): then
+		whatever answers must be that box, so a private address is safe too.
+		A Vome-hosted home needs that, as it cannot reach its own host's
+		public address (GamlaBio Hosted, 13 Nov 2026).
 		"""
 		if method != "POST":
 			return 0, None, f"Unsupported ESPHome method: {method}"
@@ -2352,7 +2367,12 @@ class RelayClient:
 		except (TypeError, ValueError):
 			return 0, None, "Pairing port must be an integer."
 		pairing_key = str(payload.get("pairing_key") or "").strip()
-		if not _valid_public_build_host(hostname):
+		expected_pin = normalize_pin(payload.get("pin_sha256") or "")
+		if expected_pin and len(expected_pin) != 64:
+			return 0, None, "The build server's fingerprint is not a SHA-256."
+		if not _valid_public_build_host(hostname) and not (
+			expected_pin and _private_v4_build_host(hostname)
+		):
 			return 0, None, "Refusing to pair with a host that is not a public DNS name."
 		if port < 1024 or port > 65535:
 			return 0, None, "Pairing port is out of range."
@@ -2376,6 +2396,7 @@ class RelayClient:
 			await session.handshake(ESPHOME_REMOTE_BUILD_TIMEOUT)
 			result = await session.pair_remote_build(
 				hostname, port, pairing_key, ESPHOME_REMOTE_BUILD_TIMEOUT,
+				expected_pin=expected_pin or None,
 			)
 			return 200, json.dumps(result), None
 		except EsphomeWsError as err:

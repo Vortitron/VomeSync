@@ -343,6 +343,60 @@ class TestEsphome:
 		session.request.assert_not_called()
 
 	@pytest.mark.asyncio
+	async def test_a_private_address_pairs_only_with_the_box_s_own_fingerprint(self):
+		"""GamlaBio Hosted cannot reach its own host's public address, only the
+		host's address on its VM link (13 Nov 2026). With the fingerprint Vome
+		saw when it started the box, whatever answers there must be that box."""
+		pin = "e1 68 08 32 77 64 9f e1 07 c2 20 7d 25 cb 48 b4 cf 53 95 69 d2 99 1d 47 fb cf 69 ad 96 97 75 26"
+		bare = pin.replace(" ", "")
+
+		def responder(command, mid, args):
+			if command == "remote_build/preview_pair":
+				return [{"message_id": mid, "result": {"pin_sha256": bare}}]
+			if command == "remote_build/request_pair":
+				return [{"message_id": mid, "result": {"status": "APPROVED"}}]
+			return [{"message_id": mid, "error_code": "unknown", "details": command}]
+
+		dash = _FakeWsDashboard(responder=responder)
+		client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+		payload = {"hostname": "10.100.29.241", "port": 16100, "pairing_key": "VZ78-BZJH-5B5B-7MCQ"}
+		status, _body, error = await client.execute(
+			"POST", "/vome-remote-build", {**payload, "pin_sha256": pin}, "esphome")
+		assert status == 200 and error is None
+		assert [frame["command"] for frame in dash.sent] == [
+			"remote_build/preview_pair", "remote_build/request_pair"]
+
+	@pytest.mark.asyncio
+	async def test_another_fingerprint_is_refused_before_pairing(self):
+		def responder(command, mid, args):
+			if command == "remote_build/preview_pair":
+				return [{"message_id": mid, "result": {"pin_sha256": "b" * 64}}]
+			return [{"message_id": mid, "result": {"status": "APPROVED"}}]
+
+		for host in ("10.100.29.241", "esphome-build.vome.io"):
+			dash = _FakeWsDashboard(responder=responder)
+			client = _client(_session_for_ws(dash), esphome_url="http://esp:6052")
+			status, _body, error = await client.execute("POST", "/vome-remote-build", {
+				"hostname": host, "port": 16100, "pairing_key": "VZ78-BZJH-5B5B-7MCQ",
+				"pin_sha256": "a" * 64}, "esphome")
+			assert status == 0 and "fingerprint does not match" in error, host
+			assert [frame["command"] for frame in dash.sent] == ["remote_build/preview_pair"]
+
+	@pytest.mark.asyncio
+	async def test_a_fingerprint_does_not_open_loopback_names_or_a_bad_pin(self):
+		session, _ = _mock_session_with_response()
+		client = _client(session, esphome_url="http://esp:6052")
+		payload = {"port": 16100, "pairing_key": "8MC5-KAXV-NN6N-PWAA", "pin_sha256": "a" * 64}
+		for host in ("localhost", "box.local", "127.0.0.1", "169.254.1.1", "10.0.0.300"):
+			status, _body, error = await client.execute(
+				"POST", "/vome-remote-build", {**payload, "hostname": host}, "esphome")
+			assert status == 0 and "public" in error, host
+		status, _body, error = await client.execute("POST", "/vome-remote-build", {
+			**payload, "hostname": "10.0.0.2", "pin_sha256": "abc"}, "esphome")
+		assert status == 0 and "SHA-256" in error
+		session.ws_connect.assert_not_called()
+
+	@pytest.mark.asyncio
 	async def test_remote_build_refuses_a_junk_key_and_privileged_port(self):
 		session, _ = _mock_session_with_response()
 		client = _client(session, esphome_url="http://esp:6052")

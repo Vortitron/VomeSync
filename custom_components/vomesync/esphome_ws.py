@@ -187,6 +187,12 @@ async def _emit_exit(
 	await emit({"event": "exit", "code": code})
 
 
+def normalize_pin(pin: str) -> str:
+	"""A SHA-256 fingerprint as bare lowercase hex (Device Builder prints it
+	spaced in pairs)."""
+	return re.sub(r"[^0-9a-f]", "", str(pin or "").lower())
+
+
 class EsphomeWsError(Exception):
 	"""The dashboard refused a command, or its ``/ws`` API is unreachable."""
 
@@ -453,11 +459,15 @@ class EsphomeWsSession:
 		port: int,
 		pairing_key: str,
 		timeout: float,
+		expected_pin: Optional[str] = None,
 	) -> dict[str, Any]:
 		"""Pair this dashboard with a headless ``--remote-build-only`` receiver.
 
 		The dashboard (on the house) dials ``hostname:port`` itself. We only
 		drive the Device Builder ``remote_build/*`` commands over local ``/ws``.
+		With ``expected_pin`` (the fingerprint the box printed when Vome
+		started it), a receiver with any other fingerprint is refused before
+		anything is sent to it.
 		"""
 		preview = await self.call(
 			"remote_build/preview_pair",
@@ -470,6 +480,11 @@ class EsphomeWsSession:
 				"2026.6 or newer is required for remote compile."
 			)
 		pin = str(preview["pin_sha256"])
+		if expected_pin and normalize_pin(pin) != normalize_pin(expected_pin):
+			raise EsphomeWsError(
+				f"The build server at {hostname}:{port} is not the one Vome started "
+				"(its fingerprint does not match), so this home was not paired with it."
+			)
 		result = await self.call(
 			"remote_build/request_pair",
 			{
