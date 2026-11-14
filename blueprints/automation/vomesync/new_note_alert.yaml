@@ -3,8 +3,8 @@ blueprint:
   description: >-
     Runs your actions when a VomeSync switch gets a new note: a switch you
     own, or a public one you subscribe to (such as the Hancocks IT daily
-    briefing). The note is the text the change came with; a publisher can also
-    send a headline, summary and link in its params.
+    briefing). The note is the text the change came with (a link in it becomes `url`);
+    a publisher can also send a headline, summary and link in its params.
 
 
     Your actions can use these variables: `headline`, `summary`, `url`,
@@ -63,17 +63,18 @@ variables:
   when_turned_on: !input when_turned_on
   note: "{{ state_attr(switch_entity, 'last_note') or '' }}"
   params: "{{ state_attr(switch_entity, 'last_params') or {} }}"
-  lines: "{{ note.split('\n') }}"
+  # A link anywhere in the note (the server keeps a note on one line).
+  note_links: "{{ note | regex_findall('https?://[^\\s]+') }}"
+  note_text: "{{ (note | regex_replace('https?://[^\\s]+', '')) | trim }}"
   switch_name: >-
     {{ state_attr(switch_entity, 'name') or state_attr(switch_entity, 'friendly_name')
        or switch_entity }}
   headline: >-
-    {{ params.get('headline') or (lines[0] if lines[0] else switch_name ~ ' turned on') }}
+    {{ params.get('headline') or note_text or (switch_name ~ ' turned on') }}
   summary: "{{ params.get('summary') or '' }}"
   url: >-
-    {{ params.get('url')
-       or (lines[-1] if lines[-1].startswith('https://') or lines[-1].startswith('http://')
-           else (state_attr(switch_entity, 'link') or '')) }}
+    {{ params.get('url') or (note_links | last if note_links else '')
+       or state_attr(switch_entity, 'link') or '' }}
 
 conditions:
   # Not on Home Assistant starting or the switch coming back: its attributes
