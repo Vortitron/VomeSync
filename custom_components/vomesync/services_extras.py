@@ -268,6 +268,9 @@ def async_register_extras_services(hass: HomeAssistant) -> None:
 			"ready": bool(result.get("ready")),
 			"requirements_due": _json_safe(result.get("requirementsDue") or []),
 		}
+		if "invited" in result:
+			# Card payments through Vome are invite-only; False explains a refusal.
+			answer["invited"] = bool(result["invited"])
 		if result.get("dashboardUrl"):
 			answer["dashboard_url"] = result["dashboardUrl"]
 		return answer

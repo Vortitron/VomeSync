@@ -755,6 +755,9 @@ async def test_reading_actions_answer_with_the_server_data(hass):
 	assert (await handlers["reward_claims"](_call(entity_id=["switch.lamp"])))["claims"] == [{"id": "c1"}]
 	assert (await handlers["my_rewards"](_call()))["totals"] == {"sek": 400}
 
+	coordinator.get_connect_status = AsyncMock(return_value={"connected": False, "ready": False, "invited": False})
+	assert (await handlers["payments_status"](_call()))["invited"] is False
+
 
 def test_response_types(hass):
 	from homeassistant.core import SupportsResponse
