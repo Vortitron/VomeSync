@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.83 — 14 November 2026
+
+**Forgetting a switch sticks.** Removing a switch you subscribed to, when it
+no longer exists on Vome, took it away until Home Assistant next restarted,
+and then it came back and went on asking Vome about it. It is now removed
+for good.
+
+Bundles the Vome integration 0.9.67.
+
 ## 0.3.82 — 13 November 2026
 
 **Firmware for a Vome-hosted home can build on Vome's build server.** If your

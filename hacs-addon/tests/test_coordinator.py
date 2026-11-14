@@ -226,6 +226,11 @@ async def test_coordinator_forget_switch_forgets_a_dead_subscription(hass, confi
 	mock_api.delete_switch.assert_not_called()
 	updated_options = hass.config_entries.async_update_entry.call_args[1]["options"]
 	assert "uid-dead" not in updated_options["imported_switches"]
+	# Not by changing the entry's own options in place: Home Assistant would
+	# then see no change and never save, and the switch came back at the next
+	# restart (GamlaBio, 14 Nov 2026). The update is mocked, so the entry
+	# must still hold it here.
+	assert "uid-dead" in config_entry.options["imported_switches"]
 
 
 @pytest.mark.asyncio

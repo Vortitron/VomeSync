@@ -1297,7 +1297,11 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		self.entity_names.pop(uid, None)
 
 		options = dict(self.config_entry.options or {})
-		imported_switches = options.get("imported_switches", {})
+		# A copy of the nested dict too: deleting from the one the entry holds
+		# changed its options in place, so the update below saw nothing new and
+		# never saved -- the switch came back at the next restart (GamlaBio,
+		# "Čuovga", 14 Nov 2026).
+		imported_switches = dict(options.get("imported_switches") or {})
 		if uid in imported_switches:
 			del imported_switches[uid]
 			options["imported_switches"] = imported_switches
