@@ -40,6 +40,11 @@ sidebar. No account is needed to start.
 - **Standby sync** (early): keeps a second Home Assistant in step with this
   one, ready to take over if this one fails (the **Vome CHAP** app).
 - **Switches**: share a switch with other homes, or follow one of theirs.
+  A change can carry a note, so a switch can bring news: the
+  [new-note blueprint](blueprints/automation/vomesync/new_note_alert.yaml)
+  runs your actions (a push to your phone, say) when a switch you own or
+  follow gets one.
+  [![Open your Home Assistant instance and show the blueprint import dialog.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FVortitron%2FVomeSync%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fvomesync%2Fnew_note_alert.yaml)
 
 Linking the app to a [vome.io](https://vome.io) account also adds off-site
 backups, a friendly address, and help that can see what is wrong without

@@ -1,0 +1,90 @@
+blueprint:
+  name: "VomeSync: alert on a new note"
+  description: >-
+    Runs your actions when a VomeSync switch gets a new note: a switch you
+    own, or a public one you subscribe to (such as the Hancocks IT daily
+    briefing). The note is the text the change came with; a publisher can also
+    send a headline, summary and link in its params.
+
+
+    Your actions can use these variables: `headline`, `summary`, `url`,
+    `note` (the whole note), `params` (the change's params) and `switch_name`.
+    For example a push to your phone with `message: "{{ headline }}"` and
+    `clickAction: "{{ url }}"`.
+
+
+    It fires when the note changes, so the same note twice in a row alerts
+    once. Optionally it also fires when the switch turns on with no note
+    (servers before notes, or a publisher that sends none).
+  domain: automation
+  author: Vome
+  source_url: https://github.com/Vortitron/VomeSync/blob/main/blueprints/automation/vomesync/new_note_alert.yaml
+  homeassistant:
+    min_version: "2025.6.0"
+  input:
+    switch:
+      name: VomeSync switch
+      description: The switch to watch (Vome integration, owned or subscribed).
+      selector:
+        entity:
+          filter:
+            - integration: vomesync
+              domain: switch
+    when_turned_on:
+      name: Also when it turns on without a note
+      description: Alert when the switch turns on and the change has no note.
+      default: true
+      selector:
+        boolean: {}
+    actions:
+      name: Actions
+      description: >-
+        What to do, e.g. a notification. Variables: headline, summary, url,
+        note, params, switch_name.
+      selector:
+        action: {}
+
+mode: parallel
+max: 5
+
+triggers:
+  - trigger: state
+    entity_id: !input switch
+    attribute: last_note
+    id: note
+  - trigger: state
+    entity_id: !input switch
+    from: "off"
+    to: "on"
+    id: turned_on
+
+variables:
+  switch_entity: !input switch
+  when_turned_on: !input when_turned_on
+  note: "{{ state_attr(switch_entity, 'last_note') or '' }}"
+  params: "{{ state_attr(switch_entity, 'last_params') or {} }}"
+  lines: "{{ note.split('\n') }}"
+  switch_name: >-
+    {{ state_attr(switch_entity, 'name') or state_attr(switch_entity, 'friendly_name')
+       or switch_entity }}
+  headline: >-
+    {{ params.get('headline') or (lines[0] if lines[0] else switch_name ~ ' turned on') }}
+  summary: "{{ params.get('summary') or '' }}"
+  url: >-
+    {{ params.get('url')
+       or (lines[-1] if lines[-1].startswith('https://') or lines[-1].startswith('http://')
+           else (state_attr(switch_entity, 'link') or '')) }}
+
+conditions:
+  # Not on Home Assistant starting or the switch coming back: its attributes
+  # reappear then, which looks like a new note.
+  - condition: template
+    value_template: >-
+      {{ trigger.from_state is not none
+         and trigger.from_state.state not in ['unavailable', 'unknown'] }}
+  - condition: template
+    value_template: >-
+      {{ (trigger.id == 'note' and note != '')
+         or (trigger.id == 'turned_on' and note == '' and when_turned_on) }}
+
+actions: !input actions
