@@ -107,6 +107,16 @@ def test_owner_actions_sign_the_plain_owner_shape(builder, action):
 	_verify(pub, req["sigOwner"], {"v": 2, "action": action, "ownerPubKey": pub, "ts": 7, "nonce": "o" * 12})
 
 
+def test_connect_onboard_signs_country_and_email_only_when_given():
+	pub = crypto.owner_pubkey_b64url(SEED)
+	req = crypto.build_v2_connect_onboard_request(SEED, ts=7, nonce="o" * 12, country="SE", email="owner@example.com")
+	assert req["country"] == "SE" and req["email"] == "owner@example.com"
+	_verify(pub, req["sigOwner"], {
+		"v": 2, "action": "connect_onboard", "ownerPubKey": pub, "ts": 7, "nonce": "o" * 12,
+		"country": "SE", "email": "owner@example.com",
+	})
+
+
 def test_update_switch_signs_exactly_the_extras_sent():
 	pub = crypto.owner_pubkey_b64url(SEED)
 	updates = {"commerce": {"toggleMode": "public"}, "rotateWebhookSecret": True}
@@ -718,8 +728,9 @@ async def test_connect_payments_notifies_with_the_link(hass):
 	coordinator.start_connect_onboarding = AsyncMock(return_value={"url": "https://connect.stripe.com/setup/x"})
 	handlers, _ = _handlers(hass, coordinator)
 	with patch("custom_components.vomesync.services_extras.persistent_notification.async_create") as notify:
-		result = await handlers["connect_payments"](_call())
+		result = await handlers["connect_payments"](_call(country="se", email=" owner@example.com "))
 	assert result == {"url": "https://connect.stripe.com/setup/x"}
+	coordinator.start_connect_onboarding.assert_awaited_once_with(country="SE", email="owner@example.com")
 	assert "https://connect.stripe.com/setup/x" in notify.call_args.args[1]
 
 	coordinator.start_connect_onboarding = AsyncMock(side_effect=VomeSyncAPIError("Payments are not enabled"))

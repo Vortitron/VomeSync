@@ -921,8 +921,24 @@ connect_payments:
   description: >-
     Start or carry on setting up your payout account with Stripe, so visitors
     can pay to change your switches or tip you. Returns the link and shows it
-    in a notification. Administrators only.
+    in a notification. The first time, Stripe needs your country and an email
+    address; they go to Stripe and Vome does not keep the email.
+    Administrators only.
   fields:
+    country:
+      name: Country
+      description: Two-letter code of the country your bank account is in, e.g. SE or GB. Needed the first time only.
+      required: false
+      example: SE
+      selector:
+        text:
+    email:
+      name: Email
+      description: Where Stripe can write to you about your payouts. Needed the first time only.
+      required: false
+      selector:
+        text:
+          type: email
     entry_id:
       name: Vome integration
       description: Which Vome config entry to use (only needed if you have more than one).

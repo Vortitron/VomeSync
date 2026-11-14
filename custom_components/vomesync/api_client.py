@@ -519,11 +519,13 @@ class VomeSyncAPIClient:
 		payload = build_v2_billing_portal_request(self.crypto_seed)
 		return await self._make_request("POST", API_V2_OWNER_BILLING_PORTAL, payload, require_auth=False)
 
-	async def start_connect_onboarding(self) -> Dict[str, Any]:
+	async def start_connect_onboarding(
+		self, country: Optional[str] = None, email: Optional[str] = None
+	) -> Dict[str, Any]:
 		"""Start or resume Stripe Connect onboarding; returns ``{url}``."""
 		if not self.crypto_enabled:
 			raise VomeSyncAPIError("Crypto mode required")
-		payload = build_v2_connect_onboard_request(self.crypto_seed)
+		payload = build_v2_connect_onboard_request(self.crypto_seed, country=country, email=email)
 		return await self._make_request("POST", API_V2_OWNER_CONNECT, payload, require_auth=False)
 
 	async def get_connect_status(self) -> Dict[str, Any]:

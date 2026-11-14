@@ -241,7 +241,9 @@ def async_register_extras_services(hass: HomeAssistant) -> None:
 
 	async def _connect_payments(call: ServiceCall) -> ServiceResponse:
 		coordinator = _coordinator_for_entry(hass, call.data.get("entry_id"))
-		result = await coordinator.start_connect_onboarding()
+		country = str(call.data.get("country") or "").strip().upper() or None
+		email = str(call.data.get("email") or "").strip() or None
+		result = await coordinator.start_connect_onboarding(country=country, email=email)
 		url = result.get("url") if isinstance(result, dict) else None
 		if not url:
 			raise HomeAssistantError("Vome did not return an onboarding link")
@@ -332,7 +334,11 @@ def async_register_extras_services(hass: HomeAssistant) -> None:
 	)
 	async_register_admin(
 		hass, SERVICE_CONNECT_PAYMENTS, _errors(_connect_payments),
-		schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Optional("country"): vol.All(cv.string, vol.Match(r"^[A-Za-z]{2}$")),
+			vol.Optional("email"): vol.All(cv.string, vol.Length(max=254)),
+		}),
 		supports_response=SupportsResponse.OPTIONAL,
 	)
 	async_register_admin(
