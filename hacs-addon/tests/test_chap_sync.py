@@ -2395,6 +2395,10 @@ class TestMaybeSendLogs:
 
 	ASK = {"id": "logs-1", "since": T0 - 1800, "until": T0 + 1800, "addons": ["core_mosquitto"]}
 
+	def send(self, portal, info, state, path):
+		"""Run in place: the threading itself is TestLogsInTheBackground's."""
+		return cs.maybe_send_logs(portal, info, state, path, self.fetch, start=lambda job: job() or True)
+
 	@staticmethod
 	def fetch(path, rng):
 		if path == "/host/logs":
@@ -2405,7 +2409,7 @@ class TestMaybeSendLogs:
 	def test_sent_once_whatever_the_role(self, tmp_path, role):
 		portal, state, path = self.P(), {}, tmp_path / "s.json"
 		info = {"role": role, "send_logs": self.ASK}
-		note = cs.maybe_send_logs(portal, info, state, path, self.fetch)
+		note = self.send(portal, info, state, path)
 		assert note.startswith("sent logs to Vome (logs-1: 3 source(s)") and "could not read host" in note
 		sent = portal.sent[0]
 		assert sent["id"] == "logs-1" and (sent["since"], sent["until"]) == (T0 - 1800, T0 + 1800)
@@ -2413,36 +2417,36 @@ class TestMaybeSendLogs:
 		assert "from /addons/self/logs" in sent["sources"]["chap"] and "yesterday" not in sent["sources"]["chap"]
 		assert sent["errors"] == {"host": "403 forbidden"}
 		assert cs.load_json(path)["send_logs_done"] == "logs-1"
-		assert cs.maybe_send_logs(portal, info, state, path, self.fetch) is None
+		assert self.send(portal, info, state, path) is None
 		assert len(portal.sent) == 1
 
 	def test_nothing_asked_nothing_sent(self, tmp_path):
 		portal = self.P()
 		for info in ({}, {"send_logs": None}, {"send_logs": {"id": ""}}, {"send_logs": "x"}):
-			assert cs.maybe_send_logs(portal, info, {}, tmp_path / "s.json", self.fetch) is None
+			assert self.send(portal, info, {}, tmp_path / "s.json") is None
 		assert portal.sent == []
 
 	def test_a_new_id_is_a_new_ask(self, tmp_path):
 		portal, state = self.P(), {}
-		cs.maybe_send_logs(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json", self.fetch)
-		cs.maybe_send_logs(portal, {"send_logs": dict(self.ASK, id="logs-2")}, state, tmp_path / "s.json", self.fetch)
+		self.send(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json")
+		self.send(portal, {"send_logs": dict(self.ASK, id="logs-2")}, state, tmp_path / "s.json")
 		assert [s["id"] for s in portal.sent] == ["logs-1", "logs-2"]
 
 	@pytest.mark.parametrize("status, word", [(409, "no longer wants"), (413, "too big")])
 	def test_unknown_or_too_big_is_not_retried(self, tmp_path, status, word):
 		portal, state = self.P(status), {}
-		assert word in cs.maybe_send_logs(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json", self.fetch)
+		assert word in self.send(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json")
 		assert state["send_logs_done"] == "logs-1"
-		assert cs.maybe_send_logs(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json", self.fetch) is None
+		assert self.send(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json") is None
 		assert len(portal.sent) == 1
 
 	def test_other_failures_are_retried_three_times_in_all(self, tmp_path):
 		portal, state, path = self.P(500, 0, 502), {}, tmp_path / "s.json"
 		info = {"send_logs": self.ASK}
-		assert cs.maybe_send_logs(portal, info, state, path, self.fetch).endswith("will retry")
-		assert cs.maybe_send_logs(portal, info, state, path, self.fetch).endswith("will retry")
-		assert "gave up after 3 tries" in cs.maybe_send_logs(portal, info, state, path, self.fetch)
-		assert cs.maybe_send_logs(portal, info, state, path, self.fetch) is None
+		assert self.send(portal, info, state, path).endswith("will retry")
+		assert self.send(portal, info, state, path).endswith("will retry")
+		assert "gave up after 3 tries" in self.send(portal, info, state, path)
+		assert self.send(portal, info, state, path) is None
 		assert len(portal.sent) == 3 and cs.load_json(path)["send_logs_done"] == "logs-1"
 
 	def test_a_try_that_never_finished_still_counts(self, tmp_path):
@@ -2450,14 +2454,14 @@ class TestMaybeSendLogs:
 		have the same ask tried forever."""
 		state = {"send_logs_tries": {"id": "logs-1", "count": 3}}
 		portal = self.P()
-		assert "gave up" in cs.maybe_send_logs(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json", self.fetch)
+		assert "gave up" in self.send(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json")
 		assert portal.sent == []
 
 	def test_an_unusable_window_is_dropped(self, tmp_path):
 		portal, state = self.P(), {}
 		for ask in ({"id": "x", "since": "soon"}, {"id": "y", "since": 10, "until": 5}):
-			assert "without a usable time window" in cs.maybe_send_logs(
-				portal, {"send_logs": ask}, state, tmp_path / "s.json", self.fetch)
+			assert "without a usable time window" in self.send(
+				portal, {"send_logs": ask}, state, tmp_path / "s.json")
 		assert portal.sent == []
 
 
@@ -2490,22 +2494,88 @@ class TestPortalSendLogs:
 
 
 class TestRunOnceSendsLogs:
-	def test_a_stopped_standby_sends_its_logs(self, tmp_path, monkeypatch):
+	@pytest.fixture(autouse=True)
+	def no_job_left_running(self):
+		yield
+		if cs._logs_thread is not None:
+			cs._logs_thread.join(10)
+
+	def _standby(self, tmp_path, monkeypatch, fetch):
 		standby = make_config(tmp_path / "standby")
 		monkeypatch.setattr(cs, "_supervisor_call", lambda *a, **k: (0, None))
-		monkeypatch.setattr(cs, "_supervisor_text", lambda path, headers=None, **k: (
-			200, _verbose(T0, f"from {path}") + "\n"))
+		monkeypatch.setattr(cs, "_supervisor_text", lambda path, headers=None, **k: fetch(path))
 
 		class P(FakePortal):
+			sent = []
+
 			def send_logs(self, body):
-				self.logs = json.loads(_gzip.decompress(body))
+				self.sent.append(json.loads(_gzip.decompress(body)))
 				return 200
 
 		portal = P({"role": "standby", "latest": {}, "send_logs": TestMaybeSendLogs.ASK})
-		outcome, _ = cs.run_once(portal, standby, tmp_path, core_stopped=lambda: True,
-		                         local_version=lambda: "2026.9.1")
-		assert outcome == "standby: nothing to apply yet"
-		assert sorted(portal.logs["sources"]) == ["addon:core_mosquitto", "chap", "host", "supervisor"]
+		run = lambda: cs.run_once(portal, standby, tmp_path, core_stopped=lambda: True,  # noqa: E731
+		                          local_version=lambda: "2026.9.1")
+		return portal, run
+
+	def test_a_stopped_standby_sends_its_logs(self, tmp_path, monkeypatch):
+		portal, run = self._standby(tmp_path, monkeypatch, lambda path: (200, _verbose(T0, f"from {path}") + "\n"))
+		assert run()[0] == "standby: nothing to apply yet"
+		cs._logs_thread.join(10)
+		assert sorted(portal.sent[0]["sources"]) == ["addon:core_mosquitto", "chap", "host", "supervisor"]
+		run()  # the next pass takes the outcome in
+		assert cs.load_json(tmp_path / cs.STATE_FILE)["send_logs_done"] == "logs-1"
+		assert not (tmp_path / cs.LOGS_RESULT_FILE).exists()
+		run()
+		assert len(portal.sent) == 1
+
+	def test_a_slow_supervisor_never_holds_the_poll_loop(self, tmp_path, monkeypatch):
+		"""The loop is CHAP's heartbeat: a standby quiet for ~50 s looks gone
+		to Vome, and the loop carries takeover and switch-back."""
+		import threading as _th
+		import time as _t
+		release, reads = _th.Event(), []
+
+		def slow(path):
+			reads.append(path)
+			release.wait(30)
+			return 200, _verbose(T0, f"from {path}") + "\n"
+
+		portal, run = self._standby(tmp_path, monkeypatch, slow)
+		try:
+			began = _t.monotonic()
+			assert run()[0] == "standby: nothing to apply yet"
+			assert run()[0] == "standby: nothing to apply yet"  # a second pass, job in flight
+			assert _t.monotonic() - began < 5
+			job = cs._logs_thread
+			assert job.is_alive() and job.daemon
+			for _ in range(100):
+				if reads:
+					break
+				_t.sleep(0.01)
+			assert reads == ["/addons/self/logs"]  # one job, still on its first read
+			state = cs.load_json(tmp_path / cs.STATE_FILE)
+			assert state["send_logs_tries"] == {"id": "logs-1", "count": 1}
+			assert "send_logs_done" not in state
+		finally:
+			release.set()
+		job.join(10)
+		assert cs._logs_thread is job and len(portal.sent) == 1
+		run()
+		state = cs.load_json(tmp_path / cs.STATE_FILE)
+		assert state["send_logs_done"] == "logs-1" and "send_logs_tries" not in state
+		assert len(reads) == 4 and len(portal.sent) == 1
+
+	def test_a_job_that_dies_is_tried_again_and_counted(self, tmp_path, monkeypatch):
+		def broken(path):
+			raise RuntimeError("Supervisor went away")
+		portal, run = self._standby(tmp_path, monkeypatch, broken)
+		monkeypatch.setattr(cs, "collect_logs", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+		for n in (1, 2, 3):
+			run()
+			cs._logs_thread.join(10)
+		run()
+		state = cs.load_json(tmp_path / cs.STATE_FILE)
+		assert state["send_logs_done"] == "logs-1" and portal.sent == []
 
 	def test_a_failure_never_stops_the_pass(self, tmp_path, monkeypatch):
 		standby = make_config(tmp_path / "standby")
