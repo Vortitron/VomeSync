@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.84 — 15 November 2026
+
+**Change a switch's details from an automation, a script or an agent.** The
+new action `vomesync.update_switch` changes the name, description, location,
+category, link or pictures of a switch you own, or makes it public or
+private. Before, only the integration's options could, so an agent working
+on your home through the Vome MCP could make a switch but never change it.
+
+**Making a switch public no longer asks for a CAPTCHA that nothing could
+give.** The options refused to make a switch public without a CAPTCHA token,
+though Vome doesn't ask for one and nowhere handed one out. Vome now decides:
+the token goes if you give one, and you're told one is needed only when Vome
+says so. A home whose owner pays for Vome gets a pass from Vome instead, which
+the Vome MCP fetches by itself.
+
+Bundles the Vome integration 0.9.68.
+
 ## 0.3.83 — 14 November 2026
 
 **Forgetting a switch sticks.** Removing a switch you subscribed to, when it

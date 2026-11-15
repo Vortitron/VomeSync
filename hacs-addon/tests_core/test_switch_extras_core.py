@@ -52,6 +52,7 @@ def _entity_id(hass):
 @pytest.mark.parametrize("service,data,response", [
 	("set_state", {"state": "on", "note": "hi"}, False),
 	("set_properties", {"properties": {"wattage": 40}}, False),
+	("update_switch", {"name": "Mine now"}, False),
 	("set_reward", {"clear": True}, False),
 	("set_commerce", {"toggle_mode": "public"}, True),
 	("reward_claims", {}, True),
@@ -94,7 +95,7 @@ async def test_an_administrator_sets_a_note_on_the_registry_entity(hass, owned, 
 async def test_the_actions_are_described(hass, owned):
 	from homeassistant.helpers.service import async_get_all_descriptions
 	descriptions = (await async_get_all_descriptions(hass))[DOMAIN]
-	for name in ("set_state", "set_properties", "set_commerce", "set_reward",
+	for name in ("update_switch", "set_state", "set_properties", "set_commerce", "set_reward",
 			"connect_payments", "payments_status", "reward_claims", "my_rewards"):
 		assert descriptions[name]["fields"] is not None, name
 	assert "on" in descriptions["set_reward"]["fields"]

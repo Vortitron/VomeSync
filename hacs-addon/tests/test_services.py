@@ -11,6 +11,7 @@ from custom_components.vomesync import _register_services, _get_coordinator_for_
 EXPECTED_SERVICES = frozenset({
 	"create_switch",
 	"subscribe_switch",
+	"update_switch",
 	"delete_switch",
 	"list_switches",
 	"forget_switch",

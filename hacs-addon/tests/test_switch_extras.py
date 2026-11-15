@@ -19,6 +19,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.vomesync import crypto, switch_extras
 from custom_components.vomesync.api_client import VomeSyncAPIClient, VomeSyncAPIError
+import voluptuous as vol
 from custom_components.vomesync.const import DOMAIN, EVENT_STATE_CHANGED
 from custom_components.vomesync.coordinator import VomeSyncCoordinator
 from custom_components.vomesync.switch_extras import ExtrasError
@@ -723,6 +724,69 @@ async def test_set_properties_action(hass):
 
 
 @pytest.mark.asyncio
+async def test_update_switch_action_changes_only_what_is_given(hass):
+	coordinator = _mock_coordinator(data={"is_owner": True, "name": "Lamp", "publicize": False})
+	coordinator.update_switch_metadata = AsyncMock(return_value={
+		"name": "Desk lamp", "link": "https://example.org/", "publicize": True,
+		"is_owner": True, "webhookSecret": "never-in-the-answer",
+	})
+	handlers, kwargs = _handlers(hass, coordinator)
+	_point_at(hass)
+
+	data = kwargs["update_switch"]["schema"]({
+		"entity_id": "switch.lamp", "name": "Desk lamp", "link": "https://example.org/",
+		"publicize": True, "icon_url": "https://example.org/i.png", "captcha_token": "vsp1.pass",
+	})
+	result = await handlers["update_switch"](_call(**data))
+	coordinator.update_switch_metadata.assert_awaited_once_with(
+		"vs_a",
+		{"name": "Desk lamp", "link": "https://example.org/", "iconUrl": "https://example.org/i.png", "publicize": True},
+		captcha_token="vsp1.pass",
+	)
+	assert result == {"uid": "vs_a", "name": "Desk lamp", "link": "https://example.org/", "publicize": True}
+
+	with pytest.raises(HomeAssistantError, match="at least one"):
+		await handlers["update_switch"](_call(entity_id=["switch.lamp"]))
+	with pytest.raises(vol.Invalid):
+		kwargs["update_switch"]["schema"]({"entity_id": "switch.lamp", "category": "Gossip"})
+
+
+@pytest.mark.asyncio
+async def test_update_switch_asks_no_captcha_for_a_switch_already_public(hass):
+	coordinator = _mock_coordinator(data={"is_owner": True, "name": "Briefing", "publicize": True})
+	coordinator.update_switch_metadata = AsyncMock(return_value={"name": "Briefing", "publicize": True})
+	handlers, _ = _handlers(hass, coordinator)
+	_point_at(hass)
+
+	result = await handlers["update_switch"](_call(entity_id=["switch.lamp"], publicize=True))
+	coordinator.update_switch_metadata.assert_not_awaited()
+	assert result["publicize"] is True
+
+	await handlers["update_switch"](_call(entity_id=["switch.lamp"], publicize=True, name="Briefing 2"))
+	assert coordinator.update_switch_metadata.await_args.args[1] == {"name": "Briefing 2"}
+
+
+@pytest.mark.asyncio
+async def test_update_switch_is_for_the_owner_and_says_why_vome_refused(hass):
+	watched = _mock_coordinator(owner=False)
+	handlers, _ = _handlers(hass, watched)
+	_point_at(hass, "vs_pub")
+	with pytest.raises(HomeAssistantError, match="owner"):
+		await handlers["update_switch"](_call(entity_id=["switch.pub"], name="Mine now"))
+
+	coordinator = _mock_coordinator()
+	coordinator.update_switch_metadata = AsyncMock(side_effect=VomeSyncAPIError("Captcha required"))
+	handlers, _ = _handlers(hass, coordinator)
+	_point_at(hass)
+	with pytest.raises(HomeAssistantError, match="Captcha required"):
+		await handlers["update_switch"](_call(entity_id=["switch.lamp"], publicize=True))
+
+	coordinator.update_switch_metadata = AsyncMock(return_value=None)
+	with pytest.raises(HomeAssistantError, match="did not change"):
+		await handlers["update_switch"](_call(entity_id=["switch.lamp"], name="X"))
+
+
+@pytest.mark.asyncio
 async def test_connect_payments_notifies_with_the_link(hass):
 	coordinator = _mock_coordinator()
 	coordinator.start_connect_onboarding = AsyncMock(return_value={"url": "https://connect.stripe.com/setup/x"})
@@ -767,6 +831,7 @@ def test_response_types(hass):
 		"set_properties": SupportsResponse.NONE,
 		"set_reward": SupportsResponse.NONE,
 		"set_commerce": SupportsResponse.OPTIONAL,
+		"update_switch": SupportsResponse.OPTIONAL,
 		"connect_payments": SupportsResponse.OPTIONAL,
 		"payments_status": SupportsResponse.ONLY,
 		"reward_claims": SupportsResponse.ONLY,
