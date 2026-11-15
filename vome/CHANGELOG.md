@@ -15,6 +15,11 @@ the token goes if you give one, and you're told one is needed only when Vome
 says so. A home whose owner pays for Vome gets a pass from Vome instead, which
 the Vome MCP fetches by itself.
 
+**Taking payments for a switch.** `vomesync.connect_payments` takes the
+country and email Stripe needs to open your payout account, and
+`vomesync.payments_status` says when card payments through Vome are still
+invite-only for your account.
+
 Bundles the Vome integration 0.9.68.
 
 ## 0.3.83 — 14 November 2026
