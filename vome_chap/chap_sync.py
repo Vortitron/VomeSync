@@ -33,7 +33,9 @@ Stdlib only: the add-on image is built without network access.
 """
 from __future__ import annotations
 
+import calendar
 import fnmatch
+import gzip
 import hashlib
 import ipaddress
 import io
@@ -75,6 +77,7 @@ API_APPLIED = "/api/sync/chap/config/applied"
 API_PAIR = "/api/sync/chap/config/pair"
 API_SEED = "/api/sync/chap/config/seed"
 API_ADDONS = "/api/sync/chap/config/addons"
+API_LOGS = "/api/sync/chap/logs"
 
 # This add-on's own version, baked in at build (Dockerfile). Sent on every
 # request, so Vome can tell an owner that the fix is to update Vome CHAP: the
@@ -1513,6 +1516,297 @@ def maybe_report_addons(portal: "Portal", state: dict, state_path: Path, now: fl
 	return f"listed {len(listed)} add-on(s) for Vome"
 
 
+# ── Logs for Vome ─────────────────────────────────────────────────────────
+#
+# GamlaBio, 14 Nov 2026: the house standby lost the hosted main for about
+# seven minutes, the home moved to it and back, and nobody could say why:
+# its logs were only on the box. Vome now asks an install for its logs
+# (``send_logs`` in the role reply) for the hour around every switch, and
+# when the owner presses "Fetch logs". Asked of whichever side, whatever
+# its role: a stopped standby is the case that needs it most.
+#
+# Only these: this app's own log, the Supervisor's, the host's (the
+# journal of the operating system) and the add-ons Vome names. Never Home
+# Assistant's own log, and never a file from the configuration.
+
+# The Supervisor's log endpoints read systemd-journal-gatewayd
+# (supervisor/api/host.py advanced_logs_handler, which passes a Range header
+# through as given). ``Accept: text/x-log`` picks the verbose format, which
+# starts every entry with its journal time, ISO style with milliseconds and
+# (since Supervisor 2026.10.4) the offset (utils/systemd_journal.py):
+#   2026-11-14 10:23:45.123+01:00 GamlaBio addon_x_vome_chap[412]: ...
+LOG_ACCEPT = "text/x-log"
+LOG_TAIL_LINES = 3000
+LOG_TAIL_LINES_HOST = 5000
+LOG_READ_SECONDS = 20
+LOG_SEND_SECONDS = 60
+# The whole collection, however many add-ons: the poll loop waits for it.
+LOG_PASS_SECONDS = 150
+LOG_MARGIN_SECONDS = 300
+LOG_SOURCE_MAX = 2 * 1024 * 1024
+LOG_PAYLOAD_MAX = 6 * 1024 * 1024
+# A journal-gatewayd older than systemd 255 ignores a ``realtime=`` range
+# and streams the whole journal from its start: read no more than this.
+LOG_READ_MAX = 8 * 1024 * 1024
+LOG_SEND_ATTEMPTS = 3
+LOG_MAX_ADDONS = 40
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_LOG_TIME_RE = re.compile(
+	r"^\s*\[?(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:[.,](\d{1,9}))?"
+	r"(Z|[+-]\d{2}:?\d{2})?")
+
+
+def parse_log_time(line: str) -> Optional[float]:
+	"""The unix time a log line starts with, or None.
+
+	The verbose journal format: ``2026-11-14 10:23:45.123+01:00 host id[pid]:``
+	from Supervisor 2026.10.4 on, in UTC with no offset before 2026.10.3
+	(``2026-11-14 09:23:45.123 host id[pid]:``), so a time without an offset
+	is read as UTC. That also fits the Supervisor's own Python log, which is
+	what /supervisor/logs falls back to when the journal cannot be read.
+	(2026.10.3 alone gave local time without an offset: there the window is
+	off by the time zone.)
+	"""
+	m = _LOG_TIME_RE.match(_ANSI_RE.sub("", line[:80]))
+	if not m:
+		return None
+	year, month, day, hour, minute, second = (int(g) for g in m.groups()[:6])
+	try:
+		ts = calendar.timegm((year, month, day, hour, minute, second, 0, 0, 0))
+	except (ValueError, OverflowError):
+		return None
+	if not (1 <= month <= 12 and 1 <= day <= 31 and hour < 24 and minute < 60 and second < 62):
+		return None
+	if m.group(7):
+		ts += int(m.group(7)) / (10 ** len(m.group(7)))
+	zone = m.group(8)
+	if zone and zone != "Z":
+		sign = -1 if zone[0] == "-" else 1
+		digits = zone[1:].replace(":", "")
+		ts -= sign * (int(digits[:2]) * 3600 + int(digits[2:]) * 60)
+	return float(ts)
+
+
+def lines_in_window(text: str, since: float, until: float) -> tuple[str, bool]:
+	"""The lines of ``text`` from ``since`` to ``until``, and whether any line
+	had a time at all.
+
+	A line without a time (the rest of a traceback, a message over several
+	lines) goes with the timed line before it; lines before the first timed
+	one go with that one. Nothing timed at all: the text as it is, for the
+	caller to cut to its newest part.
+	"""
+	lines = text.splitlines()
+	times = [parse_log_time(line) for line in lines]
+	if not any(t is not None for t in times):
+		return text, False
+	first = next(t for t in times if t is not None)
+	keep = since <= first <= until
+	kept = []
+	for line, t in zip(lines, times):
+		if t is not None:
+			keep = since <= t <= until
+		if keep:
+			kept.append(line)
+	return ("\n".join(kept) + "\n") if kept else "", True
+
+
+def newest_part(text: str, limit: int) -> str:
+	"""At most ``limit`` bytes of ``text`` (UTF-8), the newest, from a whole line."""
+	raw = text.encode("utf-8")
+	if len(raw) <= limit:
+		return text
+	note = f"[... {len(raw) - limit} older bytes left out ...]\n"
+	cut = raw[len(raw) - max(0, limit - len(note.encode())):]
+	newline = cut.find(b"\n")
+	if 0 <= newline < len(cut) - 1:
+		cut = cut[newline + 1:]
+	return note + cut.decode("utf-8", errors="ignore")
+
+
+def _supervisor_text(path: str, headers: Optional[dict] = None, timeout: int = LOG_READ_SECONDS,
+                     limit: int = LOG_READ_MAX, opener=urllib.request.urlopen) -> tuple[int, str]:
+	"""GET a Supervisor endpoint that answers in text: (status, text).
+
+	The text is the body on success, the reason otherwise; status 0 when the
+	Supervisor did not answer (the reason says why). At most ``limit`` bytes.
+	"""
+	h = {"Authorization": f"Bearer {SUPERVISOR_TOKEN}"}
+	h.update(headers or {})
+	req = urllib.request.Request(SUPERVISOR.rstrip("/") + path, headers=h)
+	try:
+		with opener(req, timeout=timeout) as resp:
+			return resp.status, resp.read(limit).decode("utf-8", errors="replace")
+	except urllib.error.HTTPError as err:
+		try:
+			said = err.read(300).decode("utf-8", errors="replace")
+		except OSError:
+			said = ""
+		try:
+			said = supervisor_says(json.loads(said)) or said
+		except ValueError:
+			pass
+		reason = said.strip().splitlines()[0] if said.strip() else str(err.reason or "")
+		return err.code, f"{err.code} {reason}".strip()[:200]
+	except (urllib.error.URLError, OSError, ValueError) as exc:
+		reason = getattr(exc, "reason", None) or exc
+		return 0, f"no answer: {reason}"[:200]
+
+
+def read_log(path: str, since: float, until: float, lines: int,
+             fetch: Optional[Callable[[str, str], tuple[int, str]]] = None) -> tuple[Optional[str], str]:
+	"""One source's log for [since, until]: (text, "") or (None, why not).
+
+	First by time: ``Range: realtime=:<until>:-<n-1>:<n>`` asks journal-gatewayd
+	(systemd 255 and later, journal-gatewayd.c request_parse_range_time) for
+	the ``n`` entries up to ``until``. If that gives nothing in the window --
+	an older journal-gatewayd that ignores it, a Supervisor that refuses it --
+	then the newest ``n`` entries (``entries=:-<n-1>:<n>``, what the
+	Supervisor itself sends for ``?lines=n``).
+	"""
+	fetch = fetch or (lambda p, r: _supervisor_text(p, {"Accept": LOG_ACCEPT, "Range": r}))
+	lines = max(2, int(lines))
+	ranges = (f"realtime=:{int(until)}:-{lines - 1}:{lines}", f"entries=:-{lines - 1}:{lines}")
+	reason, found = "", None
+	for attempt, header in enumerate(ranges):
+		status, text = fetch(path, header)
+		if status != 200:
+			reason = text or f"HTTP {status}"
+			if status in (0, 401, 403, 404):
+				break  # the same answer either way, or a slow one twice
+			continue
+		text = _ANSI_RE.sub("", text)
+		window, timed = lines_in_window(text, since, until)
+		if window and timed:
+			return window, ""
+		if not timed:
+			# Nothing has a time: keep the newest lines, which only the
+			# second form is sure to give.
+			found = text
+			if attempt == len(ranges) - 1:
+				return text, ""
+		elif found is None:
+			found = ""  # read, and quiet in the window
+	return (found, "") if found is not None else (None, reason)
+
+
+def collect_logs(since: float, until: float, addons, fetch=None,
+                 clock: Callable[[], float] = time.monotonic) -> tuple[dict, dict]:
+	"""Every source's log for the window: (sources, errors). A source that
+	cannot be read is left out and says why in ``errors``."""
+	wanted = [("chap", "/addons/self/logs", LOG_TAIL_LINES),
+	          ("supervisor", "/supervisor/logs", LOG_TAIL_LINES),
+	          ("host", "/host/logs", LOG_TAIL_LINES_HOST)]
+	seen = set()
+	for slug in addons if isinstance(addons, list) else []:
+		if isinstance(slug, str) and _SLUG_RE.match(slug) and slug not in seen and slug != "self":
+			seen.add(slug)
+			wanted.append((f"addon:{slug}", f"/addons/{slug}/logs", LOG_TAIL_LINES))
+	wanted = wanted[:3 + LOG_MAX_ADDONS]
+	low, high = since - LOG_MARGIN_SECONDS, until + LOG_MARGIN_SECONDS
+	deadline = clock() + LOG_PASS_SECONDS
+	sources, errors = {}, {}
+	for name, path, lines in wanted:
+		if clock() > deadline:
+			errors[name] = "not read: out of time"
+			continue
+		try:
+			text, reason = read_log(path, low, high, lines, fetch)
+		except Exception as exc:  # noqa: BLE001 - one source never stops the rest
+			text, reason = None, f"failed: {exc}"[:200]
+		if text is None:
+			errors[name] = reason or "failed"
+		else:
+			sources[name] = newest_part(text, LOG_SOURCE_MAX)
+	return sources, errors
+
+
+def logs_body(request_id: str, since: int, until: int, sources: dict, errors: dict,
+              limit: int = LOG_PAYLOAD_MAX) -> bytes:
+	"""The JSON Vome takes, at most ``limit`` bytes: if the sources together
+	are too much, the biggest are cut (their oldest lines) until it fits."""
+	def encode(srcs: dict) -> bytes:
+		return json.dumps({"id": request_id, "since": since, "until": until,
+		                   "sources": srcs, "errors": errors}, ensure_ascii=False).encode("utf-8")
+
+	body = encode(sources)
+	for _ in range(8):
+		over = len(body) - limit
+		if over <= 0:
+			return body
+		sizes = sorted(len(v.encode("utf-8")) for v in sources.values())
+		budget = max(0, sum(sizes) - over - 4096 - sum(sizes) // 50)  # room for JSON escapes
+		# The largest come down to one common size; the small stay whole.
+		cap = budget
+		for n, size in enumerate(sizes):
+			share = budget // (len(sizes) - n)
+			if size > share:
+				cap = share
+				break
+			budget -= size
+		sources = {k: newest_part(v, cap) for k, v in sources.items()}
+		body = encode(sources)
+	return body if len(body) <= limit else encode({})
+
+
+def _log_request(ask) -> Optional[tuple[str, int, int, list]]:
+	if not isinstance(ask, dict) or not ask.get("id"):
+		return None
+	try:
+		since, until = int(ask.get("since")), int(ask.get("until"))
+	except (TypeError, ValueError):
+		since = until = None
+	addons = ask.get("addons") if isinstance(ask.get("addons"), list) else []
+	return str(ask["id"])[:100], since, until, addons
+
+
+def maybe_send_logs(portal: "Portal", info: dict, state: dict, state_path: Path,
+                    fetch=None, clock: Callable[[], float] = time.monotonic) -> Optional[str]:
+	"""Send Vome this install's logs when it asks, once per ask (``send_logs``).
+
+	Tried again on a later check-in if it could not be sent, at most
+	LOG_SEND_ATTEMPTS times; not if Vome no longer wants it (409) or it was
+	too big (413).
+	"""
+	ask = _log_request(info.get("send_logs"))
+	if ask is None:
+		return None
+	ask_id, since, until, addons = ask
+	if state.get("send_logs_done") == ask_id:
+		return None
+
+	def done(note: str) -> str:
+		state["send_logs_done"] = ask_id
+		state.pop("send_logs_tries", None)
+		save_json(state_path, state)
+		return note
+
+	if since is None or until is None or until < since:
+		return done(f"logs asked for ({ask_id}) without a usable time window; not sent")
+	tries = state.get("send_logs_tries") if isinstance(state.get("send_logs_tries"), dict) else {}
+	count = int(tries.get("count") or 0) if tries.get("id") == ask_id else 0
+	if count >= LOG_SEND_ATTEMPTS:
+		return done(f"gave up sending logs to Vome ({ask_id}) after {count} tries")
+	# Counted before trying, so a try that never finishes counts too.
+	state["send_logs_tries"] = {"id": ask_id, "count": count + 1}
+	save_json(state_path, state)
+	sources, errors = collect_logs(since, until, addons, fetch, clock)
+	body = logs_body(ask_id, since, until, sources, errors)
+	status = portal.send_logs(gzip.compress(body, compresslevel=6))
+	size = f"{len(body) / (1024 * 1024):.1f} MB"
+	if 200 <= status < 300:
+		failed = f"; could not read {', '.join(sorted(errors))}" if errors else ""
+		return done(f"sent logs to Vome ({ask_id}: {len(sources)} source(s), {size}){failed}")
+	if status == 409:
+		return done(f"Vome no longer wants the logs it asked for ({ask_id})")
+	if status == 413:
+		return done(f"Vome refused the logs as too big ({ask_id}, {size})")
+	if count + 1 >= LOG_SEND_ATTEMPTS:
+		return done(f"could not send logs to Vome ({ask_id}, HTTP {status}); gave up after {count + 1} tries")
+	return f"could not send logs to Vome ({ask_id}, HTTP {status}); will retry"
+
+
 def holdable(slugs) -> list:
 	"""The home's own add-ons: not ours, which carry no identity of the home."""
 	return sorted(s for s in slugs or [] if not s.endswith(("_vome", "_vome_chap")))
@@ -1892,6 +2186,19 @@ class Portal:
 			LOG.info("Could not list add-ons for Vome: %s", exc)
 			return False
 
+	def send_logs(self, body: bytes) -> int:
+		"""POST gzip-compressed logs (maybe_send_logs); the HTTP status, 0 if
+		Vome could not be reached."""
+		try:
+			with self._request("POST", API_LOGS, body=body, timeout=LOG_SEND_SECONDS, headers={
+				"Content-Type": "application/json", "Content-Encoding": "gzip"}) as resp:
+				return int(getattr(resp, "status", 200) or 200)
+		except urllib.error.HTTPError as exc:
+			return exc.code
+		except (urllib.error.URLError, OSError) as exc:
+			LOG.info("Could not send logs to Vome: %s", exc)
+			return 0
+
 	def upload(self, blob: bytes, meta: dict) -> dict:
 		with self._request("POST", API_SNAPSHOT, body=blob, timeout=300, headers={
 			"Content-Type": "application/gzip",
@@ -2167,6 +2474,13 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 	report_note = maybe_report_addons(portal, state, state_path, now, asked=bool(info.get("report_addons")))
 	if report_note:
 		LOG.info("%s", report_note)
+	# Whatever this install's role, and never at the poll loop's expense.
+	try:
+		logs_note = maybe_send_logs(portal, info, state, state_path)
+	except Exception as exc:  # noqa: BLE001
+		logs_note = f"could not send logs to Vome: {exc}"
+	if logs_note:
+		LOG.info("%s", logs_note)
 
 	if role == ROLE_ACTIVE:
 		seed_note = maybe_send_seed(portal, info, state, state_path, now, data_dir)
