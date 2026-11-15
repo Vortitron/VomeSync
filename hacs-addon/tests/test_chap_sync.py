@@ -2164,3 +2164,357 @@ class TestBesideAVomePair:
 		src = (ROOT / "vome_chap" / "chap_sync.py").read_text()
 		assert "local pairing stays off" not in src and "run_beside_vome(" in src.split("def main()")[1]
 
+
+
+# ── Logs for Vome (0.2.15) ────────────────────────────────────────────────
+#
+# GamlaBio, 14 Nov 2026: the house standby lost the hosted main for ~7
+# minutes, the home moved to it and back, and its logs were only on the box.
+
+import gzip as _gzip
+
+# 2026-11-14 10:00:00 UTC
+T0 = 1794650400
+
+
+def _verbose(ts, msg, zone="+00:00", host="GamlaBio", ident="addon_x_vome_chap[412]"):
+	import datetime as _dt
+	offset = _dt.timedelta(hours=int(zone[:3]), minutes=int(zone[0] + zone[4:]))
+	when = _dt.datetime.fromtimestamp(ts, _dt.timezone(offset))
+	return f"{when.isoformat(sep=' ', timespec='milliseconds')} {host} {ident}: {msg}"
+
+
+class TestLogLines:
+	def test_the_supervisors_verbose_format_is_read_with_its_offset(self):
+		"""utils/systemd_journal.py _format_timestamp: ISO, milliseconds, offset."""
+		assert cs.parse_log_time("2026-11-14 10:00:00.250+00:00 GamlaBio x[1]: hi") == T0 + 0.25
+		assert cs.parse_log_time("2026-11-14 11:00:00.000+01:00 GamlaBio x[1]: hi") == T0
+		assert cs.parse_log_time("2026-11-14 05:00:00.000-05:00 h x: hi") == T0
+		assert cs.parse_log_time("2026-11-14T10:00:00Z hi") == T0
+		assert cs.parse_log_time(_verbose(T0 + 7, "x", zone="+02:00")) == T0 + 7
+		# Before Supervisor 2026.10.3: UTC, the offset cut off.
+		assert cs.parse_log_time("2026-11-14 10:00:00.500 GamlaBio x[1]: hi") == T0 + 0.5
+		# A number after a time without an offset is not taken for one.
+		assert cs.parse_log_time("2026-11-14 10:00:00 -1234 apples") == T0
+
+	def test_the_supervisors_own_python_log_counts_as_utc(self):
+		"""What /supervisor/logs falls back to (docker logs), colours and all."""
+		line = "\x1b[32m2026-11-14 10:00:05.123 INFO (MainThread) [supervisor.api] ok\x1b[0m"
+		assert abs(cs.parse_log_time(line) - (T0 + 5.123)) < 1e-6
+
+	def test_lines_without_a_time_are_none(self):
+		for line in ("Traceback (most recent call last):", "[10:00:00] INFO: bashio", "", "2026-13-40 99:00:00 x"):
+			assert cs.parse_log_time(line) is None
+
+	def test_only_the_window_is_kept_with_each_lines_continuation(self):
+		text = "\n".join([
+			"orphan before anything",
+			_verbose(T0 - 1000, "too early"),
+			"  early traceback line",
+			_verbose(T0, "in window"),
+			"Traceback (most recent call last):",
+			'  File "x.py", line 1',
+			_verbose(T0 + 100, "still in"),
+			_verbose(T0 + 5000, "too late"),
+			"  late continuation",
+		])
+		kept, timed = cs.lines_in_window(text, T0 - 10, T0 + 200)
+		assert timed is True
+		assert kept.splitlines() == [
+			text.splitlines()[3], "Traceback (most recent call last):", '  File "x.py", line 1',
+			text.splitlines()[6]]
+
+	def test_nothing_timed_is_kept_whole(self):
+		assert cs.lines_in_window("a\nb\n", T0, T0 + 1) == ("a\nb\n", False)
+
+	def test_newest_part_keeps_whole_newest_lines_under_the_limit(self):
+		text = "".join(f"line {i:04d} " + "x" * 50 + "\n" for i in range(1000))
+		cut = cs.newest_part(text, 5000)
+		assert len(cut.encode()) <= 5000
+		assert cut.endswith("line 0999 " + "x" * 50 + "\n")
+		body = cut.splitlines()
+		assert body[0].startswith("[... ") and body[1].startswith("line ")
+		assert cs.newest_part("short\n", 5000) == "short\n"
+
+
+class TestReadLog:
+	def test_by_time_first_with_the_supervisors_tail_syntax(self):
+		calls = []
+
+		def fetch(path, rng):
+			calls.append((path, rng))
+			return 200, _verbose(T0, "hello") + "\n"
+
+		text, why = cs.read_log("/host/logs", T0 - 300, T0 + 300, 5000, fetch)
+		assert why == "" and "hello" in text
+		assert calls == [("/host/logs", f"realtime=:{T0 + 300}:-4999:5000")]
+
+	def test_an_ignored_time_range_falls_back_to_the_tail(self):
+		"""journal-gatewayd before systemd 255 ignores realtime= and starts
+		at the journal's head: nothing in the window, so the tail is read."""
+		calls = []
+
+		def fetch(path, rng):
+			calls.append(rng)
+			if rng.startswith("realtime="):
+				return 200, _verbose(T0 - 86400 * 30, "boot a month ago") + "\n"
+			return 200, _verbose(T0 - 5, "near the switch") + "\n" + _verbose(T0 + 9999, "now") + "\n"
+
+		text, why = cs.read_log("/supervisor/logs", T0 - 300, T0 + 300, 3000, fetch)
+		assert calls == [f"realtime=:{T0 + 300}:-2999:3000", "entries=:-2999:3000"]
+		assert "near the switch" in text and "now" not in text and "month ago" not in text
+
+	def test_a_refused_range_is_tried_the_other_way(self):
+		def fetch(path, rng):
+			if rng.startswith("realtime="):
+				return 400, "400 Invalid range header"
+			return 200, "no times here\nat all\n"
+		assert cs.read_log("/addons/self/logs", T0, T0 + 1, 3000, fetch) == ("no times here\nat all\n", "")
+
+	def test_forbidden_is_not_asked_twice(self):
+		calls = []
+
+		def fetch(path, rng):
+			calls.append(rng)
+			return 403, "403 forbidden"
+		assert cs.read_log("/host/logs", T0, T0 + 1, 10, fetch) == (None, "403 forbidden")
+		assert len(calls) == 1
+
+	def test_a_quiet_window_is_empty_not_an_error(self):
+		fetch = lambda p, r: (200, _verbose(T0 - 9999, "old") + "\n")  # noqa: E731
+		assert cs.read_log("/addons/core_mosquitto/logs", T0, T0 + 1, 10, fetch) == ("", "")
+
+	def test_colours_are_taken_out(self):
+		fetch = lambda p, r: (200, "\x1b[32m" + _verbose(T0, "green") + "\x1b[0m\n")  # noqa: E731
+		text, _ = cs.read_log("/supervisor/logs", T0 - 1, T0 + 1, 10, fetch)
+		assert "\x1b" not in text and "green" in text
+
+
+class TestSupervisorText:
+	def test_asks_for_the_verbose_format_and_the_range(self):
+		seen = {}
+
+		def opener(req, timeout=None):
+			seen.update(url=req.full_url, timeout=timeout, accept=req.get_header("Accept"),
+			            range=req.get_header("Range"), auth=req.get_header("Authorization"))
+			return FakeResponse(200, b"2026-11-14 10:00:00.000+00:00 h x: hi\n")
+
+		status, text = cs._supervisor_text("/host/logs", {"Accept": cs.LOG_ACCEPT, "Range": "entries=:-1:2"},
+		                                   opener=opener)
+		assert status == 200 and text.endswith("hi\n")
+		assert seen["url"].endswith("/host/logs") and seen["accept"] == "text/x-log"
+		assert seen["range"] == "entries=:-1:2" and seen["timeout"] == cs.LOG_READ_SECONDS
+		assert seen["auth"].startswith("Bearer ")
+
+	def test_a_refusal_says_why(self):
+		status, why = cs._supervisor_text("/host/logs", opener=http_error(403, b"403: Forbidden"))
+		assert status == 403 and why.startswith("403") and "Forbidden" in why
+		body = json.dumps({"result": "error", "message": "App x is not installed"}).encode()
+		status, why = cs._supervisor_text("/addons/x/logs", opener=http_error(404, body))
+		assert (status, why) == (404, "404 App x is not installed")
+
+	def test_no_answer_is_status_0(self):
+		def down(req, timeout=None):
+			raise TimeoutError("timed out")
+		status, why = cs._supervisor_text("/host/logs", opener=down)
+		assert status == 0 and "timed out" in why
+
+
+class TestCollectLogs:
+	def _fetch(self, calls, fail=()):
+		def fetch(path, rng):
+			calls.append(path)
+			if path in fail:
+				return 403, "403 forbidden"
+			return 200, _verbose(T0, f"from {path}") + "\n"
+		return fetch
+
+	def test_every_source_and_nothing_else(self):
+		calls = []
+		sources, errors = cs.collect_logs(T0 - 60, T0 + 60, ["core_mosquitto", "5c53de3b_esphome",
+		                                                     "core_mosquitto", "../core", "self", 7],
+		                                  self._fetch(calls))
+		assert sorted(sources) == ["addon:5c53de3b_esphome", "addon:core_mosquitto", "chap", "host", "supervisor"]
+		assert errors == {}
+		assert calls == ["/addons/self/logs", "/supervisor/logs", "/host/logs",
+		                 "/addons/core_mosquitto/logs", "/addons/5c53de3b_esphome/logs"]
+		assert not any(p.startswith(("/core", "/homeassistant")) for p in calls)
+
+	def test_one_failing_source_does_not_stop_the_rest(self):
+		calls = []
+
+		def fetch(path, rng):
+			if path == "/supervisor/logs":
+				raise RuntimeError("boom")
+			return self._fetch(calls, fail={"/host/logs"})(path, rng)
+
+		sources, errors = cs.collect_logs(T0, T0, ["core_mosquitto"], fetch)
+		assert sorted(sources) == ["addon:core_mosquitto", "chap"]
+		assert errors["host"] == "403 forbidden" and "boom" in errors["supervisor"]
+
+	def test_out_of_time_leaves_the_rest_unread(self):
+		ticks = iter([0, 0, 0, 1000, 1000, 1000])
+		sources, errors = cs.collect_logs(T0, T0, ["a1"], self._fetch([]), clock=lambda: next(ticks))
+		assert sorted(sources) == ["chap", "supervisor"]
+		assert errors == {"host": "not read: out of time", "addon:a1": "not read: out of time"}
+
+	def test_each_source_is_cut_to_its_newest_2_mb(self):
+		big = "".join(_verbose(T0, f"{i} " + "y" * 200) + "\n" for i in range(12000))
+		sources, _ = cs.collect_logs(T0 - 1, T0 + 1, [], lambda p, r: (200, big))
+		for text in sources.values():
+			assert len(text.encode()) <= cs.LOG_SOURCE_MAX and text.rstrip().endswith("y" * 200)
+			assert " 11999 " in text
+
+
+class TestLogsBody:
+	def test_the_contract_shape(self):
+		body = json.loads(cs.logs_body("r1", 1, 2, {"chap": "a\n"}, {"host": "403 forbidden"}))
+		assert body == {"id": "r1", "since": 1, "until": 2, "sources": {"chap": "a\n"},
+		                "errors": {"host": "403 forbidden"}}
+
+	def test_too_much_cuts_the_biggest_and_keeps_the_small(self):
+		line = "z" * 99 + "\n"
+		sources = {"host": line * 3000, "supervisor": line * 2000, "chap": line * 10}
+		body = cs.logs_body("r1", 1, 2, sources, {}, limit=200_000)
+		assert len(body) <= 200_000
+		got = json.loads(body)["sources"]
+		assert got["chap"] == line * 10
+		assert 50_000 < len(got["host"]) and 50_000 < len(got["supervisor"])
+		assert abs(len(got["host"]) - len(got["supervisor"])) < 1000
+
+
+class TestMaybeSendLogs:
+	class P:
+		def __init__(self, *statuses):
+			self.statuses = list(statuses) or [200]
+			self.sent = []
+
+		def send_logs(self, body):
+			self.sent.append(json.loads(_gzip.decompress(body)))
+			return self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+
+	ASK = {"id": "logs-1", "since": T0 - 1800, "until": T0 + 1800, "addons": ["core_mosquitto"]}
+
+	@staticmethod
+	def fetch(path, rng):
+		if path == "/host/logs":
+			return 403, "403 forbidden"
+		return 200, _verbose(T0, f"from {path}") + "\n" + _verbose(T0 - 86400, "yesterday") + "\n"
+
+	@pytest.mark.parametrize("role", ["standby", "active", "none"])
+	def test_sent_once_whatever_the_role(self, tmp_path, role):
+		portal, state, path = self.P(), {}, tmp_path / "s.json"
+		info = {"role": role, "send_logs": self.ASK}
+		note = cs.maybe_send_logs(portal, info, state, path, self.fetch)
+		assert note.startswith("sent logs to Vome (logs-1: 3 source(s)") and "could not read host" in note
+		sent = portal.sent[0]
+		assert sent["id"] == "logs-1" and (sent["since"], sent["until"]) == (T0 - 1800, T0 + 1800)
+		assert sorted(sent["sources"]) == ["addon:core_mosquitto", "chap", "supervisor"]
+		assert "from /addons/self/logs" in sent["sources"]["chap"] and "yesterday" not in sent["sources"]["chap"]
+		assert sent["errors"] == {"host": "403 forbidden"}
+		assert cs.load_json(path)["send_logs_done"] == "logs-1"
+		assert cs.maybe_send_logs(portal, info, state, path, self.fetch) is None
+		assert len(portal.sent) == 1
+
+	def test_nothing_asked_nothing_sent(self, tmp_path):
+		portal = self.P()
+		for info in ({}, {"send_logs": None}, {"send_logs": {"id": ""}}, {"send_logs": "x"}):
+			assert cs.maybe_send_logs(portal, info, {}, tmp_path / "s.json", self.fetch) is None
+		assert portal.sent == []
+
+	def test_a_new_id_is_a_new_ask(self, tmp_path):
+		portal, state = self.P(), {}
+		cs.maybe_send_logs(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json", self.fetch)
+		cs.maybe_send_logs(portal, {"send_logs": dict(self.ASK, id="logs-2")}, state, tmp_path / "s.json", self.fetch)
+		assert [s["id"] for s in portal.sent] == ["logs-1", "logs-2"]
+
+	@pytest.mark.parametrize("status, word", [(409, "no longer wants"), (413, "too big")])
+	def test_unknown_or_too_big_is_not_retried(self, tmp_path, status, word):
+		portal, state = self.P(status), {}
+		assert word in cs.maybe_send_logs(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json", self.fetch)
+		assert state["send_logs_done"] == "logs-1"
+		assert cs.maybe_send_logs(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json", self.fetch) is None
+		assert len(portal.sent) == 1
+
+	def test_other_failures_are_retried_three_times_in_all(self, tmp_path):
+		portal, state, path = self.P(500, 0, 502), {}, tmp_path / "s.json"
+		info = {"send_logs": self.ASK}
+		assert cs.maybe_send_logs(portal, info, state, path, self.fetch).endswith("will retry")
+		assert cs.maybe_send_logs(portal, info, state, path, self.fetch).endswith("will retry")
+		assert "gave up after 3 tries" in cs.maybe_send_logs(portal, info, state, path, self.fetch)
+		assert cs.maybe_send_logs(portal, info, state, path, self.fetch) is None
+		assert len(portal.sent) == 3 and cs.load_json(path)["send_logs_done"] == "logs-1"
+
+	def test_a_try_that_never_finished_still_counts(self, tmp_path):
+		"""The count is saved before collecting, so a crash mid-way cannot
+		have the same ask tried forever."""
+		state = {"send_logs_tries": {"id": "logs-1", "count": 3}}
+		portal = self.P()
+		assert "gave up" in cs.maybe_send_logs(portal, {"send_logs": self.ASK}, state, tmp_path / "s.json", self.fetch)
+		assert portal.sent == []
+
+	def test_an_unusable_window_is_dropped(self, tmp_path):
+		portal, state = self.P(), {}
+		for ask in ({"id": "x", "since": "soon"}, {"id": "y", "since": 10, "until": 5}):
+			assert "without a usable time window" in cs.maybe_send_logs(
+				portal, {"send_logs": ask}, state, tmp_path / "s.json", self.fetch)
+		assert portal.sent == []
+
+
+class TestPortalSendLogs:
+	def _portal(self, opener):
+		return cs.Portal({"portal_url": "https://vome.example/", "server_id": "srv", "token": "tok"}, opener)
+
+	def test_posts_gzip_json_with_the_chap_credentials(self):
+		seen = {}
+
+		def opener(req, timeout=None):
+			seen.update(url=req.full_url, method=req.get_method(), timeout=timeout, data=req.data,
+			            headers={k.lower(): v for k, v in req.header_items()})
+			return FakeResponse(200, b'{"stored": true}')
+
+		body = _gzip.compress(b'{"id": "r"}')
+		assert self._portal(opener).send_logs(body) == 200
+		assert seen["url"] == "https://vome.example/api/sync/chap/logs" and seen["method"] == "POST"
+		assert seen["headers"]["content-encoding"] == "gzip"
+		assert seen["headers"]["content-type"] == "application/json"
+		assert seen["headers"]["authorization"] == "Bearer tok" and seen["headers"]["x-server-id"] == "srv"
+		assert seen["timeout"] == cs.LOG_SEND_SECONDS and seen["data"] == body
+
+	def test_refusals_and_silence(self):
+		assert self._portal(http_error(409, b"{}")).send_logs(b"x") == 409
+
+		def down(req, timeout=None):
+			raise urllib.error.URLError("no route")
+		assert self._portal(down).send_logs(b"x") == 0
+
+
+class TestRunOnceSendsLogs:
+	def test_a_stopped_standby_sends_its_logs(self, tmp_path, monkeypatch):
+		standby = make_config(tmp_path / "standby")
+		monkeypatch.setattr(cs, "_supervisor_call", lambda *a, **k: (0, None))
+		monkeypatch.setattr(cs, "_supervisor_text", lambda path, headers=None, **k: (
+			200, _verbose(T0, f"from {path}") + "\n"))
+
+		class P(FakePortal):
+			def send_logs(self, body):
+				self.logs = json.loads(_gzip.decompress(body))
+				return 200
+
+		portal = P({"role": "standby", "latest": {}, "send_logs": TestMaybeSendLogs.ASK})
+		outcome, _ = cs.run_once(portal, standby, tmp_path, core_stopped=lambda: True,
+		                         local_version=lambda: "2026.9.1")
+		assert outcome == "standby: nothing to apply yet"
+		assert sorted(portal.logs["sources"]) == ["addon:core_mosquitto", "chap", "host", "supervisor"]
+
+	def test_a_failure_never_stops_the_pass(self, tmp_path, monkeypatch):
+		standby = make_config(tmp_path / "standby")
+		monkeypatch.setattr(cs, "_supervisor_call", lambda *a, **k: (0, None))
+
+		def broken(*a, **k):
+			raise RuntimeError("anything at all")
+		monkeypatch.setattr(cs, "maybe_send_logs", broken)
+		portal = FakePortal({"role": "standby", "latest": {}, "send_logs": TestMaybeSendLogs.ASK})
+		outcome, _ = cs.run_once(portal, standby, tmp_path, core_stopped=lambda: True,
+		                         local_version=lambda: "2026.9.1")
+		assert outcome == "standby: nothing to apply yet"

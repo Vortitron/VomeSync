@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.15 — 15 November 2026
+
+**Vome can read this app's logs when something goes wrong.** On 14 November
+a house standby lost sight of the hosted main for about seven minutes, the
+home moved to it and then back, and nobody could tell why: the logs that
+would say were only on the box. Now, when Vome asks, this app sends it the
+logs from the hour around a switch, automatically after every switch and
+when you press "Fetch logs" on the CHAP page. It works on a standby with
+Home Assistant stopped too. It sends this app's own log, the Supervisor's,
+the operating system's and those of the apps Vome names, only the lines
+from that hour and at most 2 MB of each. It never sends Home Assistant's own
+log or any of your configuration. A log it cannot read is noted and the rest
+still go.
+
 ## 0.2.14 — 6 November 2026
 
 **A standby's apps are kept up to date by each other.** We found that a
