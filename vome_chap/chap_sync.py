@@ -48,6 +48,7 @@ import shutil
 import sqlite3
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -1761,20 +1762,107 @@ def _log_request(ask) -> Optional[tuple[str, int, int, list]]:
 	return str(ask["id"])[:100], since, until, addons
 
 
+# The collecting and sending run beside the poll loop, never in it: the loop
+# is CHAP's heartbeat (a standby quiet for more than ~50 s looks gone to
+# Vome) and carries takeover and switch-back, so a slow Supervisor must not
+# hold it. One job at a time. Only the loop writes chap_state.json; the job
+# leaves its outcome in a file of its own, which the loop folds into the
+# state on a later pass, once the job has ended.
+LOGS_RESULT_FILE = "chap_logs_result.json"
+_LOGS_LOCK = threading.Lock()
+_logs_thread: Optional[threading.Thread] = None
+
+
+def logs_job_running() -> bool:
+	thread = _logs_thread
+	return thread is not None and thread.is_alive()
+
+
+def _start_logs_thread(job: Callable[[], None]) -> bool:
+	global _logs_thread
+	with _LOGS_LOCK:
+		if logs_job_running():
+			return False
+		_logs_thread = threading.Thread(target=job, name="vome-chap-logs", daemon=True)
+		_logs_thread.start()
+		return True
+
+
+def _send_logs_job(portal: "Portal", ask_id: str, since: int, until: int, addons: list,
+                   attempt: int, result_path: Path, fetch=None,
+                   clock: Callable[[], float] = time.monotonic) -> None:
+	"""Collect and send one ask's logs; leave the outcome in ``result_path``."""
+	done, note = False, ""
+	try:
+		sources, errors = collect_logs(since, until, addons, fetch, clock)
+		body = logs_body(ask_id, since, until, sources, errors)
+		status = portal.send_logs(gzip.compress(body, compresslevel=6))
+		size = f"{len(body) / (1024 * 1024):.1f} MB"
+		done = True
+		if 200 <= status < 300:
+			failed = f"; could not read {', '.join(sorted(errors))}" if errors else ""
+			note = f"sent logs to Vome ({ask_id}: {len(sources)} source(s), {size}){failed}"
+		elif status == 409:
+			note = f"Vome no longer wants the logs it asked for ({ask_id})"
+		elif status == 413:
+			note = f"Vome refused the logs as too big ({ask_id}, {size})"
+		else:
+			done = attempt >= LOG_SEND_ATTEMPTS
+			note = (f"could not send logs to Vome ({ask_id}, HTTP {status}); "
+			        + (f"gave up after {attempt} tries" if done else "will retry"))
+	except Exception as exc:  # noqa: BLE001 - a thread of its own: nothing above to catch it
+		done = attempt >= LOG_SEND_ATTEMPTS
+		note = f"could not send logs to Vome ({ask_id}): {exc}"[:300]
+	try:
+		save_json(result_path, {"id": ask_id, "done": done, "note": note})
+	except Exception as exc:  # noqa: BLE001
+		LOG.warning("Could not record the logs sent to Vome: %s", exc)
+
+
+def _fold_logs_result(state: dict, state_path: Path) -> Optional[str]:
+	"""Take a finished job's outcome into the state; its note, if any.
+	Only while no job runs, so the file is whole and nobody else writes it."""
+	path = state_path.parent / LOGS_RESULT_FILE
+	if not path.exists():
+		return None
+	result = load_json(path)
+	ask_id = str(result.get("id") or "")
+	if result.get("done") and ask_id:
+		state["send_logs_done"] = ask_id
+		if (state.get("send_logs_tries") or {}).get("id") == ask_id:
+			state.pop("send_logs_tries", None)
+		save_json(state_path, state)
+	try:
+		path.unlink()
+	except FileNotFoundError:
+		pass
+	return result.get("note") or None
+
+
 def maybe_send_logs(portal: "Portal", info: dict, state: dict, state_path: Path,
-                    fetch=None, clock: Callable[[], float] = time.monotonic) -> Optional[str]:
+                    fetch=None, clock: Callable[[], float] = time.monotonic,
+                    start: Optional[Callable[[Callable[[], None]], bool]] = None) -> Optional[str]:
 	"""Send Vome this install's logs when it asks, once per ask (``send_logs``).
 
-	Tried again on a later check-in if it could not be sent, at most
-	LOG_SEND_ATTEMPTS times; not if Vome no longer wants it (409) or it was
-	too big (413).
+	The work is started in the background (``start``; a thread unless a test
+	says otherwise) and this returns at once. Tried again on a later
+	check-in if it could not be sent, at most LOG_SEND_ATTEMPTS times; not
+	if Vome no longer wants it (409) or it was too big (413).
 	"""
+	if logs_job_running():
+		return None  # one at a time; its outcome is folded in when it ends
+	notes = [_fold_logs_result(state, state_path)]
 	ask = _log_request(info.get("send_logs"))
-	if ask is None:
-		return None
+	if ask is not None and state.get("send_logs_done") != ask[0]:
+		notes.append(_start_send_logs(portal, ask, state, state_path, fetch, clock,
+		                              start or _start_logs_thread))
+		if not logs_job_running():  # done already (or run in place by a test)
+			notes.append(_fold_logs_result(state, state_path))
+	return "; ".join(n for n in notes if n) or None
+
+
+def _start_send_logs(portal, ask, state: dict, state_path: Path, fetch, clock, start) -> Optional[str]:
 	ask_id, since, until, addons = ask
-	if state.get("send_logs_done") == ask_id:
-		return None
 
 	def done(note: str) -> str:
 		state["send_logs_done"] = ask_id
@@ -1791,20 +1879,10 @@ def maybe_send_logs(portal: "Portal", info: dict, state: dict, state_path: Path,
 	# Counted before trying, so a try that never finishes counts too.
 	state["send_logs_tries"] = {"id": ask_id, "count": count + 1}
 	save_json(state_path, state)
-	sources, errors = collect_logs(since, until, addons, fetch, clock)
-	body = logs_body(ask_id, since, until, sources, errors)
-	status = portal.send_logs(gzip.compress(body, compresslevel=6))
-	size = f"{len(body) / (1024 * 1024):.1f} MB"
-	if 200 <= status < 300:
-		failed = f"; could not read {', '.join(sorted(errors))}" if errors else ""
-		return done(f"sent logs to Vome ({ask_id}: {len(sources)} source(s), {size}){failed}")
-	if status == 409:
-		return done(f"Vome no longer wants the logs it asked for ({ask_id})")
-	if status == 413:
-		return done(f"Vome refused the logs as too big ({ask_id}, {size})")
-	if count + 1 >= LOG_SEND_ATTEMPTS:
-		return done(f"could not send logs to Vome ({ask_id}, HTTP {status}); gave up after {count + 1} tries")
-	return f"could not send logs to Vome ({ask_id}, HTTP {status}); will retry"
+	result_path = state_path.parent / LOGS_RESULT_FILE
+	start(lambda: _send_logs_job(portal, ask_id, since, until, addons, count + 1, result_path,
+	                             fetch, clock))
+	return None
 
 
 def holdable(slugs) -> list:
@@ -2027,7 +2105,9 @@ def load_json(path: Path) -> dict:
 
 
 def save_json(path: Path, data: dict) -> None:
-	tmp = path.with_suffix(path.suffix + ".tmp")
+	# A temporary name of this thread's own: the logs job writes its file
+	# beside the loop's, and two writers must never share one half-written.
+	tmp = path.with_suffix(path.suffix + f".{threading.get_ident()}.tmp")
 	with open(tmp, "w", encoding="utf-8") as fh:
 		json.dump(data, fh)
 	os.chmod(tmp, 0o600)
