@@ -99,3 +99,20 @@ async def test_the_actions_are_described(hass, owned):
 			"connect_payments", "payments_status", "reward_claims", "my_rewards"):
 		assert descriptions[name]["fields"] is not None, name
 	assert "on" in descriptions["set_reward"]["fields"]
+
+
+async def test_a_switch_is_named_once_not_twice(hass, owned):
+	# The entity and its device were both named after the switch, so Home
+	# Assistant showed "Lamp Lamp" and made switch.lamp_lamp.
+	entity_id = _entity_id(hass)
+	assert entity_id == "switch.lamp"
+	assert hass.states.get(entity_id).attributes["friendly_name"] == "Lamp"
+
+	# Renamed on Vome: the device follows, and the switch shows the new name.
+	from homeassistant.helpers import device_registry as dr
+	owned.switches[UID]["name"] = "Desk lamp"
+	owned.async_update_listeners()
+	await hass.async_block_till_done()
+	device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, UID)})
+	assert device.name == "Desk lamp"
+	assert hass.states.get(entity_id).attributes["friendly_name"] == "Desk lamp"

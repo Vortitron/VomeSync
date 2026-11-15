@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.85 — 15 November 2026
+
+**A Vome switch shows its name once.** Every Vome switch showed its name
+twice, such as "Lamp Lamp", because the switch and the device it belongs to
+were both named after it. It now shows just "Lamp", and renaming the switch on
+Vome renames it here too. Entity ids you already have stay as they are, so
+your automations keep working; a new switch gets switch.lamp rather than
+switch.lamp_lamp. A name you gave the switch yourself in Home Assistant is
+kept, and still shows after the device's name.
+
+Bundles the Vome integration 0.9.69.
+
 ## 0.3.84 — 15 November 2026
 
 **Change a switch's details from an automation, a script or an agent.** The

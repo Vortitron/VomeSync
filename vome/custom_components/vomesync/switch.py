@@ -165,7 +165,10 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 		
 		# Generate unique_id
 		self._attr_unique_id = f"vomesync_{uid}"
-		self._attr_name = name
+		# The switch is its device's main entity: with has_entity_name, a name
+		# of None shows the device's name alone. Naming the entity after the
+		# switch too, as before, showed every switch as "Lamp Lamp".
+		self._attr_name = None
 		self._attr_has_entity_name = True
 		
 		# Device info
@@ -186,8 +189,7 @@ class VomeSyncSwitch(CoordinatorEntity[VomeSyncCoordinator], SwitchEntity):
 	def _update_name_from_data(self) -> None:
 		data = self.switch_data or {}
 		name = data.get("name") or DEFAULT_SWITCH_NAME
-		if name != self._attr_name:
-			self._attr_name = name
+		if name != self._name:
 			self._name = name
 			formatted_name = format_device_name(name)
 			try:
