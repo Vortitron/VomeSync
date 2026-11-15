@@ -1606,25 +1606,25 @@ Provide an access key to enable toggling from this Home Assistant instance."""
 			if new_banner != old_banner:
 				updates["bannerUrl"] = new_banner
 
+			# Vome decides whether making it public needs a CAPTCHA (most
+			# servers don't ask for one): send the token if one was given,
+			# and only say a token is needed when Vome says so.
 			captcha_token = user_input.get(CONF_CAPTCHA_TOKEN, "")
-			if updates.get("publicize") is True and not captcha_token:
-				errors["base"] = "captcha_required"
-			else:
-				# Apply update to server, then persist updated cache in coordinator/options
-				if updates:
-					try:
-						updated = await coordinator.update_switch_metadata(selected_uid, updates, captcha_token=captcha_token)
-					except VomeSyncAPIError as ex:
-						error_detail = str(ex)
-						errors["base"] = "update_failed"
-						updated = None
-					if not updated and not errors.get("base"):
-						error_detail = "Update rejected by server. Check name/description length and allowed characters."
-						errors["base"] = "update_failed"
+			# Apply update to server, then persist updated cache in coordinator/options
+			if updates:
+				try:
+					updated = await coordinator.update_switch_metadata(selected_uid, updates, captcha_token=captcha_token)
+				except VomeSyncAPIError as ex:
+					error_detail = str(ex)
+					errors["base"] = "captcha_required" if "captcha" in error_detail.lower() else "update_failed"
+					updated = None
+				if not updated and not errors.get("base"):
+					error_detail = "Update rejected by server. Check name/description length and allowed characters."
+					errors["base"] = "update_failed"
 
-				if not errors:
-					# IMPORTANT: return current options so the options flow doesn't overwrite them with {}
-					return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
+			if not errors:
+				# IMPORTANT: return current options so the options flow doesn't overwrite them with {}
+				return self.async_create_entry(title="", data=dict(self._config_entry.options or {}))
 		
 		name_default = switch_config.get("name", "")
 		desc_default = switch_config.get("description", "")

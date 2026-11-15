@@ -1121,11 +1121,17 @@ class VomeSyncCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
 		result = await self._update_extras(uid, {"reward": cleaned})
 		return result.get("reward", cleaned) if isinstance(result, dict) else cleaned
 
-	async def start_connect_onboarding(self) -> Dict[str, Any]:
-		"""Start or resume taking payments (Stripe Connect); returns ``{url}``."""
+	async def start_connect_onboarding(
+		self, country: Optional[str] = None, email: Optional[str] = None
+	) -> Dict[str, Any]:
+		"""Start or resume taking payments (Stripe Connect); returns ``{url}``.
+
+		The first time, Stripe needs the country and a contact email; they go
+		to Stripe through Vome and are not kept here or there.
+		"""
 		if not self.crypto_enabled:
 			raise VomeSyncAPIError("This needs a signing key: the entry was set up without one")
-		return await self.api_client.start_connect_onboarding() or {}
+		return await self.api_client.start_connect_onboarding(country=country, email=email) or {}
 
 	async def get_connect_status(self) -> Dict[str, Any]:
 		"""Whether this owner can take payments yet."""

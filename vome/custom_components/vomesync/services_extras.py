@@ -1,4 +1,5 @@
-"""Actions for switch extras: notes, properties, commerce, payments and rewards.
+"""Actions for switch details and extras: name and listing, notes, properties,
+commerce, payments and rewards.
 
 The contract is docs/SWITCH_EXTRAS.md in the VomeSync server repository.
 Every action here is for administrators only: each one signs with this
@@ -25,7 +26,7 @@ except ImportError:  # Core before 2023.11 (the tests pin 2023.7; the manifest n
 	ServiceValidationError = HomeAssistantError
 
 from .api_client import VomeSyncAPIError
-from .const import DOMAIN
+from .const import DOMAIN, SWITCH_CATEGORIES
 from .switch_extras import (
 	CURRENCIES,
 	ACTIONS,
@@ -41,6 +42,7 @@ _LOGGER = logging.getLogger(__name__)
 
 CONNECT_NOTIFICATION_ID = "vomesync_connect_payments"
 
+SERVICE_UPDATE_SWITCH = "update_switch"
 SERVICE_SET_STATE = "set_state"
 SERVICE_SET_PROPERTIES = "set_properties"
 SERVICE_SET_COMMERCE = "set_commerce"
@@ -51,6 +53,7 @@ SERVICE_REWARD_CLAIMS = "reward_claims"
 SERVICE_MY_REWARDS = "my_rewards"
 
 EXTRAS_SERVICES = frozenset({
+	SERVICE_UPDATE_SWITCH,
 	SERVICE_SET_STATE,
 	SERVICE_SET_PROPERTIES,
 	SERVICE_SET_COMMERCE,
@@ -84,6 +87,19 @@ _COMMERCE_FIELD_MAP = {
 	"pay_link": "payLink",
 	"webhook_url": "webhookUrl",
 }
+# Action field -> the switch's own detail on Vome.
+_DETAIL_FIELD_MAP = {
+	"name": "name",
+	"description": "description",
+	"location": "location",
+	"category": "category",
+	"link": "link",
+	"icon_url": "iconUrl",
+	"banner_url": "bannerUrl",
+	"publicize": "publicize",
+}
+# What the answer gives back: the public details, never a secret.
+_DETAIL_ANSWER_KEYS = ("uid", "name", "description", "location", "category", "link", "iconUrl", "bannerUrl", "publicize")
 _REWARD_FIELD_MAP = {
 	"amount": "amount",
 	"currency": "currency",
@@ -105,6 +121,12 @@ def _errors(handler):
 			raise HomeAssistantError(str(err)) from err
 	_wrapped.__name__ = getattr(handler, "__name__", "service")
 	return _wrapped
+
+
+def _details(switch: Any) -> Dict[str, Any]:
+	if not isinstance(switch, dict):
+		return {}
+	return _json_safe({key: switch[key] for key in _DETAIL_ANSWER_KEYS if key in switch and key != "uid"})
 
 
 def _json_safe(value: Any) -> Any:
@@ -159,6 +181,30 @@ def resolve_switch(hass: HomeAssistant, entity_id: str) -> Tuple[Any, str]:
 def async_register_extras_services(hass: HomeAssistant) -> None:
 	"""Register the switch-extras actions (administrators only)."""
 	from .services_remote import async_register_admin
+
+	async def _update_switch(call: ServiceCall) -> ServiceResponse:
+		coordinator, uid = resolve_switch(hass, call.data["entity_id"][0])
+		if not coordinator.is_switch_owner(uid):
+			raise ServiceValidationError("Only the switch's owner can change its details")
+		updates: Dict[str, Any] = {
+			detail: call.data[field]
+			for field, detail in _DETAIL_FIELD_MAP.items()
+			if field in call.data
+		}
+		if not updates:
+			raise ServiceValidationError("Give at least one detail to change")
+		current = coordinator.get_switch_data(uid) or {}
+		if updates.get("publicize") is True and current.get("publicize") is True:
+			# Already public: asking again would only ask for a CAPTCHA again.
+			updates.pop("publicize")
+			if not updates:
+				return {"uid": uid, **_details(current)}
+		updated = await coordinator.update_switch_metadata(
+			uid, updates, captcha_token=call.data.get("captcha_token") or "",
+		)
+		if not updated:
+			raise HomeAssistantError("Vome did not change the switch; the log says why")
+		return {"uid": uid, **_details(updated)}
 
 	async def _set_state(call: ServiceCall) -> ServiceResponse:
 		coordinator, uid = resolve_switch(hass, call.data["entity_id"][0])
@@ -241,7 +287,9 @@ def async_register_extras_services(hass: HomeAssistant) -> None:
 
 	async def _connect_payments(call: ServiceCall) -> ServiceResponse:
 		coordinator = _coordinator_for_entry(hass, call.data.get("entry_id"))
-		result = await coordinator.start_connect_onboarding()
+		country = str(call.data.get("country") or "").strip().upper() or None
+		email = str(call.data.get("email") or "").strip() or None
+		result = await coordinator.start_connect_onboarding(country=country, email=email)
 		url = result.get("url") if isinstance(result, dict) else None
 		if not url:
 			raise HomeAssistantError("Vome did not return an onboarding link")
@@ -266,6 +314,9 @@ def async_register_extras_services(hass: HomeAssistant) -> None:
 			"ready": bool(result.get("ready")),
 			"requirements_due": _json_safe(result.get("requirementsDue") or []),
 		}
+		if "invited" in result:
+			# Card payments through Vome are invite-only; False explains a refusal.
+			answer["invited"] = bool(result["invited"])
 		if result.get("dashboardUrl"):
 			answer["dashboard_url"] = result["dashboardUrl"]
 		return answer
@@ -278,6 +329,22 @@ def async_register_extras_services(hass: HomeAssistant) -> None:
 		coordinator = _coordinator_for_entry(hass, call.data.get("entry_id"))
 		return _json_safe(await coordinator.get_my_rewards() or {})
 
+	async_register_admin(
+		hass, SERVICE_UPDATE_SWITCH, _errors(_update_switch),
+		schema=vol.Schema({
+			vol.Required("entity_id"): _ONE_ENTITY,
+			vol.Optional("name"): vol.All(cv.string, vol.Length(min=1, max=100)),
+			vol.Optional("description"): vol.All(cv.string, vol.Length(max=500)),
+			vol.Optional("location"): vol.All(cv.string, vol.Length(max=100)),
+			vol.Optional("category"): vol.In(tuple(SWITCH_CATEGORIES)),
+			vol.Optional("link"): cv.string,
+			vol.Optional("icon_url"): cv.string,
+			vol.Optional("banner_url"): cv.string,
+			vol.Optional("publicize"): cv.boolean,
+			vol.Optional("captcha_token"): vol.All(cv.string, vol.Length(max=2000)),
+		}),
+		supports_response=SupportsResponse.OPTIONAL,
+	)
 	async_register_admin(
 		hass, SERVICE_SET_STATE, _errors(_set_state),
 		schema=vol.Schema({
@@ -332,7 +399,11 @@ def async_register_extras_services(hass: HomeAssistant) -> None:
 	)
 	async_register_admin(
 		hass, SERVICE_CONNECT_PAYMENTS, _errors(_connect_payments),
-		schema=vol.Schema({vol.Optional("entry_id"): cv.string}),
+		schema=vol.Schema({
+			vol.Optional("entry_id"): cv.string,
+			vol.Optional("country"): vol.All(cv.string, vol.Match(r"^[A-Za-z]{2}$")),
+			vol.Optional("email"): vol.All(cv.string, vol.Length(max=254)),
+		}),
 		supports_response=SupportsResponse.OPTIONAL,
 	)
 	async_register_admin(

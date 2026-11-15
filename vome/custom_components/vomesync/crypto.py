@@ -526,6 +526,7 @@ def build_v2_my_switches_request(master_seed_b64url: str, ts: Optional[int] = No
 		"ownerPubKey": owner_pub,
 		"ts": ts_i,
 		"nonce": nonce_s,
+		**(extra or {}),
 	}
 	canon = canonical_json(payload)
 	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
@@ -534,6 +535,7 @@ def build_v2_my_switches_request(master_seed_b64url: str, ts: Optional[int] = No
 		"ts": ts_i,
 		"nonce": nonce_s,
 		"sigOwner": sig_owner,
+		**(extra or {}),
 	}
 
 
@@ -552,6 +554,7 @@ def _build_owner_signed_action(
 	action: str,
 	ts: Optional[int] = None,
 	nonce: Optional[str] = None,
+	extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
 	if ts is None:
 		import time
@@ -566,6 +569,7 @@ def _build_owner_signed_action(
 		"ownerPubKey": owner_pub,
 		"ts": ts_i,
 		"nonce": nonce_s,
+		**(extra or {}),
 	}
 	canon = canonical_json(payload)
 	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
@@ -574,6 +578,7 @@ def _build_owner_signed_action(
 		"ts": ts_i,
 		"nonce": nonce_s,
 		"sigOwner": sig_owner,
+		**(extra or {}),
 	}
 
 
@@ -648,10 +653,21 @@ def build_v2_connect_onboard_request(
 	master_seed_b64url: str,
 	ts: Optional[int] = None,
 	nonce: Optional[str] = None,
+	country: Optional[str] = None,
+	email: Optional[str] = None,
 ) -> Dict[str, Any]:
-	"""Start or resume Stripe Connect onboarding for this owner."""
+	"""Start or resume Stripe Connect onboarding for this owner.
+
+	Stripe needs the country and a contact email to open the account, so the
+	first call carries them (signed, and only when given).
+	"""
+	extra: Dict[str, Any] = {}
+	if country:
+		extra["country"] = country
+	if email:
+		extra["email"] = email
 	return _build_owner_signed_action(
-		master_seed_b64url, "connect_onboard", ts=ts, nonce=nonce
+		master_seed_b64url, "connect_onboard", ts=ts, nonce=nonce, extra=extra
 	)
 
 
