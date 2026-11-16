@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.16 — 16 November 2026
+
+**An integration reaches your standby once Home Assistant is running it.**
+An integration you update (from the Marketplace or by hand) only takes
+effect when Home Assistant restarts. Until now its new files went to the
+standby with the next sync, so a standby could take over on code the
+install running your home had never run. Now this app keeps a copy of each
+integration as it was when Home Assistant last started, and sends that
+copy until a restart runs the new one. The rest of your configuration
+still goes at once, and apps already waited before following an update.
+
 ## 0.2.15 — 15 November 2026
 
 **Vome can read this app's logs when something goes wrong.** On 14 November

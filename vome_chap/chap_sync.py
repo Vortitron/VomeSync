@@ -301,20 +301,136 @@ def _read_for_snapshot(full: Path) -> bytes:
 	return full.read_bytes()
 
 
-def build_snapshot(config_dir: Path) -> tuple[bytes, dict]:
+# ── Integrations Home Assistant is not running yet ───────────────────────
+#
+# GamlaBio, 16 Nov 2026: the owner updated integrations from the Marketplace
+# and left the restart for later. The next sync copied the new files to the
+# standby, which would have started on code the running install had never
+# run. An integration takes effect only when Core restarts, so the standby
+# now gets an integration's files only once the install running the home is
+# running them: until then, the copy kept from when it last was. (Add-ons
+# already wait: chap_versions, in the portal.)
+
+CUSTOM_COMPONENTS = "custom_components"
+HELD_DIR = DATA_DIR / "chap_held"
+# Every state is written afresh when Core starts, so the oldest one dates the
+# start (to within seconds). JSON out, because the Supervisor helper reads JSON.
+CORE_STARTED_TEMPLATE = (
+	"{{ {'started': (states | map(attribute='last_updated') | min).timestamp()} | tojson }}")
+
+
+def core_started_at(call=None) -> Optional[float]:
+	"""When the running Home Assistant started, or None when it cannot say
+	(it is not running, or did not answer). None holds nothing back."""
+	status, body = (call or _supervisor_call)(
+		"POST", "/core/api/template", {"template": CORE_STARTED_TEMPLATE}, timeout=15)
+	try:
+		started = float(body["started"]) if status == 200 and isinstance(body, dict) else None
+	except (KeyError, TypeError, ValueError):
+		return None
+	return started if started and started > 0 else None
+
+
+def _integration_of(rel: str) -> Optional[str]:
+	parts = rel.split("/")
+	return parts[1] if len(parts) > 2 and parts[0] == CUSTOM_COMPONENTS else None
+
+
+def _hold_back_unloaded(config_dir: Path, files: list, core_started: Optional[float],
+                        held_dir: Path) -> tuple[dict, list]:
+	"""Where each file of the snapshot is read from, and which integrations
+	were held back.
+
+	An integration whose files were last written (``st_ctime``: set by the
+	write itself, which an unpacked archive cannot backdate) before Core
+	started is what Core is running: it is sent, and a copy of it kept in
+	``held_dir``. One written since is sent as that copy instead, until a
+	restart runs it. With no copy (new to this app) it is sent as it is,
+	as before; with no start time, nothing is held.
+	"""
+	sources = {rel: config_dir / rel for rel in files}
+	if core_started is None:
+		return sources, []
+	by_integration: dict = {}
+	for rel in files:
+		name = _integration_of(rel)
+		if name:
+			by_integration.setdefault(name, []).append(rel)
+	held = []
+	for name, rels in sorted(by_integration.items()):
+		try:
+			written = max(os.stat(config_dir / rel).st_ctime for rel in rels)
+		except OSError:
+			continue
+		copy_root = held_dir / CUSTOM_COMPONENTS / name
+		if written <= core_started:
+			_keep_running_copy(config_dir, rels, copy_root)
+			continue
+		kept = synced_files(held_dir) if copy_root.is_dir() else []
+		kept = [r for r in kept if _integration_of(r) == name]
+		if not kept:
+			continue
+		for rel in rels:
+			sources.pop(rel, None)
+		for rel in kept:
+			sources[rel] = held_dir / rel
+		held.append(name)
+	# A copy of an integration that is gone from the config goes too.
+	if (held_dir / CUSTOM_COMPONENTS).is_dir():
+		for old in (held_dir / CUSTOM_COMPONENTS).iterdir():
+			if old.is_dir() and old.name not in by_integration:
+				shutil.rmtree(old, ignore_errors=True)
+				old.with_name(old.name + ".sha").unlink(missing_ok=True)
+	return dict(sorted(sources.items())), held
+
+
+def _keep_running_copy(config_dir: Path, rels: list, copy_root: Path) -> None:
+	"""Keep ``copy_root`` equal to the running integration's files."""
+	digest = hashlib.sha256()
+	for rel in rels:
+		try:
+			st = os.stat(config_dir / rel)
+		except OSError:
+			return
+		digest.update(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}\0".encode())
+	marker = copy_root.with_name(copy_root.name + ".sha")
+	try:
+		if marker.read_text() == digest.hexdigest() and copy_root.is_dir():
+			return
+	except OSError:
+		pass
+	tmp = copy_root.with_name(copy_root.name + ".new")
+	shutil.rmtree(tmp, ignore_errors=True)
+	try:
+		for rel in rels:
+			dest = tmp / Path(rel).relative_to(Path(CUSTOM_COMPONENTS) / copy_root.name)
+			dest.parent.mkdir(parents=True, exist_ok=True)
+			shutil.copy2(config_dir / rel, dest)
+		shutil.rmtree(copy_root, ignore_errors=True)
+		tmp.rename(copy_root)
+		marker.write_text(digest.hexdigest())
+	except OSError as exc:
+		shutil.rmtree(tmp, ignore_errors=True)
+		LOG.warning("Could not keep a copy of %s: %s", copy_root.name, exc)
+
+
+def build_snapshot(config_dir: Path, core_started: Optional[float] = None,
+                   held_dir: Path = HELD_DIR) -> tuple[bytes, dict]:
 	"""A gzip tar of the synced files plus its metadata.
 
 	``sha256`` is over (path, bytes) of every file except :data:`VOLATILE`,
 	not over the tar, so an unchanged config hashes the same however tar and
 	gzip stamp their headers — which is what lets the active side skip
-	uploading nothing new.
+	uploading nothing new. Given when Core started, an integration updated
+	since is sent as it was (:func:`_hold_back_unloaded`); ``held`` names them.
 	"""
-	files = synced_files(config_dir)
+	sources, held = _hold_back_unloaded(config_dir, synced_files(config_dir), core_started, held_dir)
+	files = list(sources)
 	hasher = hashlib.sha256()
 	buf = io.BytesIO()
 	with tarfile.open(fileobj=buf, mode="w:gz") as tar:
 		for rel in files:
-			full = config_dir / rel
+			full = sources[rel]
 			try:
 				data = _read_for_snapshot(full)
 			except OSError:
@@ -336,6 +452,7 @@ def build_snapshot(config_dir: Path) -> tuple[bytes, dict]:
 		"sha256": hasher.hexdigest(),
 		"ha_version": ha_version,
 		"file_count": len(files),
+		"held": held,
 	}
 
 
@@ -2566,7 +2683,10 @@ def run_once(portal: Portal, config_dir: Path = CONFIG_DIR, data_dir: Path = DAT
 		seed_note = maybe_send_seed(portal, info, state, state_path, now, data_dir)
 		if seed_note:
 			LOG.info("%s", seed_note)
-		blob, meta = build_snapshot(config_dir)
+		blob, meta = build_snapshot(config_dir, core_started_at(), data_dir / "chap_held")
+		if meta["held"]:
+			LOG.info("Not sent to the standby until Home Assistant restarts on them: %s",
+			         ", ".join(meta["held"]))
 		latest = info.get("latest") or {}
 		age = time.time() - float(latest.get("created_at") or 0)
 

@@ -9,6 +9,8 @@ or act on a role it guessed.
 import importlib.util
 import io
 import json
+import time
+import shutil
 import sqlite3
 import tarfile
 import urllib.error
@@ -104,6 +106,104 @@ class TestBuild:
 		out.write_bytes(data)
 		rows = sqlite3.connect(out).execute("SELECT ieee FROM devices").fetchall()
 		assert rows == [("00:11",)]
+
+
+def _tar_files(blob: bytes) -> dict:
+	with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+		return {m.name: tar.extractfile(m).read() for m in tar.getmembers()}
+
+
+class TestIntegrationsHomeAssistantIsNotRunning:
+	"""GamlaBio, 16 Nov 2026: integrations updated from the Marketplace,
+	restart left for later, and the next sync gave the standby the new code."""
+
+	def _setup(self, tmp_path):
+		root = make_config(tmp_path / "config")
+		(root / "custom_components" / "mosaic").mkdir()
+		(root / "custom_components" / "mosaic" / "manifest.json").write_text('{"version": "0.7.1"}')
+		(root / "custom_components" / "mosaic" / "sensor.py").write_text("OLD = 1\n")
+		return root, tmp_path / "held"
+
+	@staticmethod
+	def _restart() -> float:
+		"""Core starts now; anything written after this it has not loaded."""
+		started = time.time()
+		time.sleep(0.02)
+		return started
+
+	def test_an_update_waits_for_the_restart_that_runs_it(self, tmp_path):
+		root, held = self._setup(tmp_path)
+		started = self._restart()          # Core started after these files were written
+		_, first = cs.build_snapshot(root, started, held)
+		assert first["held"] == []
+		# Updated from the Marketplace, no restart yet.
+		(root / "custom_components" / "mosaic" / "manifest.json").write_text('{"version": "0.7.2"}')
+		(root / "custom_components" / "mosaic" / "sensor.py").write_text("NEW = 2\n")
+		(root / "custom_components" / "mosaic" / "new_file.py").write_text("")
+		blob, meta = cs.build_snapshot(root, started, held)
+		files = _tar_files(blob)
+		assert meta["held"] == ["mosaic"]
+		assert files["custom_components/mosaic/sensor.py"] == b"OLD = 1\n"
+		assert "custom_components/mosaic/new_file.py" not in files
+		assert meta["sha256"] == first["sha256"]          # nothing new to send
+		# Restarted: now it is running, so it goes.
+		blob, meta = cs.build_snapshot(root, time.time() + 1, held)
+		files = _tar_files(blob)
+		assert meta["held"] == []
+		assert files["custom_components/mosaic/sensor.py"] == b"NEW = 2\n"
+		assert "custom_components/mosaic/new_file.py" in files
+
+	def test_the_rest_of_the_configuration_still_goes_at_once(self, tmp_path):
+		root, held = self._setup(tmp_path)
+		started = self._restart()
+		cs.build_snapshot(root, started, held)
+		(root / "custom_components" / "mosaic" / "sensor.py").write_text("NEW = 2\n")
+		(root / "automations.yaml").write_text("- id: new\n")
+		blob, _ = cs.build_snapshot(root, started, held)
+		assert _tar_files(blob)["automations.yaml"] == b"- id: new\n"
+
+	def test_with_no_copy_or_no_start_time_it_is_sent_as_before(self, tmp_path):
+		root, held = self._setup(tmp_path)
+		# Updated before this app ever saw it running: no copy to send instead.
+		blob, meta = cs.build_snapshot(root, time.time() - 3600, held)
+		assert meta["held"] == [] and _tar_files(blob)["custom_components/mosaic/sensor.py"] == b"OLD = 1\n"
+		cs.build_snapshot(root, time.time() + 1, held)
+		(root / "custom_components" / "mosaic" / "sensor.py").write_text("NEW = 2\n")
+		blob, meta = cs.build_snapshot(root, None, held)
+		assert meta["held"] == [] and _tar_files(blob)["custom_components/mosaic/sensor.py"] == b"NEW = 2\n"
+
+	def test_a_removed_integration_drops_its_copy(self, tmp_path):
+		root, held = self._setup(tmp_path)
+		cs.build_snapshot(root, time.time() + 1, held)
+		assert (held / "custom_components" / "mosaic").is_dir()
+		shutil.rmtree(root / "custom_components" / "mosaic")
+		cs.build_snapshot(root, time.time() + 1, held)
+		assert not (held / "custom_components" / "mosaic").exists()
+		assert not (held / "custom_components" / "mosaic.sha").exists()
+		assert (held / "custom_components" / "x").is_dir()   # still there
+
+	def test_the_standby_applies_what_was_held(self, tmp_path):
+		root, held = self._setup(tmp_path)
+		started = self._restart()
+		cs.build_snapshot(root, started, held)
+		(root / "custom_components" / "mosaic" / "sensor.py").write_text("NEW = 2\n")
+		blob, _ = cs.build_snapshot(root, started, held)
+		standby = make_config(tmp_path / "standby")
+		cs.apply_snapshot(standby, blob)
+		assert (standby / "custom_components" / "mosaic" / "sensor.py").read_text() == "OLD = 1\n"
+
+	@pytest.mark.parametrize("status,body,want", [
+		(200, {"started": 1794700926.97}, 1794700926.97),
+		(200, {"started": 0}, None), (400, {"message": "bad"}, None), (0, None, None),
+	])
+	def test_when_core_started(self, status, body, want):
+		seen = {}
+
+		def call(method, path, body_in=None, timeout=60):
+			seen.update(path=path, template=(body_in or {}).get("template"))
+			return status, body
+		assert cs.core_started_at(call) == want
+		assert seen["path"] == "/core/api/template" and "last_updated" in seen["template"]
 
 
 def tar_of(files: dict) -> bytes:
