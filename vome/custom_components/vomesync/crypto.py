@@ -526,7 +526,6 @@ def build_v2_my_switches_request(master_seed_b64url: str, ts: Optional[int] = No
 		"ownerPubKey": owner_pub,
 		"ts": ts_i,
 		"nonce": nonce_s,
-		**(extra or {}),
 	}
 	canon = canonical_json(payload)
 	sig_owner = sign_b64url(owner_private_key(master_seed_b64url), canon)
@@ -535,7 +534,6 @@ def build_v2_my_switches_request(master_seed_b64url: str, ts: Optional[int] = No
 		"ts": ts_i,
 		"nonce": nonce_s,
 		"sigOwner": sig_owner,
-		**(extra or {}),
 	}
 
 
