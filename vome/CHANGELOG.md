@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.86 — 16 November 2026
+
+**Vome switches work again.** Vome 0.3.84 and 0.3.85 could not fetch your
+switches from Vome, so every Vome switch showed as unavailable after the
+update and changes to them stopped coming in. This release fixes that; your
+switches come back on their own, with their names and automations as they
+were. Nothing was lost on Vome's side. Remote access, the health score and
+the rest of Vome kept working throughout.
+
+Bundles the Vome integration 0.9.70.
+
 ## 0.3.85 — 15 November 2026
 
 **A Vome switch shows its name once.** Every Vome switch showed its name
